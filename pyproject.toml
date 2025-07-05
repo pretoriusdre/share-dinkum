@@ -1,0 +1,19 @@
+[project]
+name = "share-tracker"
+version = "0.1.0"
+description = "Open source share tracker for Australian and other shares"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2.3",
+    "django-cors-headers>=4.7.0",
+    "django-debug-toolbar>=5.2.0",
+    "django-money>=3.5.4",
+    "ipykernel>=6.29.5",
+    "openpyxl>=3.1.5",
+    "pandas>=2.3.0",
+    "python-decouple>=3.8",
+    "tqdm>=4.67.1",
+    "whitenoise>=6.9.0",
+    "yfinance>=0.2.64",
+]
