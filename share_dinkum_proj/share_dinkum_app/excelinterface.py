@@ -201,7 +201,7 @@ class ExcelGen:
                     # Illegal unicode characters. 
                     val_to_print = re.sub(self.excel_illegal_characters_re, '', val_to_print)
 
-                    if val_to_print.startswith('='):
+                    if val_to_print.startswith('=') and not val_to_print.startswith('=HYPERLINK'):
                         # Append apostrophe before leading equals signs to prevent being interpreted as forumla
                         val_to_print = "'" + val_to_print
 
@@ -209,6 +209,10 @@ class ExcelGen:
                         cell.hyperlink = val_to_print
                         cell.style = "Hyperlink"
                 
+
+                    if val_to_print.startswith('=HYPERLINK'):
+                        cell.style = "Hyperlink"
+
                 cell.value = val_to_print
 
                 # removed  cell.alignment = Alignment(vertical='top')
@@ -293,6 +297,7 @@ class ExcelGen:
             self.table_summary, columns=['sheet_name', 'table_name', 'description', 'num_records']
         )
         table_summary_df['sheet_name'] = table_summary_df['sheet_name'].apply(lambda x : f'{x:02}')
+        table_summary_df['link'] = table_summary_df['sheet_name'].apply(lambda x : f'=HYPERLINK("#\'{x}\'!A1", "{x}")')
 
         if "_table_info" in self.wb:
             ws_to_remove = self.wb["_table_info"]
