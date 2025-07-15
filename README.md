@@ -11,7 +11,11 @@ This project is currently under development. Contributions and feedback are welc
 There may be bugs, and usage is entirely at your own risk. Please refer to the license file for more information.
 
 ---
+## Example Screenshots
 
+![alt text](docs/images/buy_add_screen.png)
+
+---
 ## Setup Instructions
 
 ### 1. Clone the Repository
