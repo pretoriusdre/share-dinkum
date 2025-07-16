@@ -8,6 +8,7 @@ nuke.bat
 data_import_old.ipynb
 
 data_import_template_personal.xlsx
+~$data_import_template_personal.xlsx
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
