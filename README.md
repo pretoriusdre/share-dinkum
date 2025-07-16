@@ -4,28 +4,63 @@
 
 Share Dinkum is free and open source.
 
-## Work in Progress
+## Work in progress
 
 This project is currently under development. Contributions and feedback are welcome.
 
 There may be bugs, and usage is entirely at your own risk. Please refer to the license file for more information.
 
 ---
-## Example Screenshots
 
-![alt text](docs/images/buy_add_screen.png)
+## Core concepts
+
+### Data entry
+
+You can either enter items via the web interface or using the bulk import tool (from Excel). If you want to bulk import data, you create a **[DataImport]** object, attaching the template. If you want to export the data, you create a **[DataExport]** object. The data export output file can be imported again to update values.
+
+### Data model / principal of operation
+
+Each portfolio is represented by an **[Account]**. The account has a base currency and fiscal year configuration (Set up for Australia by default).
+
+There are **[Market]**, eg ASX which contain **[Instrument]**, eg BHP or VDHG.
+
+Each purchase of an instrument is a **[Buy]** object. You enter the quantity, unit price, and quantity. You can also attach a file and include any relevant notes. If you enter a buy in a different currency to your selected base curency, the system will lookup and store an appropriate **[ExchangeRate]** object for that particular date.
+
+Each time you enter a **[Buy]**, the system creates an associated **[Parcel]**. A parcel represents a collection of shares with the same unit properties (purchase date, cost base per share).
+
+You can enter forms of income such as **[Dividend]** and **[Distribution]**. According to the configured **[FiscalYearType]**, the income events will be classified into a particular **[FiscalYear]**
+
+If you enter a **[Sell]**, this sale needs to be allocated against specific parcels. You can chose an algorithm to do this, either FIFO (First in First Out), LIFO (Last in First Out), MIN_CGT (Minimimise net capital gain). The **[Sell]** generates the requried **[SellAllocation]** objects and links them to the approrpiate parcels. You can also chose to manually allocate the sells against parcels if you chose (generally you would only do this when importing legacy data).
+
+Any time that a **[SellAllocation]** does not completely consume the target parcel, that parcel is bifurcated. That is, the original parcel is marked as inactive, and replaced by a 'sold' parcel, and an 'unsold' parcel. The original cost base is apportioned between them, and each of these parcels points to the parcel from which it was derived from. Each sell allocation represents a capital gain or loss, which are also allocated to a **[FiscalYear]**
+
+Any time you enter an **[CostBaseAdjustment]**, i.e. AMIT cost base adjustment, the amount of the adjustment is automatically apportioned to all unsold parcels, using a weighting of the quantity of shares * the proportion of the fiscal year held. The algorithm automatically creates the required **[CostBaseAdjustmentAllocation]** objects.
+
+If you encounter a **[ShareSplit]** event, you enter the before and after units held, and this will replace the old parcels with new ones with the adjusted cost base and quantity.
+
+If you save your **[Account]** object, you have the option to update your price history. This will incrementally historise the daily price for all of your shares, storing that into the [InstrumentPriceHistory] table.
+
 
 ---
-## Setup Instructions
+## Example screenshots
 
-### 1. Clone the Repository
+![Buy Screen](docs/images/buy_add_screen.png)
+
+![Data Export Index](docs/images/data_export_index.png)
+
+(Note, all the data is stored in a local database, so you can build your own BI dashboards by connecting to that datasource.)
+
+---
+## Setup instructions
+
+### 1. Clone the repository
 
 ```bash
 git clone <repository-url>
 cd share-dinkum
 ```
 
-### 2. Install Dependencies
+### 2. Install dependencies
 
 This project uses [`uv`](https://github.com/astral-sh/uv) for dependency management. Make sure `uv` is installed on your system.
 
@@ -35,7 +70,7 @@ To install dependencies:
 uv pip install -r requirements.txt
 ```
 
-### 3. Configure Environment Variables
+### 3. Configure environment variables
 
 Copy and rename the `.env.sample` file to `.env`:
 
