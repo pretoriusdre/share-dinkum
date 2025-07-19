@@ -23,7 +23,11 @@ from djmoney.money import Money
 from share_dinkum_app import loading
 from share_dinkum_app import excelinterface
 from share_dinkum_app import yfinanceinterface
-from share_dinkum_app.utils import user_directory_path, add_currencies
+from share_dinkum_app.utils.currency import add_currencies
+from share_dinkum_app.utils.filefield_operations import user_directory_path
+
+
+
 from share_dinkum_app.decorators import safe_property
 
 
@@ -38,7 +42,14 @@ class AppUser(AbstractUser):
     MODEL_DESCRIPTION = 'User accounts registered in the application.'
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
-    #legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
+
+    def save(self, *args, **kwargs):
+        # Ensure first_name and last_name are not None
+        self.first_name = self.first_name or ''
+        self.last_name = self.last_name or ''
+
+        super().save(*args, **kwargs)
+
 
 
 class FiscalYearType(models.Model):
@@ -206,7 +217,7 @@ class BaseModel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
 
-    description = models.CharField(max_length=255)
+    description = models.CharField(max_length=255, null=True, blank=True)
     account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True, editable=False)
@@ -382,6 +393,10 @@ class ExchangeRate(BaseModel):
 
 
     def apply(self, money):
+        
+        if str(money.currency) != str(self.convert_from): # TODO REMOVE
+            print(f'{money=}')
+            print(f'{self.convert_from=}')
 
         assert str(money.currency) == str(self.convert_from), f'Invalid exchange rate applied. The convert_from currency {self.convert_from} does not match the currency {money.currency}'
         new_amount = money.amount * self.exchange_rate_multiplier
@@ -395,6 +410,11 @@ class ExchangeRate(BaseModel):
 class Market(BaseModel):
 
     MODEL_DESCRIPTION = 'Share markets, such as ASX, NASDAQ, LSE, etc'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['account', 'code'], name='market_keys')
+        ]
 
     code = models.CharField(max_length=16)
 
@@ -676,8 +696,6 @@ class Sell(Trade):
     @safe_property
     def proceeds(self):
         proceeds = (self.quantity * self.unit_price_converted) - self.total_brokerage_converted
-        if self.exchange_rate:
-            proceeds = self.exchange_rate.apply(proceeds)
         return proceeds
     
     calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
@@ -716,6 +734,7 @@ class Sell(Trade):
             elif self.strategy == 'MIN_CGT':
             
                 unit_proceeds = self.unit_proceeds
+
                 def get_unit_net_capital_gain(parcel):
 
                     capital_gain = unit_proceeds - parcel.unit_cost_base
@@ -723,13 +742,14 @@ class Sell(Trade):
                     if (self.date - parcel.buy.date).days > 365:
                         capital_gain *= 0.5
                     return capital_gain
+                
                 available_parcels = sorted(available_parcels, key=lambda parcel: get_unit_net_capital_gain(parcel))
 
-            available_parcels = [parcel for parcel in parcels if parcel.unsold_quantity > 0]
+            available_parcels = [parcel for parcel in available_parcels if parcel.unsold_quantity > 0]
 
             quantity_to_allocate = self.quantity
             
-            for parcel in list(available_parcels):
+            for parcel in available_parcels:
                 parcel_quantity = parcel.parcel_quantity
                 qty_for_parcel = min(parcel_quantity, quantity_to_allocate)
                 allocation = SellAllocation(

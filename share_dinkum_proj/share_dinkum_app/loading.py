@@ -1,5 +1,10 @@
 
+from xml.parsers.expat import model
 import pandas as pd
+
+from collections import defaultdict, deque
+
+
 from djmoney.money import Money
 
 from share_dinkum_app import excelinterface
@@ -12,8 +17,8 @@ import django
 import share_dinkum_app.models as app_models
 
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_DOWN
-from django.db.models import ForeignKey, OneToOneField, DecimalField
+
+from django.db.models import ForeignKey, OneToOneField, DecimalField, FileField, DateField
 from django.core.exceptions import ObjectDoesNotExist
 
 from django.core.files.base import ContentFile
@@ -22,6 +27,10 @@ from django.db import transaction
 from django.conf import settings
 
 
+from share_dinkum_app.utils import convert_to_decimal, save_with_logging, process_filefield
+
+
+import share_dinkum_app
 import shutil
 
 from tqdm import tqdm
@@ -66,7 +75,7 @@ def queryset_to_df(queryset):
                 # Get the related object's 'name' attribute if the field is a related field
                 if field_value is not None:
                     if hasattr(field_value, 'name'):
-                        record[field_name + '_name'] = getattr(field_value, 'name')
+                        record[field_name + '__name'] = getattr(field_value, 'name')
                     else:
                         record[field_name + '_id'] = field_value.id
             else:
@@ -107,21 +116,55 @@ class DataLoader():
             self.load_all_tables()
 
 
+    def get_model_load_order(self):
+
+
+        model_load_order = {
+            
+            'AppUser': share_dinkum_app.models.AppUser,
+            'FiscalYearType': share_dinkum_app.models.FiscalYearType,
+            'FiscalYear': share_dinkum_app.models.FiscalYear,
+            'Account': share_dinkum_app.models.Account,
+            'LogEntry': share_dinkum_app.models.LogEntry,
+            'ExchangeRate': share_dinkum_app.models.ExchangeRate,
+            'Market': share_dinkum_app.models.Market,
+            'Instrument': share_dinkum_app.models.Instrument,
+            'InstrumentPriceHistory': share_dinkum_app.models.InstrumentPriceHistory,
+            'Buy': share_dinkum_app.models.Buy,
+            'Sell': share_dinkum_app.models.Sell,
+            'Parcel': share_dinkum_app.models.Parcel,
+            'SellAllocation': share_dinkum_app.models.SellAllocation,
+            'ShareSplit': share_dinkum_app.models.ShareSplit,
+            'CostBaseAdjustment': share_dinkum_app.models.CostBaseAdjustment,
+            'CostBaseAdjustmentAllocation': share_dinkum_app.models.CostBaseAdjustmentAllocation,
+            'Dividend': share_dinkum_app.models.Dividend,
+            'Distribution': share_dinkum_app.models.Distribution,
+            'DataExport': share_dinkum_app.models.DataExport
+        }
+
+        return model_load_order.values()
+    
+
+
+        # models = {model.__name__: model for model in apps.get_models() if model._meta.app_label == 'share_dinkum_app'}
+        # model_load_order = # TODO: Define the correct order of models based on dependencies
+
+
 
 
     def load_all_tables(self):
 
-        loadable_models = {}
-        excluded_models = ['AppUser', 'AppUser_groups', 'AppUser_user_permissions', 'Account', 'FiscalYearType', 'ExchangeRate', 'DataExport', 'LogEntry', 'DataImport', 'Parcel']
-        for model_name in apps.all_models['share_dinkum_app']:
-            model = django.apps.apps.get_model('share_dinkum_app', model_name)
-            if model.__name__ not in excluded_models:
-                loadable_models[model.__name__] = model
+        model_load_order = self.get_model_load_order()
 
-        for table_name, df in self.mapping.items():
-            model = loadable_models.get(table_name)
-            if model:
-                print(f'Starting to load data to {model}')
+        for model in model_load_order:
+            table_name = model.__name__
+
+            if table_name in ['LogEntry']:
+                continue  # Skip loading LogEntry as ContentType as a name property, not field. Hard to loookup by name.
+
+            df = self.mapping.get(table_name)
+            if df is not None:
+                print(f"Loading {table_name}")
                 self.load_table_to_model(model=model, df=df)
 
 
@@ -129,40 +172,64 @@ class DataLoader():
 
         df = df.copy()
         
-        for col in df.columns:
-            col_parts = col.split('__')   # eg 'instrument_name' > ['instrument', 'name']
+        # Legacy data import template has a column 'copy_from_path' which is used to load files.
+        # Now, can just use 'file' as the column name, so the export template can be used for importing data also.
+        df = df.rename(columns={'copy_from_path': 'file'}, errors='ignore')
 
+        cols_to_drop = ['created_at', 'updated_at', '_creation_handled']
+
+        cols_to_drop += [col for col in df.columns if col.startswith('calculated_')]
+
+        df = df.drop(columns=cols_to_drop, errors='ignore')
+
+        if 'account' in [f.name for f in model._meta.fields]:
+            df['account_id'] = self.account.id
+
+        if 'is_active' in df.columns:
+            df['is_active'] = df['is_active'].fillna(True)
+        
+        # Preprocess columns to handle foreign keys,  decimal fields, and file fields.
+        for col in df.columns:
+
+            # Lookup fields are not processed here.
+            if col.startswith('lookup_'):
+                continue
+            
+            # Foreign key lookup by name
+            col_parts = col.split('__')   # eg 'instrument__name' > ['instrument', 'name']
             if len(col_parts) == 2: 
                 base_field_name = col_parts[0]   # instrument
-                lookup_field = col_parts[1]  # name
+                lookup_field = col_parts[1]  # i.e. name
                 field_instance = model._meta.get_field(base_field_name)
                 related_model = field_instance.related_model
-                df[base_field_name] = df[col].apply(lambda field_val : self.get_related_obj_by_name(related_model=related_model, filters={'account' : self.account, lookup_field : field_val}) if field_val else None)
+
+
+                df[base_field_name] = df[col].apply(
+                    lambda field_val : self.get_related_obj_by_name(
+                        related_model=related_model, 
+                        account=self.account,
+                        filters={lookup_field : field_val}
+                        ) if field_val else None
+                            )
                 df = df.drop(columns=[col])
+                continue
 
-            elif col.startswith('calculated_'):
-                df = df.drop(columns=[col])
 
-            elif not col.startswith('lookup_') and col != 'copy_from_path': # Need to exclude lookup fields
+            field_instance = model._meta.get_field(col)
 
-                field_instance = model._meta.get_field(col)
-                if isinstance(field_instance, DecimalField):
-                    max_digits = field_instance.max_digits
-                    decimal_places = field_instance.decimal_places
-                    def convert_to_decimal(value):
-                        if value is None:
-                            return None
-                        try:
-                            decimal_value = Decimal(value)
-                            quantizer = Decimal('1.' + '0' * decimal_places)
-                            decimal_value = decimal_value.quantize(quantizer, rounding=ROUND_DOWN)
-                            if len(str(decimal_value).replace('.', '').replace('-', '')) > max_digits:
-                                raise ValueError(f"Value {value} exceeds max_digits ({max_digits}) for field {col}")
-                            
-                            return decimal_value
-                        except Exception as e:
-                            raise ValueError(f"Error converting value {value} in column '{col}' to Decimal: {e}")
-                    df[col] = df[col].apply(convert_to_decimal)
+            if isinstance(field_instance, DecimalField):
+                max_digits = field_instance.max_digits
+                decimal_places = field_instance.decimal_places
+                convert_to_decimal_to_apply = lambda value: convert_to_decimal(value, max_digits=max_digits, decimal_places=decimal_places)
+                df[col] = df[col].apply(convert_to_decimal_to_apply)
+            
+            elif isinstance(field_instance, FileField):
+                df[col] = df[col].apply(process_filefield)
+
+
+        # Change any NaT, NaN etc to None
+        df = df.where(pd.notnull(df), None)
+
 
         for index, row in tqdm(df.iterrows()):
 
@@ -182,22 +249,11 @@ class DataLoader():
             # if exchange_rate:
             #     record['exchange_rate'] = exchange_rate
 
-            copy_from_path = record.pop('copy_from_path', None)
-
-            if copy_from_path:
-                file_path = Path(copy_from_path)
-                if file_path.exists():
-                    with open(file_path, 'rb') as f:
-                        file_content = ContentFile(f.read(), name=file_path.name)
-                        record['file'] = file_content
-                else:
-                    print(f'File path {file_path} does not exist')
-
 
             # This is used on loading sell allocations using legacy id.
             lookup_legacy_sell = record.pop('lookup_legacy_sell', None)
             if lookup_legacy_sell:
-                sell = self.get_related_obj_by_name(related_model=app_models.Sell, filters={'account' : self.account, 'legacy_id' : lookup_legacy_sell})
+                sell = self.get_related_obj_by_name(related_model=app_models.Sell, account=self.account, filters={'legacy_id' : lookup_legacy_sell})
                 record['sell'] = sell
 
             # This is used for loading buy allocations using legacy buy id.
@@ -213,30 +269,25 @@ class DataLoader():
                     print('Error', row)
                     raise e
 
+
             if id:
-                # If the object exists, update it
+                # Try to update, otherwise create
                 try:
                     obj = model.objects.get(id=id)
-
                     for field, value in record.items():
-                        if field != 'id':
-                            setattr(obj, field, value)
+                        setattr(obj, field, value)
+                    save_with_logging(obj=obj, context="Updating existing object")
                     obj.save()
-
-                except ObjectDoesNotExist as e:
-                    print(f"Record with id {id} does not exist in {model}.")
-                    raise e
-
-            else:
-                # Create new object.
-                try:
+                
+                except ObjectDoesNotExist:
+                    # Object with ID does not exist; create new
+                    record['id'] = id  # Preserve provided ID
                     obj = model(**record)
-                    obj.save()
+                    save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
+            else:
+                obj = model(**record)
+                save_with_logging(obj=obj, context="Creating new object without provided ID")
 
-                except Exception as e:
-                    print(e)
-                    print(record)
-                    raise e
 
 
 
@@ -263,13 +314,26 @@ class DataLoader():
         return available_parcels
 
 
+    def get_related_obj_by_name(self, related_model, account, filters):
 
-    def get_related_obj_by_name(self, related_model, filters):
-        if filters:
-            obj = related_model.objects.get(**filters)
-            return obj
-        return None
+        if not filters:
+            return None
 
+        # Get all field names of the related model
+        related_model_fields = {f.name for f in related_model._meta.get_fields()}
+
+        # Add 'account' to filters only if it exists on the related model
+        if 'account' in related_model_fields:
+            filters['account'] = account
+
+        try:
+            return related_model.objects.get(**filters)
+        except related_model.DoesNotExist:
+            print(f"[WARN] No match found for {related_model.__name__} with filters: {filters}")
+            return None
+        except related_model.MultipleObjectsReturned:
+            print(f"[ERROR] Multiple matches found for {related_model.__name__} with filters: {filters}")
+            return None
 
 
 
