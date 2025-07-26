@@ -68,7 +68,7 @@ To install dependencies:
 
 ```bash
 uv venv
-uv pip install -r pyproject.toml
+uv pip install .
 ```
 
 ### 3. Configure environment variables
