@@ -67,7 +67,8 @@ This project uses [`uv`](https://github.com/astral-sh/uv) for dependency managem
 To install dependencies:
 
 ```bash
-uv pip install -r requirements.txt
+uv venv
+uv pip install -r pyproject.toml
 ```
 
 ### 3. Configure environment variables
