@@ -71,13 +71,17 @@ To install dependencies:
 uv venv
 uv pip install .
 ```
-
+To activate the virtual environment:
+```bash
+.venv\Scripts\activate 
+```
 ### 3. Configure environment variables
 
 Copy and rename the `.env.sample` file to `.env`:
 
 ```bash
-cp .env.sample .env
+cd share_dinkum_proj
+copy .env.sample .env
 ```
 
 (Optional) Edit the `.env` file with your environment-specific settings.
