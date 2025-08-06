@@ -1,6 +1,7 @@
 # Standard library imports
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import copy
 
 # Django imports
 from django.db import models, transaction
@@ -787,7 +788,6 @@ class Parcel(BaseModel):
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
 
-
     calculated_unsold_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
 
     @safe_property
@@ -820,11 +820,25 @@ class Parcel(BaseModel):
     calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
+    def total_adjustments(self):
+        total_adjustment = self.cost_base_adjustment_allocation.filter(
+            deactivation_date__isnull=True
+        ).aggregate(
+            total=Sum('cost_base_increase')
+        )['total'] or 0
+
+        total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
+        return total_adjustment
+
+
+    @safe_property
     def total_cost_base(self):
         # Already converted
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
         total_cost_base += (self.adjusted_unit_brokerage * parcel_quantity)
+
+        total_cost_base = add_currencies(total_cost_base, self.total_adjustments)
 
         return total_cost_base
     
@@ -1048,10 +1062,12 @@ class ShareSplit(BaseModel):
             # self.parcel = self.parcel.bifurcate(self.quantity)
             with transaction.atomic():
                 split_multiplier = self.split_multiplier
-                for parcel in Parcel.objects.filter(account=self.account) \
-                        .filter(deactivation_date__isnull=True) \
-                        .filter(buy__instrument=self.instrument) \
-                        .filter(buy__date__lte=self.date):
+                for parcel in Parcel.objects.filter(
+                    account=self.account,
+                    deactivation_date__isnull=True,
+                    buy__instrument=self.instrument,
+                    buy__date__lte=self.date
+                ):
                     if not parcel.is_sold:
                         parcel.split_or_consolidate(multiplier=split_multiplier, date=self.date)
                         self.affected_parcels.add(parcel)
@@ -1121,15 +1137,21 @@ class CostBaseAdjustment(BaseModel):
                 end = self.financial_year_end_date
                 cutoff_date = date(end.year - 1, end.month, end.day) + timedelta(days=1) # 30 June 2025 becomes 1 July 2024. Accounts for leap yr.
                 with transaction.atomic():
-                    affected_parcels = Parcel.objects.filter(account=self.account) \
-                        .filter(buy__instrument=self.instrument) \
-                        .filter(Q(deactivation_date__isnull=True) | Q(deactivation_date__gte=cutoff_date)) \
-                        .filter(buy__date__lte=end)
+
+                    affected_parcels = Parcel.objects.filter(
+                        account=self.account,
+                        buy__instrument=self.instrument,
+                        deactivation_date__isnull=True,
+                        buy__date__lte=end
+                    )
 
                     affected_parcels = list(affected_parcels)
 
                     total_weighted_sum = 0
                     days_in_year = (end - cutoff_date).days + 1 # normally 365
+                    
+                    parcel_set_to_save = set()
+
                     for parcel in affected_parcels:
                         days_held = days_in_year
                         if parcel.deactivation_date:
@@ -1146,10 +1168,15 @@ class CostBaseAdjustment(BaseModel):
                             account = self.account,
                             cost_base_increase=self.cost_base_increase_converted * adjustment_fraction,
                             parcel=parcel,
-                            cost_base_adjustment=self
+                            cost_base_adjustment=self,
+                            activation_date=cutoff_date # basically the start of the relevant financial year
                         )
+                        parcel_set_to_save.add(parcel)
                         adjustment_alllocation.log_event(f'Added fraction {adjustment_fraction} of cost base adjustment {self}')
-                    
+
+                    for parcel in parcel_set_to_save:
+                        # Update their calculated cost base
+                        parcel.save()
             else:
                 pass
 
@@ -1169,6 +1196,8 @@ class CostBaseAdjustmentAllocation(BaseModel):
     parcel = models.ForeignKey(Parcel, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT)
     cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT) # TODO make cascade?
 
+    activation_date = models.DateField(null=True, editable=False)   # not required
+    deactivation_date = models.DateField(null=True, editable=False)
 
     def bifurcate(self, target_parcel, remainder_parcel, target_fraction, date):
         assert target_fraction >= 0, "Target fraction must be >= 0"
@@ -1183,7 +1212,7 @@ class CostBaseAdjustmentAllocation(BaseModel):
 
         with transaction.atomic():
             # Create target allocation
-            allocation_target = CostBaseAdjustmentAllocation.objects.get(pk=self.pk)
+            allocation_target = copy.copy(self) # create a shallow copy
             allocation_target.pk = None
             allocation_target.activation_date = date
             allocation_target.parcel = target_parcel
@@ -1191,11 +1220,11 @@ class CostBaseAdjustmentAllocation(BaseModel):
             allocation_target.save()
             allocation_target.log_event(new_parcel_message)
             # Create remainder parcel
-            allocation_remainder = CostBaseAdjustmentAllocation.objects.get(pk=self.pk)
+            allocation_remainder = copy.copy(self) # create a shallow copy
             allocation_remainder.pk = None
             allocation_remainder.activation_date = date
             allocation_remainder.parcel = remainder_parcel
-            allocation_remainder.cost_base_increase *= target_fraction
+            allocation_remainder.cost_base_increase *= (1 - target_fraction)
             allocation_remainder.save()
             allocation_remainder.log_event(new_parcel_message)
             # Update old parcel
@@ -1211,6 +1240,9 @@ class CostBaseAdjustmentAllocation(BaseModel):
         related_parcel.save()
 
     def save(self, *args, **kwargs):
+        
+        self.is_active = self.deactivation_date is None
+
         super().save(*args, **kwargs)
         # Update the affected parcel
         self.parcel.save()
@@ -1350,6 +1382,7 @@ class DataExport(BaseModel):
     file = models.FileField(null=True, blank=True, editable=False, upload_to=user_directory_path)
 
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
+    include_price_history = models.BooleanField(default=False, help_text='Include price history in the export?')
 
     def save(self, *args, **kwargs):
 
@@ -1361,6 +1394,9 @@ class DataExport(BaseModel):
                 gen = excelinterface.ExcelGen(title='Data Export')
 
                 for model in apps.get_app_config('share_dinkum_app').get_models():
+
+                    if model == InstrumentPriceHistory and not self.include_price_history:
+                        continue
 
                     if 'account' in [field.name for field in model._meta.get_fields()]:
                         queryset = loading.model_to_queryset(model=model, account=self.account)
