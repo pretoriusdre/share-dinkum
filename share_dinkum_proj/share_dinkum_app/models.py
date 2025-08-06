@@ -12,7 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.urls import reverse
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, Max, Min
 
 # Djmoney imports
 from djmoney.models.fields import MoneyField, CurrencyField
@@ -788,6 +788,8 @@ class Parcel(BaseModel):
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
 
+    sale_date = models.DateField(null=True, editable=False)
+
     calculated_unsold_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
 
     @safe_property
@@ -1002,6 +1004,9 @@ class SellAllocation(BaseModel):
             
             # bifurcate the parcel (split into two uneven parcels)
             self.parcel = self.parcel.bifurcate(quantity=self.quantity, date=self.sell.date)
+
+            self.parcel.sale_date = self.sell.date
+            
             self._creation_handled = True
             
             super().save(*args, **kwargs)
