@@ -40,7 +40,7 @@ If you encounter a **[ShareSplit]** event, you enter the before and after units 
 
 If you save your **[Account]** object, you have the option to update your price history. This will incrementally historise the daily price for all of your shares, storing that into the [InstrumentPriceHistory] table.
 
-![Simplified Data Model](docs/images/simplified_data_model.png)
+![Simplified Data Model](docs/images/data_model.png)
 
 ---
 ## Example screenshots
