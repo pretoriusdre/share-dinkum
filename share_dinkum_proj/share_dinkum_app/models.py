@@ -110,8 +110,8 @@ class FiscalYear(models.Model):
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.CASCADE)
     start_year = models.IntegerField(editable=False)
 
-    name = models.CharField(max_length=9, null=True, blank=True, editable=False
-                            )
+    name = models.CharField(max_length=9, null=True, blank=True, editable=False)
+
     def __str__(self):
         return self.name or ''
        
@@ -258,13 +258,20 @@ class BaseModel(models.Model):
         super().save(*args, **kwargs)
         
         # Update calculated fields after the object is saved
+        fields_updated = False
         for attr_name in dir(self):
+            if attr_name.startswith('_'):
+                # Skip private and special attributes
+                continue
             try:
                 attr = getattr(self, attr_name)
+                if callable(attr):
+                    continue # skip methods etc
                 expected_calc_field_name = f"calculated_{attr_name}"
                 if hasattr(self, expected_calc_field_name):
                     # Set the calculated field value
                     setattr(self, expected_calc_field_name, attr)
+                    fields_updated = True
 
                 # Where the currency differs from the base currency, set an exchange rate if not provided
                 if attr_name.endswith('_currency'):
@@ -272,18 +279,17 @@ class BaseModel(models.Model):
                         if not getattr(self, 'exchange_rate'):
                             exchange_rate_obj = ExchangeRate.get_or_create(account=self.account, convert_from=attr, convert_to=self.account.currency, exchange_date=self.date)
                             setattr(self, 'exchange_rate', exchange_rate_obj)
-
+                            fields_updated = True
             except AttributeError:
                 # Ignore attributes that cannot be accessed
                 continue
 
         # Save again only if calculated fields were updated
-        if any(f"calculated_{attr_name}" for attr_name in dir(self)):
+        if fields_updated:
             super().save(update_fields=[
-                field.name for field in self._meta.get_fields() 
-                if field.name.startswith("calculated_")
-            ])
-            
+                f.name for f in self._meta.get_fields() if f.name.startswith('calculated_')
+            ] + (['exchange_rate'] if hasattr(self, 'exchange_rate') else []))
+                
     def __str__(self):
         return f'{self.description}'
 
@@ -395,10 +401,6 @@ class ExchangeRate(BaseModel):
 
     def apply(self, money):
         
-        if str(money.currency) != str(self.convert_from): # TODO REMOVE
-            print(f'{money=}')
-            print(f'{self.convert_from=}')
-
         assert str(money.currency) == str(self.convert_from), f'Invalid exchange rate applied. The convert_from currency {self.convert_from} does not match the currency {money.currency}'
         new_amount = money.amount * self.exchange_rate_multiplier
         return money.__class__(new_amount, self.convert_to)
@@ -457,8 +459,8 @@ class Instrument(BaseModel):
     def value_held(self):
         if self.current_unit_price:
             return Money(self.current_unit_price * self.quantity_held, self.currency)
-        if self.quantity_held > 0:
-            return None
+        # if self.quantity_held > 0:
+        #     return None
         return Money(0, self.currency) # zero quantity held
 
     calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
@@ -487,7 +489,7 @@ class Instrument(BaseModel):
 
     def __str__(self):
         if self.is_active:
-            return f'{self.name} - {self.description}'
+            return f'{self.name} - {self.description} [{self.account.description}]'
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
 
@@ -666,7 +668,7 @@ class Buy(Trade):
         # Update position
         self.instrument.save()
 
-    # TODO find a working solution. Django delete uses raw sql that bypasses this.
+    # TODO consider changing to signals
     def delete(self, *args, **kwargs):
         # Store references to related objects before deletion
         instrument = self.instrument
@@ -746,7 +748,7 @@ class Sell(Trade):
                 
                 available_parcels = sorted(available_parcels, key=lambda parcel: get_unit_net_capital_gain(parcel))
 
-            available_parcels = [parcel for parcel in available_parcels if parcel.unsold_quantity > 0]
+            available_parcels = [parcel for parcel in available_parcels if (parcel.remaining_quantity and parcel.remaining_quantity > 0)]
 
             quantity_to_allocate = self.quantity
             
@@ -790,10 +792,21 @@ class Parcel(BaseModel):
 
     sale_date = models.DateField(null=True, editable=False)
 
-    calculated_unsold_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
+
+    calculated_instrument_name = models.CharField(max_length=16, null=True, blank=True, editable=False)
+    
+    @safe_property
+    def instrument_name(self):
+        return self.buy.instrument.name if self.buy and self.buy.instrument else None
+
+    calculated_remaining_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
 
     @safe_property
-    def unsold_quantity(self):
+    def remaining_quantity(self):
+
+        if not self.is_active:
+            return Decimal('0')
+        
         sold_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return self.parcel_quantity - sold_quantity
 
@@ -802,7 +815,7 @@ class Parcel(BaseModel):
     
     @safe_property
     def is_sold(self):
-        return self.unsold_quantity == 0
+        return self.remaining_quantity == 0
 
     calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
     
@@ -815,6 +828,10 @@ class Parcel(BaseModel):
     
     @safe_property
     def adjusted_unit_brokerage(self):
+
+        if not self.is_active:
+            return Money(Decimal('0'), self.buy.account.currency)
+
         adjusted_unit_brokerage = self.buy.unit_brokerage_converted / self.cumulative_split_multiplier
         return adjusted_unit_brokerage
 
@@ -835,6 +852,10 @@ class Parcel(BaseModel):
 
     @safe_property
     def total_cost_base(self):
+
+        if not self.is_active:
+            return Money(Decimal('0'), self.buy.account.currency)
+
         # Already converted
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
@@ -849,6 +870,10 @@ class Parcel(BaseModel):
     
     @safe_property
     def unit_cost_base(self):
+        
+        if not self.is_active:
+            return Money(Decimal('0'), self.buy.account.currency)
+
         return self.total_cost_base / self.parcel_quantity
 
     def split_or_consolidate(self, multiplier, date):
@@ -859,7 +884,7 @@ class Parcel(BaseModel):
 
         with transaction.atomic():
             # Create target parcel
-            parcel_target = Parcel.objects.get(pk=self.pk)
+            parcel_target = copy.copy(self) # create a shallow copy
             parcel_target.pk = None # Make a new instance
             parcel_target.activation_date = date # Set new activation date
             parcel_target.parent_parcel = self
@@ -875,7 +900,9 @@ class Parcel(BaseModel):
             self.deactivation_date = date
 
             self.save() # not needed as add_note also saves
-        
+
+        return parcel_target
+
     def bifurcate(self, quantity, date):
         assert quantity > 0, "Quantity to bifurcate (split) must be greater than zero"
         assert quantity <= self.parcel_quantity, "Quantity to bifurcate (split) must be less than the available quantity"
@@ -1003,9 +1030,12 @@ class SellAllocation(BaseModel):
         if not self._creation_handled:
             
             # bifurcate the parcel (split into two uneven parcels)
-            self.parcel = self.parcel.bifurcate(quantity=self.quantity, date=self.sell.date)
+            allocated_parcel = self.parcel.bifurcate(quantity=self.quantity, date=self.sell.date)
 
-            self.parcel.sale_date = self.sell.date
+            allocated_parcel.sale_date = self.sell.date
+
+            self.parcel = allocated_parcel
+
             
             self._creation_handled = True
             
@@ -1015,10 +1045,10 @@ class SellAllocation(BaseModel):
         super().save(*args, **kwargs)
 
         #save the sell and parcel to update qty
-        self.parcel.save()
+        allocated_parcel.save()
         self.sell.save()
 
-    # TODO find a working solution. Django delete uses raw sql that bypasses this.
+
     def delete(self, *args, **kwargs):
         # Store references to related objects before deletion
         parcel = self.parcel
@@ -1074,8 +1104,8 @@ class ShareSplit(BaseModel):
                     buy__date__lte=self.date
                 ):
                     if not parcel.is_sold:
-                        parcel.split_or_consolidate(multiplier=split_multiplier, date=self.date)
-                        self.affected_parcels.add(parcel)
+                        new_parcel = parcel.split_or_consolidate(multiplier=split_multiplier, date=self.date)
+                        self.affected_parcels.add(new_parcel)
 
                 # In any case, save the object
                 self._creation_handled = True
@@ -1148,6 +1178,8 @@ class CostBaseAdjustment(BaseModel):
                         buy__instrument=self.instrument,
                         deactivation_date__isnull=True,
                         buy__date__lte=end
+                    ).filter(
+                        Q(sale_date__isnull=True) | Q(sale_date__gte=cutoff_date)
                     )
 
                     affected_parcels = list(affected_parcels)
@@ -1159,13 +1191,13 @@ class CostBaseAdjustment(BaseModel):
 
                     for parcel in affected_parcels:
                         days_held = days_in_year
-                        if parcel.deactivation_date:
-                            days_held = min(days_held, (parcel.deactivation_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
+                        if parcel.sale_date:
+                            days_held = min(days_held, (parcel.sale_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
                         total_weighted_sum += (parcel.parcel_quantity * days_held)
                     for parcel in affected_parcels:
                         days_held = days_in_year
-                        if parcel.deactivation_date:
-                            days_held = min(days_held, (parcel.deactivation_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
+                        if parcel.sale_date:
+                            days_held = min(days_held, (parcel.sale_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
                         parcel_weight = (parcel.parcel_quantity * days_held)
                         adjustment_fraction =  parcel_weight / total_weighted_sum
 
@@ -1199,10 +1231,12 @@ class CostBaseAdjustmentAllocation(BaseModel):
 
     cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     parcel = models.ForeignKey(Parcel, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT)
-    cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT) # TODO make cascade?
+    cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.CASCADE)
 
     activation_date = models.DateField(null=True, editable=False)   # not required
     deactivation_date = models.DateField(null=True, editable=False)
+
+
 
     def bifurcate(self, target_parcel, remainder_parcel, target_fraction, date):
         assert target_fraction >= 0, "Target fraction must be >= 0"
@@ -1238,7 +1272,7 @@ class CostBaseAdjustmentAllocation(BaseModel):
             self.save()        
         return
     
-    # TODO find a working solution. Django delete uses raw sql that bypasses this.
+    # TODO consider changing to signals. Delete method is skipped by bulk operations
     def delete(self, *args, **kwargs):
         related_parcel = self.parcel
         super().delete(*args, **kwargs)
@@ -1391,6 +1425,9 @@ class DataExport(BaseModel):
 
     def save(self, *args, **kwargs):
 
+        # Save first so foreign keys exist
+        super().save(*args, **kwargs)
+
         if not self.file:
             with NamedTemporaryFile(suffix='.xlsx') as temp_file:
                 temp_filename = temp_file.name
@@ -1424,8 +1461,10 @@ class DataExport(BaseModel):
                 self.file = ContentFile(
                     temp_file.file.read(), name=new_name
                 )
+
                 super().save(*args, **kwargs)
                 print('done')
+
 
     def __str__(self):
         return f'{self.created_at.date().isoformat()} | Data Export - {self.account.description}'

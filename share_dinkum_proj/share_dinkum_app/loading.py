@@ -115,9 +115,8 @@ class DataLoader():
             self.mapping = excelinterface.get_all_tables_in_excel(self.input_file)
             self.load_all_tables()
 
-
-    def get_model_load_order(self):
-
+    @classmethod
+    def get_model_load_order(cls):
 
         model_load_order = {
             
@@ -231,7 +230,7 @@ class DataLoader():
         df = df.where(pd.notnull(df), None)
 
 
-        for index, row in tqdm(df.iterrows()):
+        for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
             record['account_id'] = self.account.id
@@ -310,7 +309,7 @@ class DataLoader():
 
     def get_available_parcels(self, legacy_id):
         available_parcels = app_models.Parcel.objects.filter(account=self.account, buy__legacy_id=legacy_id, deactivation_date__isnull=True)
-        available_parcels = [parcel for parcel in available_parcels if parcel.unsold_quantity > 0]
+        available_parcels = [parcel for parcel in available_parcels if parcel.remaining_quantity > 0]
         return available_parcels
 
 
@@ -335,28 +334,29 @@ class DataLoader():
             print(f"[ERROR] Multiple matches found for {related_model.__name__} with filters: {filters}")
             return None
 
+    @classmethod
+    def clear_all_data(cls):
+        res = input("Type 'X' to DELETE ALL DATA.")
+        if res.upper() != 'X':
+            print('Aborted')
+            return
+        # Clear database tables
 
+        model_load_order = cls.get_model_load_order()
 
+        model_deletion_order = [model for model in apps.get_models() if model not in model_load_order] + list(reversed(model_load_order))
 
-
-
-def clear_all_data():
-    res = input("Type 'X' to DELETE ALL DATA.")
-    if res.upper() != 'X':
-        print('Aborted')
-        return
-    # Clear database tables
-    all_app_models = apps.get_models()
-    for model in reversed(list(all_app_models)):
-        try:
-            model.objects.all().delete()  # Deletes all records in the model
-        except Exception as e:
-            print(f"Error deleting model {model.__name__}: {e}")
-    print('Deleted all models')
-    # Delete all data in the media folder
-    media_folder = Path(settings.MEDIA_ROOT)
-    force_delete_and_recreate_folder(media_folder)
-    
+        for model in model_deletion_order:
+            try:
+                model.objects.all().delete()  # Deletes all records in the model
+            except Exception as e:
+                print(f"Error deleting model {model.__name__}: {e}")
+ 
+        print('Deleted all models')
+        # Delete all data in the media folder
+        media_folder = Path(settings.MEDIA_ROOT)
+        force_delete_and_recreate_folder(media_folder)
+        
 
 
 
