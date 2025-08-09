@@ -73,7 +73,7 @@ uv pip install .
 ```
 To activate the virtual environment:
 ```bash
-.venv\Scripts\activate 
+.venv\Scripts\activate
 ```
 ### 3. Configure environment variables
 
