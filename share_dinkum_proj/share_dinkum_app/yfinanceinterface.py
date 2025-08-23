@@ -5,6 +5,10 @@ import pandas as pd
 import string
 
 
+import logging
+logger = logging.getLogger(__name__)
+
+
 
 def to_snake_case(text):
     allowable_chars = string.ascii_letters + string.digits

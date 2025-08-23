@@ -22,6 +22,15 @@ from share_dinkum_proj.ensure_secret_key import ensure_secret_key
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+# Logging setup
+from share_dinkum_app.utils.logging_config import setup_logging
+import logging
+logger = setup_logging(level=logging.DEBUG)
+
+
+
+
 ENV_PATH = BASE_DIR / '.env'
 SECRET_KEY = ensure_secret_key(ENV_PATH)
 

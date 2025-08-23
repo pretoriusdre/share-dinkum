@@ -35,8 +35,14 @@ from share_dinkum_app.decorators import safe_property
 # Local but to be replaced in future
 from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid import uuid7", once this method is available in standard library
 
+
+import logging
+logger = logging.getLogger(__name__)
+
+
 # global constant:
 DEFAULT_CURRENCY = 'AUD'
+
 
 
 class AppUser(AbstractUser):
@@ -189,22 +195,15 @@ class Account(models.Model):
 
 
     def save(self, *args, **kwargs):
-        portfolio_value_converted = self.portfolio_value_converted
-        self.calculated_portfolio_value_converted = portfolio_value_converted
+        self.calculated_portfolio_value_converted = self.portfolio_value_converted
         self.calculated_portfolio_value_converted_currency = self.currency
 
-        if self.update_price_history:
-            self.update_all_price_history()
-            self.update_all_exchange_rate_history()
-
-            
-            self.update_price_history = False
-            
         user = kwargs.pop('user', None)
 
         if self.owner.default_account is None:
             self.owner.default_account = self
             self.owner.save()
+
         super().save(*args, **kwargs)
 
 
@@ -257,38 +256,38 @@ class BaseModel(models.Model):
         # Call the parent class's save method to persist the instance first
         super().save(*args, **kwargs)
         
-        # Update calculated fields after the object is saved
-        fields_updated = False
-        for attr_name in dir(self):
-            if attr_name.startswith('_'):
-                # Skip private and special attributes
-                continue
-            try:
-                attr = getattr(self, attr_name)
-                if callable(attr):
-                    continue # skip methods etc
-                expected_calc_field_name = f"calculated_{attr_name}"
-                if hasattr(self, expected_calc_field_name):
-                    # Set the calculated field value
-                    setattr(self, expected_calc_field_name, attr)
-                    fields_updated = True
+        # # Update calculated fields after the object is saved
+        # fields_updated = False
+        # for attr_name in dir(self):
+        #     if attr_name.startswith('_'):
+        #         # Skip private and special attributes
+        #         continue
+        #     try:
+        #         attr = getattr(self, attr_name)
+        #         if callable(attr):
+        #             continue # skip methods etc
+        #         expected_calc_field_name = f"calculated_{attr_name}"
+        #         if hasattr(self, expected_calc_field_name):
+        #             # Set the calculated field value
+        #             setattr(self, expected_calc_field_name, attr)
+        #             fields_updated = True
 
-                # Where the currency differs from the base currency, set an exchange rate if not provided
-                if attr_name.endswith('_currency'):
-                    if attr and attr != self.account.currency and hasattr(self, 'exchange_rate'):
-                        if not getattr(self, 'exchange_rate'):
-                            exchange_rate_obj = ExchangeRate.get_or_create(account=self.account, convert_from=attr, convert_to=self.account.currency, exchange_date=self.date)
-                            setattr(self, 'exchange_rate', exchange_rate_obj)
-                            fields_updated = True
-            except AttributeError:
-                # Ignore attributes that cannot be accessed
-                continue
+        #         # Where the currency differs from the base currency, set an exchange rate if not provided
+        #         if attr_name.endswith('_currency'):
+        #             if attr and attr != self.account.currency and hasattr(self, 'exchange_rate'):
+        #                 if not getattr(self, 'exchange_rate'):
+        #                     exchange_rate_obj = ExchangeRate.get_or_create(account=self.account, convert_from=attr, convert_to=self.account.currency, exchange_date=self.date)
+        #                     setattr(self, 'exchange_rate', exchange_rate_obj)
+        #                     fields_updated = True
+        #     except AttributeError:
+        #         # Ignore attributes that cannot be accessed
+        #         continue
 
-        # Save again only if calculated fields were updated
-        if fields_updated:
-            super().save(update_fields=[
-                f.name for f in self._meta.get_fields() if f.name.startswith('calculated_')
-            ] + (['exchange_rate'] if hasattr(self, 'exchange_rate') else []))
+        # # Save again only if calculated fields were updated
+        # if fields_updated:
+        #     super().save(update_fields=[
+        #         f.name for f in self._meta.get_fields() if f.name.startswith('calculated_')
+        #     ] + (['exchange_rate'] if hasattr(self, 'exchange_rate') else []))
                 
     def __str__(self):
         return f'{self.description}'
@@ -400,10 +399,14 @@ class ExchangeRate(BaseModel):
 
 
     def apply(self, money):
-        
-        assert str(money.currency) == str(self.convert_from), f'Invalid exchange rate applied. The convert_from currency {self.convert_from} does not match the currency {money.currency}'
+        assert str(money.currency) == str(self.convert_from), (
+            f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
+            f'does not match the currency {money.currency}'
+        )
         new_amount = money.amount * self.exchange_rate_multiplier
-        return money.__class__(new_amount, self.convert_to)
+        return Money(new_amount, str(self.convert_to))
+
+
 
     def __str__(self):
         return f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to} on {self.date.isoformat()}'
@@ -649,33 +652,6 @@ class Buy(Trade):
         return parcel_list
 
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        if not self._creation_handled:
-            parcel = Parcel(
-                account=self.account,
-                buy=self,
-                parent_parcel=None,
-                parcel_quantity=self.quantity,
-                activation_date=self.date
-            )
-            parcel.save()
-            self._creation_handled = True
-            super().save(*args, **kwargs)
-            message = f'This parcel was created from trade {self}'
-            parcel.log_event(message)
-
-        # Update position
-        self.instrument.save()
-
-    # TODO consider changing to signals
-    def delete(self, *args, **kwargs):
-        # Store references to related objects before deletion
-        instrument = self.instrument
-        # Delete the object
-        super().delete(*args, **kwargs)
-        # update the balances on the instrument
-        instrument.save()
 
 class Sell(Trade):
     MODEL_DESCRIPTION = 'Sales of shares.'
@@ -715,61 +691,7 @@ class Sell(Trade):
         return (self.quantity or 0 ) - allocated_quantity
     
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        if not self._creation_handled:
-            if self.strategy == 'MANUAL':
-                self._creation_handled = True
-                super().save(*args, **kwargs)
 
-                return
-            
-            available_parcels = Parcel.objects.filter(account=self.account) \
-                            .filter(deactivation_date__isnull=True) \
-                            .filter(buy__instrument=self.instrument) \
-                            .filter(buy__date__lte=self.date)
-            
-            
-            if self.strategy == 'FIFO':
-                available_parcels = available_parcels.order_by('buy__date')
-            elif self.strategy == 'LIFO':
-                available_parcels = available_parcels.order_by('-buy__date')
-            elif self.strategy == 'MIN_CGT':
-            
-                unit_proceeds = self.unit_proceeds
-
-                def get_unit_net_capital_gain(parcel):
-
-                    capital_gain = unit_proceeds - parcel.unit_cost_base
-
-                    if (self.date - parcel.buy.date).days > 365:
-                        capital_gain *= 0.5
-                    return capital_gain
-                
-                available_parcels = sorted(available_parcels, key=lambda parcel: get_unit_net_capital_gain(parcel))
-
-            available_parcels = [parcel for parcel in available_parcels if (parcel.remaining_quantity and parcel.remaining_quantity > 0)]
-
-            quantity_to_allocate = self.quantity
-            
-            for parcel in available_parcels:
-                parcel_quantity = parcel.parcel_quantity
-                qty_for_parcel = min(parcel_quantity, quantity_to_allocate)
-                allocation = SellAllocation(
-                    account=self.account,
-                    parcel=parcel,
-                    sell=self,
-                    quantity=qty_for_parcel
-                    )
-                allocation.save()
-                quantity_to_allocate -= qty_for_parcel
-                if quantity_to_allocate <= 0:
-                    break
-        self._creation_handled = True
-        super().save(*args, **kwargs)
-
-        # Update position
-        self.instrument.save()
 
 class Parcel(BaseModel):
     MODEL_DESCRIPTION = 'Collections of shares with the same unit properties. Can be split into other parcels.'
@@ -1027,26 +949,7 @@ class SellAllocation(BaseModel):
         else:
             self.description = 'INACTIVE'
 
-        if not self._creation_handled:
-            
-            # bifurcate the parcel (split into two uneven parcels)
-            allocated_parcel = self.parcel.bifurcate(quantity=self.quantity, date=self.sell.date)
-
-            allocated_parcel.sale_date = self.sell.date
-
-            self.parcel = allocated_parcel
-
-            
-            self._creation_handled = True
-            
-            super().save(*args, **kwargs)
-
-        # In any case, save the object
         super().save(*args, **kwargs)
-
-        #save the sell and parcel to update qty
-        allocated_parcel.save()
-        self.sell.save()
 
 
     def delete(self, *args, **kwargs):
@@ -1091,25 +994,9 @@ class ShareSplit(BaseModel):
         return parcel_list_str
 
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        if not self._creation_handled:
-            # bifurcate the parcel (split into two uneven parcels)
-            # self.parcel = self.parcel.bifurcate(self.quantity)
-            with transaction.atomic():
-                split_multiplier = self.split_multiplier
-                for parcel in Parcel.objects.filter(
-                    account=self.account,
-                    deactivation_date__isnull=True,
-                    buy__instrument=self.instrument,
-                    buy__date__lte=self.date
-                ):
-                    if not parcel.is_sold:
-                        new_parcel = parcel.split_or_consolidate(multiplier=split_multiplier, date=self.date)
-                        self.affected_parcels.add(new_parcel)
+        super().save(*args, **kwargs)  # persist first
 
-                # In any case, save the object
-                self._creation_handled = True
-                super().save(*args, **kwargs)
+
 
     def __str__(self):
         return f'{self.pk} | {self.date} | Split of {self.instrument.name} | Multiplier = {self.split_multiplier}'
@@ -1163,62 +1050,12 @@ class CostBaseAdjustment(BaseModel):
     def get_description(self):
         return f'{self.pk} | {self.financial_year_end_date} | Adjustment of {self.instrument.name} | Cost base increase = {self.cost_base_increase}'
     
+
     def save(self, *args, **kwargs):
         self.description = self.get_description()
-
         super().save(*args, **kwargs)
-        if not self._creation_handled:
-            if self.allocation_method == 'QTY_HELD':
-                end = self.financial_year_end_date
-                cutoff_date = date(end.year - 1, end.month, end.day) + timedelta(days=1) # 30 June 2025 becomes 1 July 2024. Accounts for leap yr.
-                with transaction.atomic():
 
-                    affected_parcels = Parcel.objects.filter(
-                        account=self.account,
-                        buy__instrument=self.instrument,
-                        deactivation_date__isnull=True,
-                        buy__date__lte=end
-                    ).filter(
-                        Q(sale_date__isnull=True) | Q(sale_date__gte=cutoff_date)
-                    )
 
-                    affected_parcels = list(affected_parcels)
-
-                    total_weighted_sum = 0
-                    days_in_year = (end - cutoff_date).days + 1 # normally 365
-                    
-                    parcel_set_to_save = set()
-
-                    for parcel in affected_parcels:
-                        days_held = days_in_year
-                        if parcel.sale_date:
-                            days_held = min(days_held, (parcel.sale_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
-                        total_weighted_sum += (parcel.parcel_quantity * days_held)
-                    for parcel in affected_parcels:
-                        days_held = days_in_year
-                        if parcel.sale_date:
-                            days_held = min(days_held, (parcel.sale_date - cutoff_date).days + 1) # In range 1 to 365 inclusive
-                        parcel_weight = (parcel.parcel_quantity * days_held)
-                        adjustment_fraction =  parcel_weight / total_weighted_sum
-
-                        adjustment_alllocation = CostBaseAdjustmentAllocation.objects.create(
-                            account = self.account,
-                            cost_base_increase=self.cost_base_increase_converted * adjustment_fraction,
-                            parcel=parcel,
-                            cost_base_adjustment=self,
-                            activation_date=cutoff_date # basically the start of the relevant financial year
-                        )
-                        parcel_set_to_save.add(parcel)
-                        adjustment_alllocation.log_event(f'Added fraction {adjustment_fraction} of cost base adjustment {self}')
-
-                    for parcel in parcel_set_to_save:
-                        # Update their calculated cost base
-                        parcel.save()
-            else:
-                pass
-
-            self._creation_handled = True
-            super().save(*args, **kwargs)
 
     def __str__(self):
         return self.description

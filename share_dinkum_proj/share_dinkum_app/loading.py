@@ -38,6 +38,11 @@ from tqdm import tqdm
 from pathlib import Path
 
 
+from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
+
+import logging
+logger = logging.getLogger(__name__)
+
 
 def make_tz_naive(df):
     for col in df.columns:
@@ -163,7 +168,7 @@ class DataLoader():
 
             df = self.mapping.get(table_name)
             if df is not None:
-                print(f"Loading {table_name}")
+                logger.info(f"Loading {table_name}")
                 self.load_table_to_model(model=model, df=df)
 
 
@@ -264,8 +269,8 @@ class DataLoader():
                     parcel = available_parcels[0]
                     record['parcel'] = parcel
                 except Exception as e:
-                    print(e)
-                    print('Error', row)
+                    logger.error(f"Error looking up legacy buy id {lookup_legacy_buy} for model {model.__name__}: {e}", exc_info=True)
+                    logger.error('Error on row:\n', row)
                     raise e
 
 
@@ -328,17 +333,18 @@ class DataLoader():
         try:
             return related_model.objects.get(**filters)
         except related_model.DoesNotExist:
-            print(f"[WARN] No match found for {related_model.__name__} with filters: {filters}")
-            return None
+            logger.error(f"No match found for {related_model.__name__} with filters: {filters}")
+            raise
         except related_model.MultipleObjectsReturned:
-            print(f"[ERROR] Multiple matches found for {related_model.__name__} with filters: {filters}")
-            return None
+            logger.error(f"Multiple matches found for {related_model.__name__} with filters: {filters}")
+            raise
+
 
     @classmethod
     def clear_all_data(cls):
         res = input("Type 'X' to DELETE ALL DATA.")
         if res.upper() != 'X':
-            print('Aborted')
+            logger.info('Aborted')
             return
         # Clear database tables
 
@@ -346,13 +352,20 @@ class DataLoader():
 
         model_deletion_order = [model for model in apps.get_models() if model not in model_load_order] + list(reversed(model_load_order))
 
+        receivers = disconnect_app_signals('share_dinkum_app')
+
         for model in model_deletion_order:
             try:
                 model.objects.all().delete()  # Deletes all records in the model
             except Exception as e:
-                print(f"Error deleting model {model.__name__}: {e}")
+                logger.error(f"Error deleting model {model.__name__}: {e}", exc_info=True)
+                raise
  
-        print('Deleted all models')
+        
+        reconnect_app_signals(receivers)
+
+
+        logger.info('Deleted all models')
         # Delete all data in the media folder
         media_folder = Path(settings.MEDIA_ROOT)
         force_delete_and_recreate_folder(media_folder)
@@ -371,8 +384,8 @@ def force_delete_and_recreate_folder(folder_path):
                 else:
                     item.unlink()  # Force delete files
             except Exception as e:
-                print(f"Failed to delete {item}: {e}")
+                logger.error(f"Failed to delete {item}: {e}", exc_info=True)
     # Recreate folder
     folder.mkdir(parents=True, exist_ok=True)
-    print(f"Forcefully deleted and recreated folder: {folder}")
+    logger.info(f"Forcefully deleted and recreated folder: {folder}")
     
