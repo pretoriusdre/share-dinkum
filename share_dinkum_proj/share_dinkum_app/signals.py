@@ -155,7 +155,7 @@ def handle_sell_allocation_deletion(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=CostBaseAdjustment)
-def handle_cost_base_allocation(sender, instance, created, **kwargs):
+def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
 
     assert isinstance(instance, CostBaseAdjustment)
 
@@ -249,9 +249,34 @@ def handle_share_split(sender, instance, created, **kwargs):
         # Mark as handled
         instance._creation_handled = True
         instance.save(update_fields=["_creation_handled"])
+        instance.instrument.save() # Recalculate totals
 
 
-# TODO 'unsplit' after Sharesplit deletion
+@receiver(post_delete, sender=ShareSplit)
+def remove_share_split(sender, instance, **kwargs):
+
+    assert isinstance(instance, ShareSplit)
+    
+    logger.debug('Removing the applied share split %s', instance)
+    
+    with transaction.atomic():
+        multiplier = instance.split_multiplier
+        reciprocal_multiplier = 1 / multiplier
+
+        for parcel in Parcel.objects.filter(
+            account=instance.account,
+            deactivation_date__isnull=True,
+            buy__instrument=instance.instrument,
+            buy__date__lte=instance.date
+        ):
+            if not parcel.is_sold:
+                new_parcel = parcel.split_or_consolidate(
+                    multiplier=reciprocal_multiplier,
+                    date=instance.date
+                )
+
+        instance.instrument.save() # Recalculate totals
+
 
 
 @receiver([post_save, post_delete], sender=Sell)
