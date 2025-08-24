@@ -367,8 +367,19 @@ class Instrument(BaseModel):
     
     @safe_property
     def quantity_held(self):
-        total_bought = Buy.objects.filter(is_active=True, instrument=self).aggregate(models.Sum('quantity'))['quantity__sum'] or 0
-        total_sold = Sell.objects.filter(is_active=True, instrument=self).aggregate(models.Sum('quantity'))['quantity__sum'] or 0
+
+        total_bought = Parcel.objects.filter(  # using Parcels' qty, to account for share splits
+            account=self.account,
+            buy__instrument=self,
+            deactivation_date__isnull=True
+        ).aggregate(total=Sum('parcel_quantity'))['total'] or Decimal('0')
+
+        total_sold = Sell.objects.filter(
+            account=self.account,
+            instrument=self
+        ).aggregate(total=Sum('quantity'))['total'] or Decimal('0')
+
+    
         return total_bought - total_sold
 
 
