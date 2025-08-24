@@ -192,9 +192,10 @@ class DataLoader():
         if 'is_active' in df.columns:
             df['is_active'] = df['is_active'].fillna(True)
         
+        logger.debug('Starting to process columns')
         # Preprocess columns to handle foreign keys,  decimal fields, and file fields.
         for col in df.columns:
-
+            logger.debug('Starting to process columns %s', col)
             # Lookup fields are not processed here.
             if col.startswith('lookup_'):
                 continue
@@ -238,6 +239,7 @@ class DataLoader():
         for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
+            
             record['account_id'] = self.account.id
             
             id = record.pop('id', None)

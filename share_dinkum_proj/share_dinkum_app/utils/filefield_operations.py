@@ -3,6 +3,11 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 
 
+
+import logging
+logger = logging.getLogger(__name__)
+
+
 def process_filefield(value):
     # Used to handle a filefield in a data import process.
 
@@ -20,7 +25,7 @@ def process_filefield(value):
             if media_file.exists():
                 return str(file_path)  # return relative path as-is
             else:
-                print(f"File {media_file} does not exist.")
+                logger.error('Referenced local file in media directory,%s does not exist.', media_file)
                 return None
 
         # Case 2: Absolute path (loading a new file)
@@ -36,11 +41,11 @@ def process_filefield(value):
                 return ContentFile(f.read(), name=file_path.name)
 
         else:
-            print(f"File {file_path} does not exist.")
+            logger.error('File %s does not exist.', file_path)
             return None
 
     except Exception as e:
-        print(f"Error processing {value}: {e}")
+        logger.error('Error processing %s: %s', value, e, exc_info=True)
         return None
     
 

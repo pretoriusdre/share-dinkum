@@ -13,6 +13,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.urls import reverse
 from django.db.models import Sum, Q, Max, Min
+from django.forms.models import model_to_dict
+
 
 # Djmoney imports
 from djmoney.models.fields import MoneyField, CurrencyField
@@ -306,6 +308,8 @@ class LogEntry(BaseModel):
     def __str__(self):
         return f'{self.created_at.isoformat(timespec="seconds")} - ***{(str(self.pk))[-4:]} - {self.event}'
 
+
+
 class ExchangeRate(BaseModel):
     MODEL_DESCRIPTION = 'Exchange rates between pairs of currencies at particular dates.'
 
@@ -395,7 +399,7 @@ class ExchangeRate(BaseModel):
 
 
         except Exception as e:
-            print(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}')
+            logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
 
 
     def apply(self, money):
@@ -460,21 +464,30 @@ class Instrument(BaseModel):
     
     @safe_property
     def value_held(self):
+
         if self.current_unit_price:
-            return Money(self.current_unit_price * self.quantity_held, self.currency)
-        # if self.quantity_held > 0:
-        #     return None
-        return Money(0, self.currency) # zero quantity held
+            value_held = Money(self.current_unit_price * self.quantity_held, self.currency)
+        else:
+            if not self.currency:
+                raise ValueError(f'Instrument {self} has no currency set.')
+            else:
+                value_held = Money(0, self.currency)
+        return value_held
+
 
     calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
     def value_held_converted(self):
         if self.currency == self.account.currency:
+
+            assert isinstance(self.value_held, Money), f'Value held is not a Money instance: {self.value_held}'
             return self.value_held
         else:
             exchange_rate = ExchangeRate.objects.filter(account=self.account, convert_from=self.currency, convert_to=self.account.currency).order_by('-date').first()
-            return exchange_rate.apply(self.value_held)
+            converted_value = exchange_rate.apply(self.value_held)
+            assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
+            return converted_value
 
 
     
@@ -535,7 +548,8 @@ class Instrument(BaseModel):
                 InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
         except Exception as e:
-            print(f'Error getting price history for {self}, {e}')
+            logger.error(f'Error getting price history for {self}, {e}', exc_info=True)
+
 
 
 class InstrumentPriceHistory(models.Model):
@@ -569,7 +583,6 @@ class InstrumentPriceHistory(models.Model):
         app_label = self._meta.app_label
         model_name = self._meta.model_name
         return reverse(f'admin:{app_label}_{model_name}_change', args=[str(self.id)])
-
 
 
 
@@ -620,9 +633,13 @@ class Trade(BaseModel):
     
     @safe_property
     def unit_price_converted(self):
+        logger.debug('Calculating unit price converted on %s', self)
         unit_price_converted =  self.unit_price
         if self.exchange_rate:
             unit_price_converted = self.exchange_rate.apply(unit_price_converted)
+            logger.debug('Converted unit price is %s', unit_price_converted)
+        else:
+            logger.debug('No exchange rate available for %s', self)
         return unit_price_converted
 
 
@@ -638,6 +655,7 @@ class Trade(BaseModel):
         super().save(*args, **kwargs)
 
 
+
 class Buy(Trade):
     MODEL_DESCRIPTION = 'Purchases of share parcels.'
     _creation_handled = models.BooleanField(default=False, editable=False)
@@ -650,6 +668,11 @@ class Buy(Trade):
         related_parcels = Parcel.objects.filter(buy=self)
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
+
+    def save(self, *args, **kwargs):
+        logger.debug("Saving Buy object: %s", self)
+        logger.debug('Model data %s', model_to_dict(self))
+        super().save(*args, **kwargs)
 
 
 
@@ -690,7 +713,6 @@ class Sell(Trade):
         allocated_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return (self.quantity or 0 ) - allocated_quantity
     
-
 
 
 class Parcel(BaseModel):
@@ -965,6 +987,7 @@ class SellAllocation(BaseModel):
         sell.save()
 
 
+
 class ShareSplit(BaseModel):
     MODEL_DESCRIPTION = 'Events which transform parcels into new parcels with different cost base and quantity.'
     instrument = models.ForeignKey(Instrument, related_name='share_split', on_delete=models.PROTECT)
@@ -1000,6 +1023,8 @@ class ShareSplit(BaseModel):
 
     def __str__(self):
         return f'{self.pk} | {self.date} | Split of {self.instrument.name} | Multiplier = {self.split_multiplier}'
+
+
 
 class CostBaseAdjustment(BaseModel):
     MODEL_DESCRIPTION = 'Cost base adjustments applied to instruments, i.e. AMIT cost base adjustments.'
@@ -1061,7 +1086,6 @@ class CostBaseAdjustment(BaseModel):
         return self.description
 
                 
-
 
 class CostBaseAdjustmentAllocation(BaseModel):
     MODEL_DESCRIPTION = 'Allocations of cost base adjustments to specific parcels.'
@@ -1130,7 +1154,6 @@ class CostBaseAdjustmentAllocation(BaseModel):
 
 
 # TODO make it so that it has a string method or updates descr
-
 class Income(BaseModel):
     MODEL_DESCRIPTION = 'Base class for Income, eg Austrlalian Dividends and Distributions.'
     
@@ -1260,47 +1283,6 @@ class DataExport(BaseModel):
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
     include_price_history = models.BooleanField(default=False, help_text='Include price history in the export?')
 
-    def save(self, *args, **kwargs):
-
-        # Save first so foreign keys exist
-        super().save(*args, **kwargs)
-
-        if not self.file:
-            with NamedTemporaryFile(suffix='.xlsx') as temp_file:
-                temp_filename = temp_file.name
-                print(f'temp filename is {temp_filename}')
-
-                gen = excelinterface.ExcelGen(title='Data Export')
-
-                for model in apps.get_app_config('share_dinkum_app').get_models():
-
-                    if model == InstrumentPriceHistory and not self.include_price_history:
-                        continue
-
-                    if 'account' in [field.name for field in model._meta.get_fields()]:
-                        queryset = loading.model_to_queryset(model=model, account=self.account)
-                    else:
-                        queryset = loading.model_to_queryset(model=model)
-                    
-                    df = loading.queryset_to_df(queryset)
-                    if hasattr(model, 'MODEL_DESCRIPTION'):
-                        model_description = model.MODEL_DESCRIPTION
-                    else:
-                        model_description = 'No description available'
-                    
-                    if not df.empty:
-                        gen.add_table(df, table_name=model.__name__, description=model_description)
-
-
-                gen.save(temp_filename)
-
-                new_name = f'Export_{self.account.description}.xlsx'
-                self.file = ContentFile(
-                    temp_file.file.read(), name=new_name
-                )
-
-                super().save(*args, **kwargs)
-                print('done')
 
 
     def __str__(self):

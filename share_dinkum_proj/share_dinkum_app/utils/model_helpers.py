@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 def save_with_logging(obj, context=""):
     try:
+        logger.debug(f"Saving object of type {type(obj).__name__} in context: {context}")
+        logger.debug(f"Object data before save: {model_to_dict(obj)}")
+        
         obj.save()
     except Exception as e:
         logger.error(f"Error saving object of type {type(obj).__name__} in context: {context}")

@@ -16,7 +16,9 @@ from share_dinkum_app import excelinterface
 from share_dinkum_app import loading
 
 from django.db.models import Sum, Q, Max, Min
+from django.forms.models import model_to_dict
 
+from djmoney.money import Money
 
 import threading
 
@@ -26,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 _save_lock = threading.local()
 
+
+# @receiver(post_save)
+# def master_post_save_handle(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Buy)
@@ -125,6 +130,8 @@ def handle_sell_allocation_creation(sender, instance, created, **kwargs):
 
     if not created or instance._creation_handled:
         return
+    
+    logger.debug('Bifurcating parcel for sell allocation  %s', instance)
 
     # bifurcate the parcel
     allocated_parcel = instance.parcel.bifurcate(
@@ -150,6 +157,8 @@ def handle_share_split(sender, instance, created, **kwargs):
 
     if not created or instance._creation_handled:
         return
+    
+    logger.debug('Splitting parcels as a result of %s', instance)
 
     with transaction.atomic():
         multiplier = instance.split_multiplier
@@ -180,6 +189,8 @@ def handle_cost_base_allocation(sender, instance, created, **kwargs):
 
     if not created or instance._creation_handled:
         return
+    
+    logger.debug('Handling cost base allocation for %s', instance)
 
     if instance.allocation_method != 'QTY_HELD':
         instance._creation_handled = True
@@ -239,8 +250,12 @@ def update_instrument_position(sender, instance, **kwargs):
     Anytime a Buy or Sell is created/updated/deleted,
     refresh instrument totals.
     """
+
+    logger.debug('Updating instrument net position after %s', instance)
+    
     instrument = instance.instrument
     instrument.save(update_fields=None)  # triggers the aggregate recalculation
+    logger.debug('...done')
 
 
 @receiver(post_save, sender=Account)
@@ -257,19 +272,26 @@ def update_account_price_history(sender, instance, created, **kwargs):
         instance.update_price_history = False
         instance.save(update_fields=['update_price_history'])
 
+
 @receiver(post_save, sender=DataExport)
 def generate_export_file(sender, instance, created, **kwargs):
 
     assert isinstance(instance, DataExport)
 
+
     if instance.file:
         return  # already has a file
+    logger.info('Starting data export process.')
 
     with NamedTemporaryFile(suffix='.xlsx') as temp_file:
         gen = excelinterface.ExcelGen(title='Data Export')
         for model in apps.get_app_config('share_dinkum_app').get_models():
+
             if model == InstrumentPriceHistory and not instance.include_price_history:
                 continue
+
+            logger.info('    - %s', model.__name__)
+
             if 'account' in [f.name for f in model._meta.get_fields()]:
                 queryset = loading.model_to_queryset(model=model, account=instance.account)
             else:
@@ -283,6 +305,7 @@ def generate_export_file(sender, instance, created, **kwargs):
         gen.save(temp_file.name)
         new_name = f'Export_{instance.account.description}.xlsx'
         instance.file.save(new_name, ContentFile(open(temp_file.name, 'rb').read()))
+        logger.info('Data export process completed successfully.')
 
 
 
@@ -292,6 +315,8 @@ def generate_export_file(sender, instance, created, **kwargs):
 def persist_safe_properties(sender, instance, created, **kwargs):
 
     logger.debug('Setting calculated fields for %s', instance)
+
+    logger.debug('Instance data is: %s', model_to_dict(instance))
 
 
     # Prevent recursion
@@ -315,12 +340,12 @@ def persist_safe_properties(sender, instance, created, **kwargs):
                 
                 value = getattr(instance, attr_name)
 
-                #print(attr_name, value, type(value))
-
                 calc_field_name = f"calculated_{attr_name}"
                 if hasattr(instance, calc_field_name):
                     setattr(instance, calc_field_name, value)
                     updated_fields.append(calc_field_name)
+                    if isinstance(value, Money):
+                        updated_fields.append(f'{calc_field_name}_currency')
 
             # Handle currency -> exchange_rate
             if attr_name.endswith('_currency') and hasattr(instance, 'exchange_rate'):
@@ -343,3 +368,5 @@ def persist_safe_properties(sender, instance, created, **kwargs):
             _save_lock.active = True
             instance.save(update_fields=updated_fields)
             _save_lock.active = False
+
+    logger.debug('Updated instance data is: %s', model_to_dict(instance))

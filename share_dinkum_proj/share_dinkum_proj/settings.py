@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Logging setup
 from share_dinkum_app.utils.logging_config import setup_logging
 import logging
-logger = setup_logging(level=logging.DEBUG)
+logger = setup_logging(level=logging.INFO)
 
 
 
