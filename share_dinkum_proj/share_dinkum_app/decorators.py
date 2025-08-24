@@ -22,4 +22,8 @@ def safe_property(func):
         if getattr(self._state, 'adding', False):
             return None
         return func(self)
+    
+    # Mark this property so signals can detect it
+    wrapper.fget._is_safe_property = True
+    
     return wrapper

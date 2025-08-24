@@ -2,6 +2,11 @@ import os
 from pathlib import Path
 from django.core.management.utils import get_random_secret_key
 
+import logging
+logger = logging.getLogger(__name__)
+
+
+
 DEFAULT_PLACEHOLDER = '__REPLACE_ME__'
 
 def ensure_secret_key(env_path: Path, placeholder: str = DEFAULT_PLACEHOLDER) -> str:
@@ -12,7 +17,7 @@ def ensure_secret_key(env_path: Path, placeholder: str = DEFAULT_PLACEHOLDER) ->
     if not env_path.exists():
         new_key = get_random_secret_key()
         env_path.write_text(f'SECRET_KEY={new_key}\n')
-        print('Created new .env file with SECRET_KEY.')
+        logger.info('Created new .env file with random SECRET_KEY.')
         return new_key
 
     # Read current lines
@@ -34,5 +39,5 @@ def ensure_secret_key(env_path: Path, placeholder: str = DEFAULT_PLACEHOLDER) ->
         lines.append(f'SECRET_KEY={new_key}')
     
     env_path.write_text('\n'.join(lines) + '\n')
-    print('Updated SECRET_KEY in .env file.')
+    logger.info('Updated SECRET_KEY in .env file.')
     return new_key

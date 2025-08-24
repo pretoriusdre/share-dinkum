@@ -17,6 +17,9 @@ from uuid import UUID
 from djmoney.money import Money
 from django.db.models.fields.files import FieldFile
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def get_all_tables_in_excel(filename):
     """A helper function to extract all Named DataTables from an Excel file,

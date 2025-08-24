@@ -2,7 +2,11 @@ notes.txt
 share_dinkum_proj/media/*
 share_dinkum_proj/static/*
 
+share_dinkum_proj/share_dinkum_app/logs
+share_dinkum_proj/share_dinkum_app/logs/*
+
 nuke.bat
+
 
 
 data_import_old.ipynb

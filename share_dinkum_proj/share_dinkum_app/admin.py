@@ -24,6 +24,13 @@ import share_dinkum_app.models
 
 from share_dinkum_app.models import AppUser
 
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+
+
 class BaseInline(admin.TabularInline):
     
     def __init__(self, *args, **kwargs):
@@ -213,7 +220,7 @@ for model, model_admin in model_admin_map.items():
         if model_admin and issubclass(model, Model):
             admin.site.register(model, model_admin)
     except admin.sites.AlreadyRegistered:
-        print(f'Failed to register {model} with {model_admin}. Already registered?')
+        logger.error(f'Failed to register {model} with {model_admin}. Already registered?')
 
 
 
