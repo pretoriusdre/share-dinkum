@@ -1,44 +1,24 @@
-
-from xml.parsers.expat import model
 import pandas as pd
 
-from collections import defaultdict, deque
+from datetime import date
+import shutil
+from tqdm import tqdm
+from pathlib import Path
 
+from django.apps import apps
+from django.db.models import DecimalField, FileField
+from django.core.exceptions import ObjectDoesNotExist
+from django.conf import settings
 
 from djmoney.money import Money
 
+import share_dinkum_app
 from share_dinkum_app import excelinterface
 from share_dinkum_app import yfinanceinterface
-
-
-from django.apps import apps
-import django
-
 import share_dinkum_app.models as app_models
-
-from datetime import date, timedelta
-
-from django.db.models import ForeignKey, OneToOneField, DecimalField, FileField, DateField
-from django.core.exceptions import ObjectDoesNotExist
-
-from django.core.files.base import ContentFile
-
-from django.db import transaction
-from django.conf import settings
-
-
 from share_dinkum_app.utils import convert_to_decimal, save_with_logging, process_filefield
-
-
-import share_dinkum_app
-import shutil
-
-from tqdm import tqdm
-
-from pathlib import Path
-
-
 from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -70,7 +50,6 @@ def queryset_to_df(queryset):
     # Include model properties (calculated fields)
     properties = [attr for attr in dir(model) if isinstance(getattr(model, attr), property)]
 
-
     data = []
     for obj in queryset:
         record = {}
@@ -86,15 +65,6 @@ def queryset_to_df(queryset):
             else:
                 record[field_name] = field_value
 
-        # Include calculated fields (properties) with 'calculated_' prefix
-        # for prop_name in properties:
-        #     if prop_name not in ['pk', 'associated_logs']:
-        #         calc_field_value = getattr(obj, prop_name)
-        #         record[f'calc_{prop_name}'] = calc_field_value
-        #         if isinstance(calc_field_value, Money):
-        #             record[f'calc_{prop_name}_currency'] = str(calc_field_value.currency)
-
-
         data.append(record)
 
     df = pd.DataFrame(data)
@@ -106,7 +76,6 @@ def queryset_to_df(queryset):
             df = df.drop(columns=column)
 
     return df
-
 
 
 class DataLoader():
@@ -123,6 +92,7 @@ class DataLoader():
     @classmethod
     def get_model_load_order(cls):
 
+        # TODO work out the ordering based on the model dependencies
         model_load_order = {
             
             'AppUser': share_dinkum_app.models.AppUser,
@@ -149,13 +119,6 @@ class DataLoader():
         return model_load_order.values()
     
 
-
-        # models = {model.__name__: model for model in apps.get_models() if model._meta.app_label == 'share_dinkum_app'}
-        # model_load_order = # TODO: Define the correct order of models based on dependencies
-
-
-
-
     def load_all_tables(self):
 
         model_load_order = self.get_model_load_order()
@@ -179,11 +142,8 @@ class DataLoader():
         # Legacy data import template has a column 'copy_from_path' which is used to load files.
         # Now, can just use 'file' as the column name, so the export template can be used for importing data also.
         df = df.rename(columns={'copy_from_path': 'file'}, errors='ignore')
-
         cols_to_drop = ['created_at', 'updated_at', '_creation_handled']
-
         cols_to_drop += [col for col in df.columns if col.startswith('calculated_')]
-
         df = df.drop(columns=cols_to_drop, errors='ignore')
 
         if 'account' in [f.name for f in model._meta.fields]:
@@ -219,7 +179,6 @@ class DataLoader():
                 df = df.drop(columns=[col])
                 continue
 
-
             field_instance = model._meta.get_field(col)
 
             if isinstance(field_instance, DecimalField):
@@ -231,30 +190,14 @@ class DataLoader():
             elif isinstance(field_instance, FileField):
                 df[col] = df[col].apply(process_filefield)
 
-
         # Change any NaT, NaN etc to None
         df = df.where(pd.notnull(df), None)
-
 
         for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
-            
             record['account_id'] = self.account.id
-            
             id = record.pop('id', None)
-
-            # exchange_rate = None
-            # for field, val in record.items():
-            #     if not exchange_rate and field.endswith('_currency') and val != self.account.currency:
-                    
-            #         # TODO remove exchange_rate = self.get_or_create_exchange_rate(convert_from=val, exchange_date=record['date'])
-            #         exchange_rate = None
-                    
-
-            # if exchange_rate:
-            #     record['exchange_rate'] = exchange_rate
-
 
             # This is used on loading sell allocations using legacy id.
             lookup_legacy_sell = record.pop('lookup_legacy_sell', None)
@@ -293,8 +236,6 @@ class DataLoader():
             else:
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object without provided ID")
-
-
 
 
     def get_or_create_exchange_rate(self, convert_from, exchange_date):
@@ -351,7 +292,6 @@ class DataLoader():
         # Clear database tables
 
         model_load_order = cls.get_model_load_order()
-
         model_deletion_order = [model for model in apps.get_models() if model not in model_load_order] + list(reversed(model_load_order))
 
         receivers = disconnect_app_signals('share_dinkum_app')
@@ -363,17 +303,13 @@ class DataLoader():
                 logger.error(f"Error deleting model {model.__name__}: {e}", exc_info=True)
                 raise
  
-        
         reconnect_app_signals(receivers)
-
 
         logger.info('Deleted all models')
         # Delete all data in the media folder
         media_folder = Path(settings.MEDIA_ROOT)
         force_delete_and_recreate_folder(media_folder)
         
-
-
 
 def force_delete_and_recreate_folder(folder_path):
     folder = Path(folder_path)
@@ -390,4 +326,3 @@ def force_delete_and_recreate_folder(folder_path):
     # Recreate folder
     folder.mkdir(parents=True, exist_ok=True)
     logger.info(f"Forcefully deleted and recreated folder: {folder}")
-    

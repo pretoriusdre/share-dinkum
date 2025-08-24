@@ -1,26 +1,21 @@
 from datetime import date, timedelta
+import threading
 
 from django.apps import apps
-
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.base import ContentFile
-
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-
-from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
-
 from django.db import transaction
-
-from share_dinkum_app import excelinterface
-from share_dinkum_app import loading
-
 from django.db.models import Sum, Q, Max, Min
 from django.forms.models import model_to_dict
 
 from djmoney.money import Money
 
-import threading
+from share_dinkum_app import excelinterface
+from share_dinkum_app import loading
+
+from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
 
 
 import logging
@@ -29,8 +24,12 @@ logger = logging.getLogger(__name__)
 _save_lock = threading.local()
 
 
-# @receiver(post_save)
-# def master_post_save_handle(sender, instance, created, **kwargs):
+
+@receiver(post_save, sender=Account)
+def assign_default_account(sender, instance, created, **kwargs):
+    if created and instance.owner.default_account is None:
+        instance.owner.default_account = instance
+        instance.owner.save()
 
 
 @receiver(post_save, sender=Buy)
@@ -56,9 +55,6 @@ def create_buy_parcel(sender, instance, created, **kwargs):
 
     instance._creation_handled = True
     instance.save(update_fields=["_creation_handled"])
-
-
-
 
 
 
@@ -149,37 +145,13 @@ def handle_sell_allocation_creation(sender, instance, created, **kwargs):
     instance.sell.save()
 
 
+@receiver(post_delete, sender=SellAllocation)
+def handle_sell_allocation_deletion(sender, instance, **kwargs):
 
-@receiver(post_save, sender=ShareSplit)
-def handle_share_split(sender, instance, created, **kwargs):
+    assert isinstance(instance, SellAllocation)
 
-    assert isinstance(instance, ShareSplit)
-
-    if not created or instance._creation_handled:
-        return
-    
-    logger.debug('Splitting parcels as a result of %s', instance)
-
-    with transaction.atomic():
-        multiplier = instance.split_multiplier
-
-        for parcel in Parcel.objects.filter(
-            account=instance.account,
-            deactivation_date__isnull=True,
-            buy__instrument=instance.instrument,
-            buy__date__lte=instance.date
-        ):
-            if not parcel.is_sold:
-                new_parcel = parcel.split_or_consolidate(
-                    multiplier=multiplier,
-                    date=instance.date
-                )
-                instance.affected_parcels.add(new_parcel)
-
-        # Mark as handled
-        instance._creation_handled = True
-        instance.save(update_fields=["_creation_handled"])
-
+    instance.parcel.save()
+    instance.sell.save()
 
 
 @receiver(post_save, sender=CostBaseAdjustment)
@@ -239,6 +211,47 @@ def handle_cost_base_allocation(sender, instance, created, **kwargs):
         instance._creation_handled = True
         instance.save(update_fields=["_creation_handled"])
 
+
+@receiver([post_save, post_delete], sender=CostBaseAdjustmentAllocation)
+def update_parcel(sender, instance, created=None, **kwargs):
+    
+    assert isinstance(instance, CostBaseAdjustmentAllocation)
+
+    instance.parcel.save()
+
+
+@receiver(post_save, sender=ShareSplit)
+def handle_share_split(sender, instance, created, **kwargs):
+
+    assert isinstance(instance, ShareSplit)
+
+    if not created or instance._creation_handled:
+        return
+    
+    logger.debug('Splitting parcels as a result of %s', instance)
+
+    with transaction.atomic():
+        multiplier = instance.split_multiplier
+
+        for parcel in Parcel.objects.filter(
+            account=instance.account,
+            deactivation_date__isnull=True,
+            buy__instrument=instance.instrument,
+            buy__date__lte=instance.date
+        ):
+            if not parcel.is_sold:
+                new_parcel = parcel.split_or_consolidate(
+                    multiplier=multiplier,
+                    date=instance.date
+                )
+                instance.affected_parcels.add(new_parcel)
+
+        # Mark as handled
+        instance._creation_handled = True
+        instance.save(update_fields=["_creation_handled"])
+
+
+# TODO 'unsplit' after Sharesplit deletion
 
 
 @receiver([post_save, post_delete], sender=Sell)
@@ -308,16 +321,11 @@ def generate_export_file(sender, instance, created, **kwargs):
         logger.info('Data export process completed successfully.')
 
 
-
-
-
 @receiver(post_save)
 def persist_safe_properties(sender, instance, created, **kwargs):
 
     logger.debug('Setting calculated fields for %s', instance)
-
     logger.debug('Instance data is: %s', model_to_dict(instance))
-
 
     # Prevent recursion
     if getattr(_save_lock, "active", False):

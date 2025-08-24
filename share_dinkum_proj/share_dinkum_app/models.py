@@ -5,46 +5,35 @@ import copy
 
 # Django imports
 from django.db import models, transaction
-from django.core.files.temp import NamedTemporaryFile
-from django.core.files.base import ContentFile
 from django.contrib.auth.models import AbstractUser
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.urls import reverse
-from django.db.models import Sum, Q, Max, Min
+from django.db.models import Sum
 from django.forms.models import model_to_dict
-
 
 # Djmoney imports
 from djmoney.models.fields import MoneyField, CurrencyField
 from djmoney.settings import CURRENCY_CHOICES
-from djmoney.contrib.exchange.models import convert_money
 from djmoney.money import Money
 
 # Local app imports
-from share_dinkum_app import loading
-from share_dinkum_app import excelinterface
 from share_dinkum_app import yfinanceinterface
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
-
-
-
 from share_dinkum_app.decorators import safe_property
-
 
 # Local but to be replaced in future
 from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid import uuid7", once this method is available in standard library
 
-
+# Logging setup
 import logging
 logger = logging.getLogger(__name__)
 
 
 # global constant:
 DEFAULT_CURRENCY = 'AUD'
-
 
 
 class AppUser(AbstractUser):
@@ -60,15 +49,12 @@ class AppUser(AbstractUser):
         super().save(*args, **kwargs)
 
 
-
 class FiscalYearType(models.Model):
     MODEL_DESCRIPTION = 'A system table used to define configuration for the financial year, such as its start day and month.'
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     description = models.CharField(max_length=40, default='Australian Tax Year', unique=True)
     start_month = models.IntegerField(default=7) # July
     start_day = models.IntegerField(default=1) # 1st (Australia)
-    #legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
-
 
     def classify_date(self, input_date):
         """
@@ -104,7 +90,6 @@ class FiscalYearType(models.Model):
         super().save(*args, **kwargs)
 
 
-
 class FiscalYear(models.Model):
     MODEL_DESCRIPTION = 'A particular fiscal year'
 
@@ -123,13 +108,10 @@ class FiscalYear(models.Model):
     def __str__(self):
         return self.name or ''
        
-    
-    
     @safe_property
     def start_date(self):
         return date(self.start_year, self.fiscal_year_type.start_month, self.fiscal_year_type.start_day)
 
-    
     @safe_property
     def end_date(self):
         end_year = self.start_year + 1 if self.fiscal_year_type.start_month != 1 else self.start_year
@@ -143,10 +125,8 @@ class FiscalYear(models.Model):
         
     def save(self, *args, **kwargs):
         self.name = self.get_name()
-
         user = kwargs.pop('user', None)
         super().save(*args, **kwargs)
-
 
 
 class Account(models.Model):
@@ -158,8 +138,6 @@ class Account(models.Model):
     currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     owner = models.ForeignKey(AppUser, on_delete=models.PROTECT)
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT)
-    #legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
-
     update_price_history = models.BooleanField(default=False)
 
     def __str__(self):
@@ -167,11 +145,9 @@ class Account(models.Model):
 
     calculated_portfolio_value_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, default_currency=DEFAULT_CURRENCY)
 
-    
     @safe_property
     def portfolio_value_converted(self):
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
-
 
     def update_all_price_history(self):
         """Update price history for all instruments with a position > 0 in this account."""
@@ -195,19 +171,11 @@ class Account(models.Model):
             if convert_from != self.currency:
                 ExchangeRate.update_exchange_rate_history(account=self, convert_from=convert_from, convert_to=self.currency)
 
-
     def save(self, *args, **kwargs):
         self.calculated_portfolio_value_converted = self.portfolio_value_converted
         self.calculated_portfolio_value_converted_currency = self.currency
-
         user = kwargs.pop('user', None)
-
-        if self.owner.default_account is None:
-            self.owner.default_account = self
-            self.owner.save()
-
         super().save(*args, **kwargs)
-
 
 
 class BaseModel(models.Model):
@@ -218,7 +186,6 @@ class BaseModel(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
-
     description = models.CharField(max_length=255, null=True, blank=True)
     account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
@@ -226,8 +193,6 @@ class BaseModel(models.Model):
     is_active = models.BooleanField(default=True, editable=False)
     notes = models.TextField(null=True, blank=True)
 
-
-    
     @safe_property
     def associated_logs(self):
         content_type = ContentType.objects.get_for_model(self)
@@ -251,49 +216,12 @@ class BaseModel(models.Model):
         model_name = self._meta.model_name
         return reverse(f'admin:{app_label}_{model_name}_change', args=[str(self.id)])
     
-
     def save(self, *args, **kwargs):
-        # Extract the user if provided
         user = kwargs.pop('user', None)
-        # Call the parent class's save method to persist the instance first
         super().save(*args, **kwargs)
-        
-        # # Update calculated fields after the object is saved
-        # fields_updated = False
-        # for attr_name in dir(self):
-        #     if attr_name.startswith('_'):
-        #         # Skip private and special attributes
-        #         continue
-        #     try:
-        #         attr = getattr(self, attr_name)
-        #         if callable(attr):
-        #             continue # skip methods etc
-        #         expected_calc_field_name = f"calculated_{attr_name}"
-        #         if hasattr(self, expected_calc_field_name):
-        #             # Set the calculated field value
-        #             setattr(self, expected_calc_field_name, attr)
-        #             fields_updated = True
-
-        #         # Where the currency differs from the base currency, set an exchange rate if not provided
-        #         if attr_name.endswith('_currency'):
-        #             if attr and attr != self.account.currency and hasattr(self, 'exchange_rate'):
-        #                 if not getattr(self, 'exchange_rate'):
-        #                     exchange_rate_obj = ExchangeRate.get_or_create(account=self.account, convert_from=attr, convert_to=self.account.currency, exchange_date=self.date)
-        #                     setattr(self, 'exchange_rate', exchange_rate_obj)
-        #                     fields_updated = True
-        #     except AttributeError:
-        #         # Ignore attributes that cannot be accessed
-        #         continue
-
-        # # Save again only if calculated fields were updated
-        # if fields_updated:
-        #     super().save(update_fields=[
-        #         f.name for f in self._meta.get_fields() if f.name.startswith('calculated_')
-        #     ] + (['exchange_rate'] if hasattr(self, 'exchange_rate') else []))
                 
     def __str__(self):
         return f'{self.description}'
-
 
 
 class LogEntry(BaseModel):
@@ -307,7 +235,6 @@ class LogEntry(BaseModel):
 
     def __str__(self):
         return f'{self.created_at.isoformat(timespec="seconds")} - ***{(str(self.pk))[-4:]} - {self.event}'
-
 
 
 class ExchangeRate(BaseModel):
@@ -355,7 +282,6 @@ class ExchangeRate(BaseModel):
                 obj.save()
             return obj
         
-
     @classmethod
     def update_exchange_rate_history(cls, account, convert_from, convert_to):
 
@@ -382,7 +308,6 @@ class ExchangeRate(BaseModel):
             price_history['account'] = account
             price_history['id'] = price_history['date'].apply(lambda x : uuid7())
             
-
             # Bulk insert/update price history
             price_history_entries = []
             for _, row in price_history.iterrows():
@@ -396,11 +321,8 @@ class ExchangeRate(BaseModel):
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
-
-
         except Exception as e:
             logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
-
 
     def apply(self, money):
         assert str(money.currency) == str(self.convert_from), (
@@ -410,15 +332,11 @@ class ExchangeRate(BaseModel):
         new_amount = money.amount * self.exchange_rate_multiplier
         return Money(new_amount, str(self.convert_to))
 
-
-
     def __str__(self):
         return f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to} on {self.date.isoformat()}'
 
 
-
 class Market(BaseModel):
-
     MODEL_DESCRIPTION = 'Share markets, such as ASX, NASDAQ, LSE, etc'
 
     class Meta:
@@ -431,7 +349,6 @@ class Market(BaseModel):
     suffix = models.CharField(max_length=16, null=True, blank=True)
 
 
-
 class Instrument(BaseModel):
     MODEL_DESCRIPTION = 'Share codes, eg BHP, VGS, VAS, etc'
 
@@ -441,15 +358,10 @@ class Instrument(BaseModel):
         ]
 
     name = models.CharField(max_length=16)
-
     description = models.CharField(max_length=255, blank=True)
-
     currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-
     market = models.ForeignKey(Market, on_delete=models.PROTECT)
-
     current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True)
-
 
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
     
@@ -474,7 +386,6 @@ class Instrument(BaseModel):
                 value_held = Money(0, self.currency)
         return value_held
 
-
     calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
@@ -489,8 +400,6 @@ class Instrument(BaseModel):
             assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
             return converted_value
 
-
-    
     @safe_property
     def yfinance_ticker_code(self):
         
@@ -502,13 +411,11 @@ class Instrument(BaseModel):
         else:
             return self.name
 
-
     def __str__(self):
         if self.is_active:
             return f'{self.name} - {self.description} [{self.account.description}]'
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
-
 
     def update_price_history(self):
         # Fetch the latest price history entry for the related instrument
@@ -526,11 +433,8 @@ class Instrument(BaseModel):
 
         try:
             price_history = yfinanceinterface.get_instrument_price_history(instrument=self, start_date=start_date)
-
             price_history['account'] = self.account
             price_history['id'] = price_history['date'].apply(lambda x : uuid7())
-            
-
             self.current_unit_price = Decimal(list(price_history['close'])[-1])
             self.save()
             
@@ -551,7 +455,6 @@ class Instrument(BaseModel):
             logger.error(f'Error getting price history for {self}, {e}', exc_info=True)
 
 
-
 class InstrumentPriceHistory(models.Model):
     MODEL_DESCRIPTION = 'Price history for instruments.'
     class Meta:
@@ -566,14 +469,12 @@ class InstrumentPriceHistory(models.Model):
     account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
     instrument = models.ForeignKey(Instrument, on_delete=models.CASCADE,  editable=False)
     date = models.DateField(editable=False)
-    
     open = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
     high = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
     low = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
     close = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
     volume = models.BigIntegerField(editable=False)
     stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
-
 
     class Meta:
         ordering = ['date'] 
@@ -585,14 +486,13 @@ class InstrumentPriceHistory(models.Model):
         return reverse(f'admin:{app_label}_{model_name}_change', args=[str(self.id)])
 
 
-
 class Trade(BaseModel):
     MODEL_DESCRIPTION = 'A base class for trades, such as buys and sells.'
+
     class Meta:
         abstract = True
 
     description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
-
     instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
     date = models.DateField()
     quantity = models.DecimalField(max_digits=16, decimal_places=4)
@@ -607,7 +507,6 @@ class Trade(BaseModel):
     @safe_property
     def fiscal_year(self):
         return self.account.fiscal_year_type.classify_date(input_date=self.date)
-
     
     calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -618,7 +517,6 @@ class Trade(BaseModel):
             total_brokerage_converted = self.exchange_rate.apply(total_brokerage_converted)
         return total_brokerage_converted
     
-
     calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -628,7 +526,6 @@ class Trade(BaseModel):
             unit_brokerage_converted = self.exchange_rate.apply(unit_brokerage_converted)
         return unit_brokerage_converted
     
-
     calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -642,10 +539,8 @@ class Trade(BaseModel):
             logger.debug('No exchange rate available for %s', self)
         return unit_price_converted
 
-
     def __str__(self):
         return f'{self.description}'
-
 
     def save(self, *args, **kwargs):
         if self.is_active:
@@ -655,11 +550,10 @@ class Trade(BaseModel):
         super().save(*args, **kwargs)
 
 
-
 class Buy(Trade):
     MODEL_DESCRIPTION = 'Purchases of share parcels.'
-    _creation_handled = models.BooleanField(default=False, editable=False)
 
+    _creation_handled = models.BooleanField(default=False, editable=False)
 
     calculated_related_parcels = models.TextField(null=True, blank=True, editable=False)
     
@@ -668,12 +562,6 @@ class Buy(Trade):
         related_parcels = Parcel.objects.filter(buy=self)
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
-
-    def save(self, *args, **kwargs):
-        logger.debug("Saving Buy object: %s", self)
-        logger.debug('Model data %s', model_to_dict(self))
-        super().save(*args, **kwargs)
-
 
 
 class Sell(Trade):
@@ -714,7 +602,6 @@ class Sell(Trade):
         return (self.quantity or 0 ) - allocated_quantity
     
 
-
 class Parcel(BaseModel):
     MODEL_DESCRIPTION = 'Collections of shares with the same unit properties. Can be split into other parcels.'
     description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
@@ -730,12 +617,9 @@ class Parcel(BaseModel):
         )
     parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False)
     cumulative_split_multiplier = models.DecimalField(max_digits=16, decimal_places=4, editable=False, default=1.0)
-    
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
-
     sale_date = models.DateField(null=True, editable=False)
-
 
     calculated_instrument_name = models.CharField(max_length=16, null=True, blank=True, editable=False)
     
@@ -753,7 +637,6 @@ class Parcel(BaseModel):
         
         sold_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return self.parcel_quantity - sold_quantity
-
 
     calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
     
@@ -779,7 +662,6 @@ class Parcel(BaseModel):
         adjusted_unit_brokerage = self.buy.unit_brokerage_converted / self.cumulative_split_multiplier
         return adjusted_unit_brokerage
 
-
     calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -793,7 +675,6 @@ class Parcel(BaseModel):
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
 
-
     @safe_property
     def total_cost_base(self):
 
@@ -804,12 +685,10 @@ class Parcel(BaseModel):
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
         total_cost_base += (self.adjusted_unit_brokerage * parcel_quantity)
-
         total_cost_base = add_currencies(total_cost_base, self.total_adjustments)
 
         return total_cost_base
     
-
     calculated_unit_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -899,7 +778,6 @@ class Parcel(BaseModel):
                     date=date
                     )
 
-
         return parcel_target
 
     def __str__(self):
@@ -912,12 +790,9 @@ class Parcel(BaseModel):
             return f'{self.pk} | INACTIVE'
 
     def save(self, *args, **kwargs):
-
         self.is_active = self.deactivation_date is None
         self.description = f'{self.buy.date} | PARCEL |  {self.buy.instrument.name} | {self.parcel_quantity} unit'
-
         super().save(*args, **kwargs)
-
 
 
 class SellAllocation(BaseModel):
@@ -926,13 +801,9 @@ class SellAllocation(BaseModel):
 
     _creation_handled = models.BooleanField(default=False, editable=False)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     parcel = models.ForeignKey(Parcel, related_name='sale_allocation', on_delete=models.PROTECT)
     sell = models.ForeignKey(Sell, related_name='sale_allocation', on_delete=models.PROTECT)
     quantity = models.DecimalField(max_digits=16, decimal_places=4)
-
 
     calculated_sale_date = models.DateField(null=True, blank=True, editable=False)
     
@@ -940,51 +811,30 @@ class SellAllocation(BaseModel):
     def sale_date(self):
         return self.sell.date
     
-
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
     @safe_property
     def fiscal_year(self):
         return self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
     
-
     calculated_days_held = models.IntegerField(null=True, blank=True, editable=False)
     
     @safe_property
     def days_held(self):
         return (self.sell.date - self.parcel.buy.date).days
     
-
     calculated_total_capital_gain = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def total_capital_gain(self):
         return (self.sell.proceeds * self.quantity / self.sell.quantity) - self.parcel.total_cost_base
 
-
-
-
     def save(self, *args, **kwargs):
-
         if self.is_active:
             self.description = f'{self.sell.date} {self.sell.instrument.name} | {self.quantity}'
         else:
             self.description = 'INACTIVE'
-
         super().save(*args, **kwargs)
-
-
-    def delete(self, *args, **kwargs):
-        # Store references to related objects before deletion
-        parcel = self.parcel
-        sell = self.sell
-
-        # Delete the SellAllocation instance
-        super().delete(*args, **kwargs)
-
-        # Call save on the related objects after deletion
-        parcel.save()
-        sell.save()
 
 
 
@@ -997,7 +847,6 @@ class ShareSplit(BaseModel):
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
     affected_parcels = models.ManyToManyField(Parcel, editable=False)
     _creation_handled = models.BooleanField(default=False, editable=False)
-
 
     calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False)
     
@@ -1016,14 +865,8 @@ class ShareSplit(BaseModel):
             parcel_list_str += f'{parcel}\n'
         return parcel_list_str
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)  # persist first
-
-
-
     def __str__(self):
         return f'{self.pk} | {self.date} | Split of {self.instrument.name} | Multiplier = {self.split_multiplier}'
-
 
 
 class CostBaseAdjustment(BaseModel):
@@ -1031,13 +874,9 @@ class CostBaseAdjustment(BaseModel):
     cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     instrument = models.ForeignKey(Instrument, related_name='cost_base_adjustment', on_delete=models.PROTECT)
     financial_year_end_date = models.DateField()
-
     exchange_rate = models.ForeignKey(ExchangeRate, related_name='cost_base_adjustment', on_delete=models.PROTECT, blank=True, null=True)
-    
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
-    
     _creation_handled = models.BooleanField(default=False, editable=False)
-
 
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
@@ -1045,14 +884,11 @@ class CostBaseAdjustment(BaseModel):
     def fiscal_year(self):
         return self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
     
-
     @property
     def date(self):
         # Alias as it is used in the user_directory_path
         return self.financial_year_end_date
     
-
-
     calculated_cost_base_increase_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
@@ -1062,7 +898,6 @@ class CostBaseAdjustment(BaseModel):
             cost_base_increase_converted = self.exchange_rate.apply(cost_base_increase_converted)
         return cost_base_increase_converted
     
-
     ALLOCATION_CHOICES = [
         ('QTY_HELD', 'Alllocate to parcels, weighting by (qty * days_held) in the F.Y.'),
         ('MANUAL', 'Manually create allocations')
@@ -1072,41 +907,35 @@ class CostBaseAdjustment(BaseModel):
         choices=ALLOCATION_CHOICES,
         default='QTY_HELD',
     )
+
     def get_description(self):
         return f'{self.pk} | {self.financial_year_end_date} | Adjustment of {self.instrument.name} | Cost base increase = {self.cost_base_increase}'
     
-
     def save(self, *args, **kwargs):
         self.description = self.get_description()
         super().save(*args, **kwargs)
-
-
 
     def __str__(self):
         return self.description
 
                 
-
 class CostBaseAdjustmentAllocation(BaseModel):
     MODEL_DESCRIPTION = 'Allocations of cost base adjustments to specific parcels.'
 
     cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     parcel = models.ForeignKey(Parcel, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT)
     cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.CASCADE)
-
     activation_date = models.DateField(null=True, editable=False)   # not required
     deactivation_date = models.DateField(null=True, editable=False)
-
-
 
     def bifurcate(self, target_parcel, remainder_parcel, target_fraction, date):
         assert target_fraction >= 0, "Target fraction must be >= 0"
         assert target_fraction <= 1, "Target fraction must be <= 1"
+        assert self.is_active, "Parcel is inactive"
+
         target_parcel_qty = target_parcel.parcel_quantity
         remainder_parcel_qty = remainder_parcel.parcel_quantity
         target_fraction = target_parcel_qty / (target_parcel_qty +  + remainder_parcel_qty)
-
-        assert self.is_active
 
         new_parcel_message = f'This CostBaseAdjustmentAllocation was created by splitting {self.pk} into two separate allocations.'
 
@@ -1133,27 +962,15 @@ class CostBaseAdjustmentAllocation(BaseModel):
             self.save()        
         return
     
-    # TODO consider changing to signals. Delete method is skipped by bulk operations
-    def delete(self, *args, **kwargs):
-        related_parcel = self.parcel
-        super().delete(*args, **kwargs)
-        related_parcel.save()
 
     def save(self, *args, **kwargs):
-        
         self.is_active = self.deactivation_date is None
-
         super().save(*args, **kwargs)
-        # Update the affected parcel
-        self.parcel.save()
-
 
     def __str__(self):
         return f'{self.pk} | {self.cost_base_adjustment.financial_year_end_date} | Adjustment of {self.cost_base_adjustment.instrument.name} | Cost base increase = {self.cost_base_increase} | applied to {self.parcel.id}'
     
 
-
-# TODO make it so that it has a string method or updates descr
 class Income(BaseModel):
     MODEL_DESCRIPTION = 'Base class for Income, eg Austrlalian Dividends and Distributions.'
     
@@ -1183,7 +1000,9 @@ class Income(BaseModel):
             self.description = 'INACTIVE'
         super().save(*args, **kwargs)
 
-
+    def __str__(self):
+        return f'{self.pk} | {self.description}'
+    
 
 class Dividend(Income):
     MODEL_DESCRIPTION = 'Dividends, including local dividends and foreign dividends.'
@@ -1208,8 +1027,6 @@ class Dividend(Income):
         default=30.0,
         help_text="Enter a percentage value (e.g., 25.00 for 25%)"
     )
-
-    # Don't care about this one
     
     @safe_property
     def company_rate(self):
@@ -1227,7 +1044,6 @@ class Dividend(Income):
     def total_franked_amount(self):
         return self.franked_amount_per_share * self.quantity
     
-
     calculated_total_franking_credits = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -1241,7 +1057,6 @@ class Dividend(Income):
         # handle zero amounts in wrong currency
         return add_currencies(self.total_unfranked_amount, self.total_franked_amount)
 
-
     calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -1253,12 +1068,11 @@ class Dividend(Income):
         return total_dividend_converted
 
 
-
 class Distribution(Income):
     MODEL_DESCRIPTION = 'Distributions, such as the income received from ETFs'
     distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
     total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
-    
+
     calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
@@ -1275,15 +1089,12 @@ class Distribution(Income):
         return total_distribution_converted
 
 
-
 class DataExport(BaseModel):
     MODEL_DESCRIPTION = 'Data export events, referencing the associated output file.'
-    file = models.FileField(null=True, blank=True, editable=False, upload_to=user_directory_path)
 
+    file = models.FileField(null=True, blank=True, editable=False, upload_to=user_directory_path)
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
     include_price_history = models.BooleanField(default=False, help_text='Include price history in the export?')
-
-
 
     def __str__(self):
         return f'{self.created_at.date().isoformat()} | Data Export - {self.account.description}'
