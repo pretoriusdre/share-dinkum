@@ -238,7 +238,7 @@ class ExcelGen:
             min_col=start_col,
             min_row=start_row,
             max_col=start_col + len(cols) - 1,
-            max_row=start_row + len(df),
+            max_row=start_row + max(len(df), 1), # need at least one row in the table
         )
 
         tab = Table(displayName=table_name, ref=table_range.coord)
