@@ -7,6 +7,7 @@ from pathlib import Path
 
 from django.apps import apps
 from django.db.models import DecimalField, FileField
+from django.db import connections, transaction
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 
@@ -326,3 +327,84 @@ def force_delete_and_recreate_folder(folder_path):
     # Recreate folder
     folder.mkdir(parents=True, exist_ok=True)
     logger.info(f"Forcefully deleted and recreated folder: {folder}")
+
+
+
+
+
+from share_dinkum_app.models import Account, DataExport
+
+class DataBackupManager:
+
+    @staticmethod
+    def create_data_exports_for_all_accounts(include_price_history: bool = True):
+        """
+        Create a DataExport for each Account.
+        The signals attached to DataExport will generate the files automatically.
+        """
+        accounts = Account.objects.all()
+        logger.info(f"Creating DataExport for {accounts.count()} accounts")
+        with transaction.atomic():
+            for account in accounts:
+                export = DataExport.objects.create(
+                    account=account,
+                    include_price_history=include_price_history
+                )
+                export.refresh_from_db()
+
+    @staticmethod
+    def backup(backup_path: Path):
+        """
+        Backup SQLite DB, media folder, and create DataExport files for all accounts.
+        """
+        backup_path = Path(backup_path)
+        backup_path.mkdir(parents=True, exist_ok=True)
+
+        # Create DataExports for all accounts
+        DataBackupManager.create_data_exports_for_all_accounts()
+
+        # Backup SQLite DB
+        db_file = Path(settings.DATABASES['default']['NAME'])
+        backup_db_file = backup_path / db_file.name
+        logger.info(f"Backing up SQLite DB from {db_file} to {backup_db_file}")
+        shutil.copy2(db_file, backup_db_file)
+
+        # Backup media folder (includes DataExport files)
+        media_backup = backup_path / "media"
+        if media_backup.exists():
+            shutil.rmtree(media_backup)
+        shutil.copytree(Path(settings.MEDIA_ROOT), media_backup)
+
+        logger.info(f"Backup completed successfully at {backup_path}")
+
+    @staticmethod
+    def restore(backup_path: Path):
+        """
+        Restore SQLite DB and media folder from backup.
+        """
+        res = input("Type 'X' to OVERWRITE current data with backup.")
+        if res.upper() != 'X':
+            logger.info("Restore cancelled.")
+            return
+
+        backup_path = Path(backup_path)
+        db_file = Path(settings.DATABASES['default']['NAME'])
+        backup_db_file = backup_path / db_file.name
+        media_backup = backup_path / "media"
+
+        if not backup_db_file.exists() or not media_backup.exists():
+            raise FileNotFoundError("Backup is incomplete or missing files")
+
+        # Close DB connections
+        connections.close_all()
+
+        # Restore DB
+        logger.info(f"Restoring SQLite DB from {backup_db_file} to {db_file}")
+        shutil.copy2(backup_db_file, db_file)
+
+        # Restore media
+        if Path(settings.MEDIA_ROOT).exists():
+            shutil.rmtree(Path(settings.MEDIA_ROOT))
+        shutil.copytree(media_backup, Path(settings.MEDIA_ROOT))
+
+        logger.info("Restore completed successfully.")

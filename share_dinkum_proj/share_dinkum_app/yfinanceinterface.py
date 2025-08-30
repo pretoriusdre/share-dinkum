@@ -32,12 +32,18 @@ def get_instrument_price_history(instrument, start_date):
 
         price_history['date'] = price_history['date'].apply(lambda x : x.date())
 
+        # Handle the case of these cols not being returned
+        if 'volume' not in price_history.columns:
+            price_history['volume'] = 0
+
+        if 'stock_splits' not in price_history.columns:
+            price_history['stock_splits'] = 0
+
         price_history['open'] = pd.to_numeric(price_history['open'], errors='coerce')
         price_history['high'] = pd.to_numeric(price_history['high'], errors='coerce')
         price_history['low'] = pd.to_numeric(price_history['low'], errors='coerce')
         price_history['close'] = pd.to_numeric(price_history['close'], errors='coerce')
         price_history['volume'] = pd.to_numeric(price_history['volume'], errors='coerce')
-
         price_history['stock_splits'] = pd.to_numeric(price_history['stock_splits'], errors='coerce')
 
         price_history = price_history[['instrument', 'date', 'open', 'high', 'low', 'close', 'volume', 'stock_splits']]
