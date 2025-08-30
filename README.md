@@ -47,7 +47,7 @@ If you save your **[Account]** object, you have the option to update your price 
 
 ![Buy Screen](docs/images/buy_add_screen.png)
 
-![Data Export Index](docs/images/data_export_index.png)
+![Data Export Index](docs/images/data_export_index_sheet.png)
 
 (Note, all the data is stored in a local database, so you can build your own BI dashboards by connecting to that datasource.)
 
