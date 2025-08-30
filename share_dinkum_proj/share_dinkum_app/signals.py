@@ -216,8 +216,13 @@ def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
 def update_parcel(sender, instance, created=None, **kwargs):
     
     assert isinstance(instance, CostBaseAdjustmentAllocation)
+    
+    parcel = instance.parcel
+    parcel.save()
 
-    instance.parcel.save()
+    # Ensure related sell allocations recalc their cost base
+    for alloc in parcel.sale_allocation.all():
+        alloc.save()
 
 
 @receiver(post_save, sender=ShareSplit)
