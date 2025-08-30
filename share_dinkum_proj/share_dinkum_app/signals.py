@@ -4,7 +4,7 @@ import threading
 from django.apps import apps
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.base import ContentFile
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import pre_save, post_save, post_delete
 from django.dispatch import receiver
 from django.db import transaction
 from django.db.models import Sum, Q, Max, Min
@@ -14,6 +14,7 @@ from djmoney.money import Money
 
 from share_dinkum_app import excelinterface
 from share_dinkum_app import loading
+
 
 from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
 
@@ -349,6 +350,39 @@ def generate_export_file(sender, instance, created, **kwargs):
         new_name = f'Export_{instance.account.description}.xlsx'
         instance.file.save(new_name, ContentFile(open(temp_file.name, 'rb').read()))
         logger.info('Data export process completed successfully.')
+
+
+
+@receiver(post_delete)
+def delete_file_on_delete(sender, instance, **kwargs):
+    """
+    Deletes the file when a model instance is deleted.
+    Only works if the file field is named 'file'.
+    """
+    file_field = getattr(instance, 'file', None)
+    if file_field:
+        file_field.delete(save=False)
+
+
+@receiver(pre_save)
+def delete_file_on_change(sender, instance, **kwargs):
+    """
+    Deletes old file if the 'file' field is updated.
+    """
+    if not instance.pk:
+        return  # New instance, nothing to delete
+
+    try:
+        old_instance = sender.objects.get(pk=instance.pk)
+    except sender.DoesNotExist:
+        return
+
+    old_file = getattr(old_instance, 'file', None)
+    new_file = getattr(instance, 'file', None)
+
+    if old_file and old_file != new_file:
+        old_file.delete(save=False)
+
 
 
 @receiver(post_save)
