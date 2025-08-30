@@ -14,10 +14,10 @@ from djmoney.money import Money
 
 from share_dinkum_app import excelinterface
 from share_dinkum_app import loading
+from share_dinkum_app.reports import RealisedCapitalGainReport
 
 
 from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
-
 
 import logging
 logger = logging.getLogger(__name__)
@@ -345,6 +345,14 @@ def generate_export_file(sender, instance, created, **kwargs):
             desc = getattr(model, 'MODEL_DESCRIPTION', 'No description available')
             if not df.empty:
                 gen.add_table(df, table_name=model.__name__, description=desc)
+
+        logger.info('    - Realised Capital Gains Report')
+        rcg_report = RealisedCapitalGainReport(account=instance.account)
+        
+        df_realised_capital_gains = rcg_report.generate()
+        
+        gen.add_table(df_realised_capital_gains, table_name="RealisedCapitalGains", description="Report of realised capital gains per sale allocation.")
+
 
         gen.save(temp_file.name)
         new_name = f'Export_{instance.account.description}.xlsx'
