@@ -838,6 +838,7 @@ class SellAllocation(BaseModel):
     
     @safe_property
     def total_capital_gain(self):
+        # Note, a parcel is always fully consumed by a sell allocation due to the bifurcation process, therefore can just use parcel.total_cost_base rather than unit cost base and qty. This avoids rounding issues
         return (self.sell.proceeds * self.quantity / self.sell.quantity) - self.parcel.total_cost_base
 
     def save(self, *args, **kwargs):
