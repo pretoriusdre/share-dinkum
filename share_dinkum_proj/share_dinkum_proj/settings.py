@@ -79,6 +79,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'share_dinkum_app.middleware.AutoLoginMiddleware',          # This line bypasses login (for local use only)
 ]
 
 if DEBUG:
