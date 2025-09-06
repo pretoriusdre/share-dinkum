@@ -1,5 +1,5 @@
 # Standard library imports
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, UTC, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import copy
 
@@ -237,7 +237,99 @@ class LogEntry(BaseModel):
         return f'{self.created_at.isoformat(timespec="seconds")} - ***{(str(self.pk))[-4:]} - {self.event}'
 
 
-class ExchangeRate(BaseModel):
+class AbstractExchangeRate(BaseModel):
+    MODEL_DESCRIPTION = 'Abstract base class for exchange rates between pairs of currencies'
+
+    class Meta:
+        abstract = True
+
+    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
+    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
+    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=1.0)
+
+    def apply(self, money):
+        assert str(money.currency) == str(self.convert_from), (
+            f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
+            f'does not match the currency {money.currency}'
+        )
+        new_amount = money.amount * self.exchange_rate_multiplier
+        return Money(new_amount, str(self.convert_to))
+
+    def __str__(self):
+
+        exchange_rate_text = f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to}'
+
+        if hasattr(self, 'date'):
+            exchange_rate_text += ' on {self.date.isoformat()}'
+        return exchange_rate_text
+    
+
+class CurrentExchangeRate(AbstractExchangeRate):
+                           
+    MODEL_DESCRIPTION = 'Exchange rates between pairs of currencies, latest date only.'           
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['account', 'convert_from', 'convert_to'], name='current_exchange_rate_keys')
+        ]
+
+    updated_at = models.DateTimeField(auto_now=True, editable=False)
+
+
+    @classmethod
+    def get_or_create(cls, account, convert_from, convert_to, force_refresh=False):
+        """
+        Get the current exchange rate. If missing, stale (>1hr), or force_refresh=True,
+        update history and refresh latest value.
+        """
+        obj = cls.objects.filter(
+            account=account,
+            convert_from=convert_from,
+            convert_to=convert_to,
+        ).first()
+
+        needs_refresh = (
+            force_refresh
+            or obj is None
+            or (obj.updated_at < timezone.now() - timedelta(hours=1))
+        )
+
+        if needs_refresh:
+            # Pull in fresh historical data (safe even if no new rows)
+            logger.debug(f'Updating exchange rate history for {convert_from} to {convert_to}')
+            ExchangeRate.update_exchange_rate_history(
+                account=account,
+                convert_from=convert_from,
+                convert_to=convert_to,
+            )
+
+            # Grab the latest historical rate
+            latest = (
+                ExchangeRate.objects.filter(
+                    account=account,
+                    convert_from=convert_from,
+                    convert_to=convert_to,
+                )
+                .order_by("-date")
+                .first()
+            )
+
+            if latest:
+                if obj is None:
+                    obj = cls.objects.create(
+                        account=account,
+                        convert_from=convert_from,
+                        convert_to=convert_to,
+                        exchange_rate_multiplier=latest.exchange_rate_multiplier,
+                    )
+                else:
+                    obj.exchange_rate_multiplier = latest.exchange_rate_multiplier
+                    obj.save(update_fields=["exchange_rate_multiplier", "updated_at"])
+
+        return obj
+
+
+class ExchangeRate(AbstractExchangeRate):
     MODEL_DESCRIPTION = 'Exchange rates between pairs of currencies at particular dates.'
 
     class Meta:
@@ -248,10 +340,7 @@ class ExchangeRate(BaseModel):
             models.Index(fields=['account', 'convert_from', 'convert_to', 'date'], name='exchange_rate_idx')
         ]
     
-    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     date = models.DateField()
-    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=1.0)
     is_continuous_history = models.BooleanField(default=False, editable=False)
 
     @classmethod
@@ -324,16 +413,6 @@ class ExchangeRate(BaseModel):
         except Exception as e:
             logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
 
-    def apply(self, money):
-        assert str(money.currency) == str(self.convert_from), (
-            f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
-            f'does not match the currency {money.currency}'
-        )
-        new_amount = money.amount * self.exchange_rate_multiplier
-        return Money(new_amount, str(self.convert_to))
-
-    def __str__(self):
-        return f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to} on {self.date.isoformat()}'
 
 
 class Market(BaseModel):
@@ -402,14 +481,26 @@ class Instrument(BaseModel):
     @safe_property
     def value_held_converted(self):
         if self.currency == self.account.currency:
-
+            # Already in account currency
             assert isinstance(self.value_held, Money), f'Value held is not a Money instance: {self.value_held}'
             return self.value_held
-        else:
-            exchange_rate = ExchangeRate.objects.filter(account=self.account, convert_from=self.currency, convert_to=self.account.currency).order_by('-date').first()
-            converted_value = exchange_rate.apply(self.value_held)
-            assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
-            return converted_value
+
+        # Get or refresh the current exchange rate
+        current_rate = CurrentExchangeRate.get_or_create(
+            account=self.account,
+            convert_from=self.currency,
+            convert_to=self.account.currency,
+        )
+
+        if not current_rate:
+            raise ValueError(
+                f"No exchange rate available for {self.currency} → {self.account.currency}"
+            )
+
+        converted_value = current_rate.apply(self.value_held)
+        assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
+        return converted_value
+
 
     @safe_property
     def yfinance_ticker_code(self):
