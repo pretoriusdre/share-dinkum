@@ -273,8 +273,6 @@ class CurrentExchangeRate(AbstractExchangeRate):
             models.UniqueConstraint(fields=['account', 'convert_from', 'convert_to'], name='current_exchange_rate_keys')
         ]
 
-    updated_at = models.DateTimeField(auto_now=True, editable=False)
-
 
     @classmethod
     def get_or_create(cls, account, convert_from, convert_to, force_refresh=False):
