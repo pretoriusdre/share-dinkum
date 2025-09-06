@@ -229,7 +229,7 @@ class LogEntry(BaseModel):
     event = models.CharField(max_length=255)
     notes = None # Don't want notes on logs
     # Generic Foreign Key fields
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs')
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs', editable=False)
     object_id = models.UUIDField()
     content_object = GenericForeignKey('content_type', 'object_id')
 
