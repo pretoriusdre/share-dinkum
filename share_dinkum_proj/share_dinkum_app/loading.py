@@ -101,6 +101,7 @@ class DataLoader():
             'FiscalYear': share_dinkum_app.models.FiscalYear,
             'Account': share_dinkum_app.models.Account,
             'LogEntry': share_dinkum_app.models.LogEntry,
+            'CurrentExchangeRate': share_dinkum_app.models.CurrentExchangeRate,
             'ExchangeRate': share_dinkum_app.models.ExchangeRate,
             'Market': share_dinkum_app.models.Market,
             'Instrument': share_dinkum_app.models.Instrument,
