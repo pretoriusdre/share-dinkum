@@ -1,5 +1,5 @@
 # Standard library imports
-from datetime import date, timedelta, datetime, UTC, timezone
+from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import copy
 
@@ -42,12 +42,14 @@ class AppUser(AbstractUser):
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        # Ensure first_name and last_name are not None
-        self.first_name = self.first_name or ''
-        self.last_name = self.last_name or ''
+        update_fields = kwargs.get('update_fields', None)
+
+        # Only modify first_name/last_name if not using update_fields
+        if not update_fields:
+            self.first_name = self.first_name or ''
+            self.last_name = self.last_name or ''
 
         super().save(*args, **kwargs)
-
 
 class FiscalYearType(models.Model):
     MODEL_DESCRIPTION = 'A system table used to define configuration for the financial year, such as its start day and month.'
@@ -257,13 +259,7 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
             f'does not match the currency {money.currency}'
         )
 
-        # TODO REMOEV
-        try:
-            new_amount = money.amount * self.exchange_rate_multiplier
-        except Exception as e:
-            print(type(money.amount), money.amount, type(self.exchange_rate_multiplier), self.exchange_rate_multiplier)
-            raise
-
+        new_amount = money.amount * self.exchange_rate_multiplier
 
         return Money(new_amount, str(self.convert_to))
 
@@ -318,25 +314,18 @@ class CurrentExchangeRate(AbstractExchangeRate):
         needs_refresh = (
             force_refresh
             or obj is None
-            or (obj.updated_at < timezone.now() - timedelta(hours=1))
+            or (obj.updated_at < datetime.now(UTC) - timedelta(hours=1))
         )
 
         if needs_refresh:
-            # Pull in fresh historical data (safe even if no new rows)
-            logger.debug(f'Updating exchange rate history for {convert_from} to {convert_to}')
-            latest = ExchangeRate.update_exchange_rate_history(
+
+            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=None)
+            obj, _ = cls.objects.update_or_create(
                 account=account,
                 convert_from=convert_from,
                 convert_to=convert_to,
+                defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
             )
-
-            if latest:
-                obj, _ = cls.objects.update_or_create(
-                    account=account,
-                    convert_from=convert_from,
-                    convert_to=convert_to,
-                    defaults={"exchange_rate_multiplier": latest.exchange_rate_multiplier},
-                )
 
         return obj
 
@@ -400,11 +389,11 @@ class ExchangeRate(AbstractExchangeRate):
 
         if not start_date:
             earliest_buy = Buy.objects.filter(account=account).order_by('date').first()
-            start_date = earliest_buy.date
-
-        if not start_date:
-            return
-        
+            if earliest_buy:
+                start_date = earliest_buy.date
+            else:
+                return  # No buys, so no need to fetch exchange rates
+            
         try:
             price_history = yfinanceinterface.get_exchange_rate_history(convert_from=convert_from, convert_to=convert_to, start_date=start_date)
 
@@ -423,24 +412,6 @@ class ExchangeRate(AbstractExchangeRate):
             # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
-
-
-            # # TODO REMOVE THIS
-            # latest = (
-            #     ExchangeRate.objects.filter(
-            #         account=account,
-            #         convert_from=convert_from,
-            #         convert_to=convert_to,
-            #     )
-            #     .order_by("-date")
-            #     .first()
-            # )
-
-            # if latest:
-            #     # Set the latest entry as the current exchange rate
-            #     latest.update_current()
-            #     return latest
-            
 
             if not price_history.empty:
                 latest_row = price_history.loc[price_history['date'].idxmax()]
@@ -514,7 +485,6 @@ class Instrument(BaseModel):
     
     @safe_property
     def value_held(self):
-
         if self.current_unit_price:
             value_held = Money(self.current_unit_price * self.quantity_held, self.currency)
         else:
@@ -528,6 +498,7 @@ class Instrument(BaseModel):
     
     @safe_property
     def value_held_converted(self):
+        
         if self.currency == self.account.currency:
             # Already in account currency
             assert isinstance(self.value_held, Money), f'Value held is not a Money instance: {self.value_held}'
@@ -541,8 +512,11 @@ class Instrument(BaseModel):
         )
 
         if not current_rate:
+            logger.error(f'No exchange rate available for {self.currency} to {self.account.currency}')
+            logger.error(f'Instrument: {self}, Account: {self.account}, Currency: {self.currency}')
+            
             raise ValueError(
-                f"No exchange rate available for {self.currency} → {self.account.currency}"
+                f"No exchange rate available for {self.currency} to {self.account.currency}"
             )
 
         converted_value = current_rate.apply(self.value_held)
