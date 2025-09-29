@@ -547,7 +547,7 @@ class Instrument(BaseModel):
 
         # Determine the start date
         if latest_price_history:
-            start_date = latest_price_history.date + timedelta(days=1)
+            start_date = latest_price_history.date - timedelta(days=4) # Go back a few days to ensure no missing data
         else:
             earliest_buy = Buy.objects.filter(instrument=self).order_by('date').first()
             if earliest_buy:
