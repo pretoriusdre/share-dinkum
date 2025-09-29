@@ -1,5 +1,5 @@
 import yfinance as yf
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal
 import pandas as pd
 import string
@@ -84,9 +84,13 @@ def get_exchange_rate_history(convert_from, convert_to, start_date):
         return pd.DataFrame([])
 
 
-def get_exchange_rate(convert_from, convert_to, exchange_date):
+def get_exchange_rate(convert_from, convert_to, exchange_date=None):
     ticker_code = f'{convert_from}{convert_to}=X'
     yfinance_obj = yf.Ticker(ticker_code)
+
+    if not exchange_date:
+        exchange_date = datetime.now(UTC).date()
+
     exchange_date = date.fromisoformat(str(exchange_date))
     # Get a few days in case of gaps, then take first record.
     start_date_str = exchange_date.isoformat()

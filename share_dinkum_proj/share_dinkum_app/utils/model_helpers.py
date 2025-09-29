@@ -1,6 +1,3 @@
-
-# TODO implement logging
-
 from django.forms.models import model_to_dict
 
 import logging

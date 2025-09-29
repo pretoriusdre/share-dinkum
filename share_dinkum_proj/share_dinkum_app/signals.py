@@ -395,29 +395,58 @@ def delete_file_on_change(sender, instance, **kwargs):
 
 @receiver(post_save)
 def persist_safe_properties(sender, instance, created, **kwargs):
-
     logger.debug('Setting calculated fields for %s', instance)
     logger.debug('Instance data is: %s', model_to_dict(instance))
 
     # Prevent recursion
     if getattr(_save_lock, "active", False):
         return
-    
+
     # Only act on subclasses of BaseModel
     if not isinstance(instance, BaseModel):
         return
 
     updated_fields = []
 
-    for attr_name in dir(instance):
-        if attr_name.startswith('_'):
-            continue
+    needs_exchange_rate = False
+    currency_val = None
+    if hasattr(instance, 'exchange_rate'):
+        for attr_name in dir(instance):
+            if attr_name.endswith('_currency'):
+                try:
+                    val = getattr(instance, attr_name, None)
+                    if (
+                        val and
+                        val != instance.account.currency and not
+                        getattr(instance, 'exchange_rate', None)
+                    ):
+                        needs_exchange_rate = True
+                        currency_val = val
+                        break
+                except AttributeError:
+                    continue
 
+    if needs_exchange_rate:
+        exchange_rate_obj = ExchangeRate.get_or_create(
+            account=instance.account,
+            convert_from=currency_val,
+            convert_to=instance.account.currency,
+            exchange_date=getattr(instance, 'date', None),
+        )
+        instance.exchange_rate = exchange_rate_obj
+        updated_fields.append('exchange_rate')
+
+
+    for attr_name in dir(instance):
+        
+        if attr_name  == 'value_held_converted':
+            value = getattr(instance, attr_name)
+
+        attr = getattr(type(instance), attr_name, None)
         try:
-            attr = getattr(type(instance), attr_name, None)
-            # Check if this is a safe_property
+            val = getattr(instance, attr_name, None)
+            # --- Step 2: safe_property fields ---
             if isinstance(attr, property) and getattr(attr.fget, "_is_safe_property", False):
-                
                 value = getattr(instance, attr_name)
 
                 calc_field_name = f"calculated_{attr_name}"
@@ -425,28 +454,18 @@ def persist_safe_properties(sender, instance, created, **kwargs):
                     setattr(instance, calc_field_name, value)
                     updated_fields.append(calc_field_name)
                     if isinstance(value, Money):
-                        updated_fields.append(f'{calc_field_name}_currency')
-
-            # Handle currency -> exchange_rate
-            if attr_name.endswith('_currency') and hasattr(instance, 'exchange_rate'):
-                val = getattr(instance, attr_name, None)
-                if val and val != instance.account.currency and not getattr(instance, 'exchange_rate', None):
-                    exchange_rate_obj = ExchangeRate.get_or_create(
-                        account=instance.account,
-                        convert_from=val,
-                        convert_to=instance.account.currency,
-                        exchange_date=getattr(instance, 'date', None)
-                    )
-                    instance.exchange_rate = exchange_rate_obj
-                    updated_fields.append('exchange_rate')
+                        updated_fields.append(f"{calc_field_name}_currency")
 
         except AttributeError:
             continue
 
+    # Save once if anything was updated
     if updated_fields:
         with transaction.atomic():
             _save_lock.active = True
-            instance.save(update_fields=updated_fields)
-            _save_lock.active = False
+            try:
+                instance.save(update_fields=updated_fields)
+            finally:
+                    _save_lock.active = False
 
     logger.debug('Updated instance data is: %s', model_to_dict(instance))

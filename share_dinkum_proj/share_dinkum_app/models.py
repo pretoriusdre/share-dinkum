@@ -1,5 +1,5 @@
 # Standard library imports
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import copy
 
@@ -42,12 +42,14 @@ class AppUser(AbstractUser):
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        # Ensure first_name and last_name are not None
-        self.first_name = self.first_name or ''
-        self.last_name = self.last_name or ''
+        update_fields = kwargs.get('update_fields', None)
+
+        # Only modify first_name/last_name if not using update_fields
+        if not update_fields:
+            self.first_name = self.first_name or ''
+            self.last_name = self.last_name or ''
 
         super().save(*args, **kwargs)
-
 
 class FiscalYearType(models.Model):
     MODEL_DESCRIPTION = 'A system table used to define configuration for the financial year, such as its start day and month.'
@@ -229,7 +231,7 @@ class LogEntry(BaseModel):
     event = models.CharField(max_length=255)
     notes = None # Don't want notes on logs
     # Generic Foreign Key fields
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs')
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs', editable=False)
     object_id = models.UUIDField()
     content_object = GenericForeignKey('content_type', 'object_id')
 
@@ -237,7 +239,98 @@ class LogEntry(BaseModel):
         return f'{self.created_at.isoformat(timespec="seconds")} - ***{(str(self.pk))[-4:]} - {self.event}'
 
 
-class ExchangeRate(BaseModel):
+class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need description, notes, is_active, created_at etc
+    MODEL_DESCRIPTION = 'Abstract base class for exchange rates between pairs of currencies'
+
+    class Meta:
+        abstract = True
+
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
+    updated_at = models.DateTimeField(auto_now=True, editable=False)
+
+    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
+    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
+    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1.0'))
+
+    def apply(self, money):
+        assert str(money.currency) == str(self.convert_from), (
+            f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
+            f'does not match the currency {money.currency}'
+        )
+
+        new_amount = money.amount * self.exchange_rate_multiplier
+
+        return Money(new_amount, str(self.convert_to))
+
+    def update_current(self):
+        """Update or create the CurrentExchangeRate for this historical rate."""
+
+        current, created = CurrentExchangeRate.objects.get_or_create(
+            account=self.account,
+            convert_from=self.convert_from,
+            convert_to=self.convert_to,
+            defaults={'exchange_rate_multiplier': self.exchange_rate_multiplier},
+        )
+
+        if not created:
+            current.exchange_rate_multiplier = self.exchange_rate_multiplier
+            current.save(update_fields=["exchange_rate_multiplier", "updated_at"])
+
+        return current
+    
+
+    def __str__(self):
+
+        exchange_rate_text = f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to}'
+
+        if hasattr(self, 'date'):
+            exchange_rate_text += f' on {self.date.isoformat()}'
+        return exchange_rate_text
+    
+
+class CurrentExchangeRate(AbstractExchangeRate):
+                           
+    MODEL_DESCRIPTION = 'Exchange rates between pairs of currencies, latest date only.'           
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['account', 'convert_from', 'convert_to'], name='current_exchange_rate_keys')
+        ]
+
+
+    @classmethod
+    def get_or_create(cls, account, convert_from, convert_to, force_refresh=False):
+        """
+        Get the current exchange rate. If missing, stale (>1hr), or force_refresh=True,
+        update history and refresh latest value.
+        """
+        obj = cls.objects.filter(
+            account=account,
+            convert_from=convert_from,
+            convert_to=convert_to,
+        ).first()
+
+        needs_refresh = (
+            force_refresh
+            or obj is None
+            or (obj.updated_at < datetime.now(UTC) - timedelta(hours=1))
+        )
+
+        if needs_refresh:
+
+            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=None)
+            obj, _ = cls.objects.update_or_create(
+                account=account,
+                convert_from=convert_from,
+                convert_to=convert_to,
+                defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
+            )
+
+        return obj
+
+
+class ExchangeRate(AbstractExchangeRate):
     MODEL_DESCRIPTION = 'Exchange rates between pairs of currencies at particular dates.'
 
     class Meta:
@@ -248,10 +341,7 @@ class ExchangeRate(BaseModel):
             models.Index(fields=['account', 'convert_from', 'convert_to', 'date'], name='exchange_rate_idx')
         ]
     
-    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     date = models.DateField()
-    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=1.0)
     is_continuous_history = models.BooleanField(default=False, editable=False)
 
     @classmethod
@@ -270,7 +360,7 @@ class ExchangeRate(BaseModel):
                 convert_from=convert_from,
                 convert_to=convert_to,
                 date=exchange_date,
-                defaults={'exchange_rate_multiplier' : 1.0}
+                defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
             if created:
                 # Optionally update exchange rate history after creation
@@ -280,6 +370,8 @@ class ExchangeRate(BaseModel):
                     exchange_date=exchange_date
                     )
                 obj.save()
+
+            obj.update_current()
             return obj
         
     @classmethod
@@ -297,11 +389,11 @@ class ExchangeRate(BaseModel):
 
         if not start_date:
             earliest_buy = Buy.objects.filter(account=account).order_by('date').first()
-            start_date = earliest_buy.date
-
-        if not start_date:
-            return
-        
+            if earliest_buy:
+                start_date = earliest_buy.date
+            else:
+                return  # No buys, so no need to fetch exchange rates
+            
         try:
             price_history = yfinanceinterface.get_exchange_rate_history(convert_from=convert_from, convert_to=convert_to, start_date=start_date)
 
@@ -321,19 +413,25 @@ class ExchangeRate(BaseModel):
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
+            if not price_history.empty:
+                latest_row = price_history.loc[price_history['date'].idxmax()]
+                latest = ExchangeRate(
+                    id=latest_row['id'],
+                    account=latest_row['account'],
+                    convert_from=latest_row['convert_from'],
+                    convert_to=latest_row['convert_to'],
+                    date=latest_row['date'],
+                    exchange_rate_multiplier=Decimal(str(latest_row['exchange_rate_multiplier'])).quantize(
+                        Decimal('0.000001'), rounding=ROUND_HALF_UP
+                    )
+                )
+                latest.update_current()
+                return latest
+
+
         except Exception as e:
             logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
 
-    def apply(self, money):
-        assert str(money.currency) == str(self.convert_from), (
-            f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
-            f'does not match the currency {money.currency}'
-        )
-        new_amount = money.amount * self.exchange_rate_multiplier
-        return Money(new_amount, str(self.convert_to))
-
-    def __str__(self):
-        return f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to} on {self.date.isoformat()}'
 
 
 class Market(BaseModel):
@@ -387,7 +485,6 @@ class Instrument(BaseModel):
     
     @safe_property
     def value_held(self):
-
         if self.current_unit_price:
             value_held = Money(self.current_unit_price * self.quantity_held, self.currency)
         else:
@@ -401,15 +498,31 @@ class Instrument(BaseModel):
     
     @safe_property
     def value_held_converted(self):
+        
         if self.currency == self.account.currency:
-
+            # Already in account currency
             assert isinstance(self.value_held, Money), f'Value held is not a Money instance: {self.value_held}'
             return self.value_held
-        else:
-            exchange_rate = ExchangeRate.objects.filter(account=self.account, convert_from=self.currency, convert_to=self.account.currency).order_by('-date').first()
-            converted_value = exchange_rate.apply(self.value_held)
-            assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
-            return converted_value
+
+        # Get or refresh the current exchange rate
+        current_rate = CurrentExchangeRate.get_or_create(
+            account=self.account,
+            convert_from=self.currency,
+            convert_to=self.account.currency,
+        )
+
+        if not current_rate:
+            logger.error(f'No exchange rate available for {self.currency} to {self.account.currency}')
+            logger.error(f'Instrument: {self}, Account: {self.account}, Currency: {self.currency}')
+            
+            raise ValueError(
+                f"No exchange rate available for {self.currency} to {self.account.currency}"
+            )
+
+        converted_value = current_rate.apply(self.value_held)
+        assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
+        return converted_value
+
 
     @safe_property
     def yfinance_ticker_code(self):
@@ -434,7 +547,7 @@ class Instrument(BaseModel):
 
         # Determine the start date
         if latest_price_history:
-            start_date = latest_price_history.date + timedelta(days=1)
+            start_date = latest_price_history.date - timedelta(days=4) # Go back a few days to ensure no missing data
         else:
             earliest_buy = Buy.objects.filter(instrument=self).order_by('date').first()
             if earliest_buy:
@@ -627,7 +740,7 @@ class Parcel(BaseModel):
         editable=False
         )
     parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False)
-    cumulative_split_multiplier = models.DecimalField(max_digits=16, decimal_places=4, editable=False, default=1.0)
+    cumulative_split_multiplier = models.DecimalField(max_digits=16, decimal_places=4, editable=False, default=Decimal('1.0'))
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
     sale_date = models.DateField(null=True, editable=False)
@@ -1026,17 +1139,17 @@ class Dividend(Income):
 
     dividend_type = models.CharField(max_length=7, choices=DIVIDEND_TYPE_CHOICES, default='LOCAL')
 
-    unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
-    franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
+    unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
 
-    local_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
-    foreign_tax_credit = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
-    lic_capital_gain = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
+    local_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    foreign_tax_credit = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    lic_capital_gain = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
 
     corporate_tax_rate_percentage = models.DecimalField(
         max_digits=5,  # Total digits, including decimal places
         decimal_places=2,  # Number of digits after the decimal
-        default=30.0,
+        default=Decimal('30.0'),
         help_text="Enter a percentage value (e.g., 25.00 for 25%)"
     )
     
@@ -1082,8 +1195,8 @@ class Dividend(Income):
 
 class Distribution(Income):
     MODEL_DESCRIPTION = 'Distributions, such as the income received from ETFs'
-    distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
-    total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=0)
+    distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
 
     calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     

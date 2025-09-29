@@ -1,6 +1,6 @@
 import pandas as pd
 
-from datetime import date
+from datetime import date, datetime
 import shutil
 from tqdm import tqdm
 from pathlib import Path
@@ -101,6 +101,7 @@ class DataLoader():
             'FiscalYear': share_dinkum_app.models.FiscalYear,
             'Account': share_dinkum_app.models.Account,
             'LogEntry': share_dinkum_app.models.LogEntry,
+            'CurrentExchangeRate': share_dinkum_app.models.CurrentExchangeRate,
             'ExchangeRate': share_dinkum_app.models.ExchangeRate,
             'Market': share_dinkum_app.models.Market,
             'Instrument': share_dinkum_app.models.Instrument,
@@ -336,8 +337,11 @@ from share_dinkum_app.models import Account, DataExport
 
 class DataBackupManager:
 
-    @staticmethod
-    def create_data_exports_for_all_accounts(include_price_history: bool = True):
+    def __init__(self, base_path: Path):
+        self.base_path = Path(base_path)
+
+
+    def create_data_exports_for_all_accounts(self, include_price_history: bool = True):
         """
         Create a DataExport for each Account.
         The signals attached to DataExport will generate the files automatically.
@@ -352,16 +356,41 @@ class DataBackupManager:
                 )
                 export.refresh_from_db()
 
-    @staticmethod
-    def backup(backup_path: Path):
+
+    def cleanup_old_backups(self, name, keep=5):
+        """
+        Keep only the most recent 'keep' backups in the specified backup folder.
+        """
+        logger.info(f"Cleaning up old backups in {name}, keeping the most recent {keep} backups.")
+        backup_base_path = self.base_path / name
+        if not backup_base_path.exists():
+            logger.info(f"No backups found in {backup_base_path} to clean up.")
+            return
+
+        backups = [folder for folder in backup_base_path.iterdir() if folder.is_dir()]
+        backups_sorted = sorted(backups, key=lambda x: x.name, reverse=True)
+
+        old_backups = backups_sorted[keep:]
+        for old_backup in old_backups:
+            try:
+                shutil.rmtree(old_backup)
+                logger.info(f"Deleted old backup: {old_backup}")
+            except Exception as e:
+                logger.error(f"Failed to delete old backup {old_backup}: {e}", exc_info=True)
+
+
+
+    def backup(self, name):
         """
         Backup SQLite DB, media folder, and create DataExport files for all accounts.
         """
-        backup_path = Path(backup_path)
-        backup_path.mkdir(parents=True, exist_ok=True)
+        folder_name = datetime.now().strftime("%Y-%m-%dT%H%M")
+        backup_path = self.base_path / name / folder_name
+
+        backup_path.mkdir(parents=True, exist_ok=False)
 
         # Create DataExports for all accounts
-        DataBackupManager.create_data_exports_for_all_accounts()
+        self.create_data_exports_for_all_accounts()
 
         # Backup SQLite DB
         db_file = Path(settings.DATABASES['default']['NAME'])
@@ -375,19 +404,44 @@ class DataBackupManager:
             shutil.rmtree(media_backup)
         shutil.copytree(Path(settings.MEDIA_ROOT), media_backup)
 
+        self.cleanup_old_backups(name=name, keep=5)
+
         logger.info(f"Backup completed successfully at {backup_path}")
 
-    @staticmethod
-    def restore(backup_path: Path):
+    def restore(self, name):
         """
         Restore SQLite DB and media folder from backup.
         """
+
+        backup_base_path = self.base_path / name
+ 
+        backups = [folder.name for folder in backup_base_path.iterdir() if folder.is_dir()]
+        backups_sorted = sorted(backups, reverse=True)
+        backups_sorted = backups_sorted[:5]  # Show only the 5 most recent backups
+        if not backups_sorted:
+            logger.error(f"No backups found in {backup_base_path}")
+            return
+        backup_choice_text = "\n".join([f"{i+1}. {backup[:10]}" for i, backup in enumerate(backups_sorted)])
+
+        choice = input(f"Available backups:\n{backup_choice_text}\nSelect a backup to restore (1-{len(backups_sorted)}). Type '1' to choose the latest backup.\n:")
+        try:
+            choice_index = int(choice) - 1
+            if choice_index < 0 or choice_index >= len(backups_sorted):
+                raise ValueError("Choice out of range")
+            selected_backup = backups[choice_index]
+        except Exception as e:
+            logger.error(f"Invalid choice. Restore cancelled.")
+            return
+
+        backup_path = backup_base_path / selected_backup
+
         res = input("Type 'X' to OVERWRITE current data with backup.")
         if res.upper() != 'X':
             logger.info("Restore cancelled.")
             return
+        
+        logger.info(f"Restoring from backup: {backup_path}")
 
-        backup_path = Path(backup_path)
         db_file = Path(settings.DATABASES['default']['NAME'])
         backup_db_file = backup_path / db_file.name
         media_backup = backup_path / "media"

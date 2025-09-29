@@ -3,32 +3,29 @@ from django.contrib import admin
 
 #import share_dinkum_app.models
 
+
+
 from django.apps import apps
 
+from django.contrib.auth.models import Group
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm
 
 from django.db import models
 from django.db.models import Model, ForeignKey
 from django.db.models.fields.reverse_related import ManyToManyRel
-
-#from django.contrib.auth.models import Group
-
 from django.db.models import ManyToManyRel, ManyToManyField
-
-
 
 import share_dinkum_app
 import share_dinkum_app.admin
 import share_dinkum_app.models
 
-from share_dinkum_app.models import AppUser
+from share_dinkum_app.models import AppUser, Account, Parcel, Buy
 
 
 import logging
 logger = logging.getLogger(__name__)
-
-
 
 
 class BaseInline(admin.TabularInline):
@@ -169,7 +166,10 @@ class GenericModelAdminWithoutAdd(GenericModelAdmin):
         return True
 
 
-
+class HiddenModelAdmin(admin.ModelAdmin):
+    search_fields = ('id', 'description')
+    def has_module_permission(self, request):
+        return False  # hides from sidebar
 
 
 
@@ -189,26 +189,21 @@ class AccountAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
 
 
-from share_dinkum_app.models import Account, Parcel
 
 # Map specific models to custom admin if required, or hide them.
 model_admin_map = {
     Account : AccountAdmin,
     AppUser : AppUserAdmin,
-    #Buy : admin.ModelAdmin
-    #Group : None
-    Parcel : GenericModelAdminWithoutAdd
+    Group : HiddenModelAdmin,
+    ContentType : HiddenModelAdmin,
+    Parcel : GenericModelAdminWithoutAdd,
+
 }
 
-
-from share_dinkum_app.models import Buy
-
-
-
-
-from django.contrib.contenttypes.models import ContentType
-
-admin.site.register(ContentType, GenericModelAdmin)
+try:
+    admin.site.unregister(Group)
+except admin.sites.NotRegistered:
+    pass
 
 
 for model in apps.get_app_config('share_dinkum_app').get_models():
