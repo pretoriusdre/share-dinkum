@@ -668,7 +668,7 @@ class Trade(BaseModel):
 
     def save(self, *args, **kwargs):
         if self.is_active:
-            self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price_converted} / unit'
+            self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price} / unit'
         else:
             self.description = 'INACTIVE'
         super().save(*args, **kwargs)
