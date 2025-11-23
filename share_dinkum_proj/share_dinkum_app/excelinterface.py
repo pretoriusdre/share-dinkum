@@ -39,6 +39,36 @@ def get_all_tables_in_excel(filename):
             df = df.dropna(how='all')  # Blank rows would cause not null errors.
 
             mapping[entry] = df
+
+    if not mapping:
+        # OpenOffice files do not support Named DataTables, so fall back to reading all sheets.
+        # Sheet names must match the expected table names.
+        return get_all_tables_from_worksheets(filename)
+    return mapping
+
+
+def get_all_tables_from_worksheets(filename):
+    """A helper function to extract all sheets from an Excel file.
+    This is normally only required if the file does not contain Named DataTables (eg OpenOffice does not support them)
+    """
+    wb= load_workbook(filename, data_only=True)
+    mapping = {}
+    for ws in wb.worksheets:
+        data = ws.values
+        content = list(data)
+        header = content[0]
+        rest = content[1:]
+        df = pd.DataFrame(rest, columns=header)
+        df = make_tz_naive(df)
+        df = df.dropna(how='all')  # Blank rows would cause not null errors.
+        mapping[ws.title] = df
+
+    # Rename the sheet names to the expected table names as outlined in the Index
+    index_df = mapping.get('Index', None)
+    if isinstance(index_df, pd.DataFrame):
+        rename_keys = dict(zip(index_df['sheet_name'], index_df['table_name']))
+        mapping = {rename_keys.get(key, key): val for key, val in mapping.items()}
+
     return mapping
 
 
