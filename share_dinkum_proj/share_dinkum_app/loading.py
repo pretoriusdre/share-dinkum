@@ -10,6 +10,8 @@ from django.db.models import DecimalField, FileField
 from django.db import connections, transaction
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
+from django.core.management import call_command
+
 
 from djmoney.money import Money
 
@@ -293,21 +295,9 @@ class DataLoader():
             return
         # Clear database tables
 
-        model_load_order = cls.get_model_load_order()
-        model_deletion_order = [model for model in apps.get_models() if model not in model_load_order] + list(reversed(model_load_order))
+        call_command('flush', interactive=False)
 
-        receivers = disconnect_app_signals('share_dinkum_app')
-
-        for model in model_deletion_order:
-            try:
-                model.objects.all().delete()  # Deletes all records in the model
-            except Exception as e:
-                logger.error(f"Error deleting model {model.__name__}: {e}", exc_info=True)
-                raise
- 
-        reconnect_app_signals(receivers)
-
-        logger.info('Deleted all models')
+        logger.info('Deleted all models and reset DataLoader state.')
         # Delete all data in the media folder
         media_folder = Path(settings.MEDIA_ROOT)
         force_delete_and_recreate_folder(media_folder)
