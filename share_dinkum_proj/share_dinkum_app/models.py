@@ -9,6 +9,7 @@ from django.contrib.auth.models import AbstractUser
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.db.models import Sum, F, Q
 from django.db.models.functions import Coalesce
@@ -745,6 +746,14 @@ class Sell(Trade):
         allocated_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return (self.quantity or 0 ) - allocated_quantity
     
+    def clean(self):
+        super().clean()
+        # Ensure an exchange rate is provided for cross-currency sells
+        if self.instrument.currency != self.account.currency and not self.exchange_rate:
+            raise ValidationError(
+                "Exchange rate is required when instrument currency differs from account currency."
+            )
+
 
 class Parcel(BaseModel):
     MODEL_DESCRIPTION = 'Collections of shares with the same unit properties. Can be split into other parcels.'
