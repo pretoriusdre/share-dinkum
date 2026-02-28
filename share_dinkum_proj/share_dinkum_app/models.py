@@ -23,6 +23,8 @@ from share_dinkum_app import yfinanceinterface
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.constants import DEFAULT_CURRENCY
+
 
 # Local but to be replaced in future
 from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid import uuid7", once this method is available in standard library
@@ -32,8 +34,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# global constant:
-DEFAULT_CURRENCY = 'AUD'
 
 
 class AppUser(AbstractUser):
