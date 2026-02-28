@@ -318,14 +318,23 @@ class CurrentExchangeRate(AbstractExchangeRate):
         )
 
         if needs_refresh:
-
-            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=None)
-            obj, _ = cls.objects.update_or_create(
-                account=account,
-                convert_from=convert_from,
-                convert_to=convert_to,
-                defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
+            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(
+                convert_from=convert_from, convert_to=convert_to, exchange_date=None
             )
+            if exchange_rate_multiplier is not None:
+                obj, _ = cls.objects.update_or_create(
+                    account=account,
+                    convert_from=convert_from,
+                    convert_to=convert_to,
+                    defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
+                )
+            else:
+                logger.warning(
+                    "Could not fetch exchange rate for %s to %s; keeping existing rate if any.",
+                    convert_from, convert_to,
+                )
+                if obj is None:
+                    return None
 
         return obj
 
@@ -363,13 +372,19 @@ class ExchangeRate(AbstractExchangeRate):
                 defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
             if created:
-                # Optionally update exchange rate history after creation
-                obj.exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(
+                fetched_rate = yfinanceinterface.get_exchange_rate(
                     convert_from=convert_from,
                     convert_to=convert_to,
-                    exchange_date=exchange_date
+                    exchange_date=exchange_date,
+                )
+                if fetched_rate is not None:
+                    obj.exchange_rate_multiplier = fetched_rate
+                    obj.save()
+                else:
+                    logger.warning(
+                        "Could not fetch exchange rate for %s to %s on %s; keeping default.",
+                        convert_from, convert_to, exchange_date,
                     )
-                obj.save()
 
             obj.update_current()
             return obj
