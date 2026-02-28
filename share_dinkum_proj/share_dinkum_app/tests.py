@@ -5,7 +5,9 @@ Run with: python manage.py test share_dinkum_app
 """
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+import pandas as pd
 
 from django.test import TestCase, TransactionTestCase
 from django.db import IntegrityError
@@ -37,6 +39,7 @@ from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
 from share_dinkum_app.decorators import safe_property
 from share_dinkum_app.reports import RealisedCapitalGainReport
+from share_dinkum_app import yfinanceinterface
 
 
 # --- Test data factories (minimal objects for isolation) ---
@@ -154,19 +157,19 @@ class UserDirectoryPathTests(TestCase):
     """Tests for user_directory_path upload_to helper."""
 
     def test_with_account_and_date(self):
-        account = create_account()
+        acc = create_account()
         obj = type('Obj', (), {})()
-        obj.account = account
+        obj.account = acc
         obj.date = date(2024, 6, 15)
         path = user_directory_path(obj, 'statement.pdf')
-        self.assertIn(str(account.id), path)
+        self.assertIn(str(acc.id), path)
         self.assertIn('2024-06-15', path)
         self.assertIn('statement.pdf', path)
 
     def test_with_instrument(self):
-        account = create_account()
+        acc = create_account()
         obj = type('Obj', (), {})()
-        obj.account = account
+        obj.account = acc
         obj.instrument = type('Inst', (), {'name': 'BHP'})()
         obj.date = date(2024, 1, 1)
         path = user_directory_path(obj, 'file.xlsx')
@@ -181,6 +184,131 @@ class ProcessFilefieldTests(TestCase):
 
     def test_empty_string_returns_none(self):
         self.assertIsNone(process_filefield(''))
+
+
+# =============================================================================
+# yfinanceinterface
+# =============================================================================
+
+
+class ToSnakeCaseTests(TestCase):
+    """Tests for yfinanceinterface.to_snake_case."""
+
+    def test_lowercase_unchanged(self):
+        self.assertEqual(yfinanceinterface.to_snake_case('open'), 'open')
+
+    def test_camel_case_converted(self):
+        # to_snake_case only replaces non-alphanumeric and lowercases; it does not split CamelCase
+        self.assertEqual(yfinanceinterface.to_snake_case('StockSplits'), 'stocksplits')
+
+    def test_mixed_case_with_space_becomes_underscore(self):
+        self.assertEqual(yfinanceinterface.to_snake_case('Stock Splits'), 'stock_splits')
+
+    def test_non_alnum_replaced_with_underscore(self):
+        self.assertEqual(yfinanceinterface.to_snake_case('Close'), 'close')
+        self.assertEqual(yfinanceinterface.to_snake_case('High'), 'high')
+
+
+@patch('share_dinkum_app.yfinanceinterface.yf')
+class GetExchangeRateTests(TestCase):
+    """Tests for yfinanceinterface.get_exchange_rate."""
+
+    def test_returns_decimal_when_history_has_data(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.return_value = pd.DataFrame({'Close': [1.55]})
+        result = yfinanceinterface.get_exchange_rate('USD', 'AUD', exchange_date=date(2024, 1, 15))
+        # Decimal(float) can have float noise; compare quantized or as float
+        self.assertEqual(result.quantize(Decimal('0.01')), Decimal('1.55'))
+        mock_ticker.history.assert_called_once()
+
+    def test_returns_none_on_exception(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.side_effect = Exception('network error')
+        result = yfinanceinterface.get_exchange_rate('USD', 'AUD', exchange_date=date(2024, 1, 15))
+        self.assertIsNone(result)
+
+    def test_returns_none_when_history_empty(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.return_value = pd.DataFrame({'Close': []})
+        result = yfinanceinterface.get_exchange_rate('USD', 'AUD', exchange_date=date(2024, 1, 15))
+        self.assertIsNone(result)
+
+    def test_uses_today_when_exchange_date_none(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.return_value = pd.DataFrame({'Close': [2.0]})
+        result = yfinanceinterface.get_exchange_rate('USD', 'AUD', exchange_date=None)
+        self.assertEqual(result.quantize(Decimal('0.01')), Decimal('2.00'))
+
+
+@patch('share_dinkum_app.yfinanceinterface.yf')
+class GetExchangeRateHistoryTests(TestCase):
+    """Tests for yfinanceinterface.get_exchange_rate_history."""
+
+    def test_returns_dataframe_with_expected_columns_on_success(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        # history() returns DataFrame with Date index; code resets index and renames cols to snake_case
+        df = pd.DataFrame({
+            'Open': [1.0], 'High': [1.1], 'Low': [0.9], 'Close': [1.05],
+            'Volume': [1000], 'Stock Splits': [0],
+        }, index=pd.DatetimeIndex([pd.Timestamp('2024-01-15')]))
+        df.index.name = 'Date'
+        mock_ticker.history.return_value = df.copy()
+        result = yfinanceinterface.get_exchange_rate_history('USD', 'AUD', start_date=date(2024, 1, 1))
+        self.assertFalse(result.empty)
+        self.assertIn('convert_from', result.columns)
+        self.assertIn('convert_to', result.columns)
+        self.assertIn('date', result.columns)
+        self.assertIn('exchange_rate_multiplier', result.columns)
+        self.assertEqual(result['convert_from'].iloc[0], 'USD')
+        self.assertEqual(result['convert_to'].iloc[0], 'AUD')
+
+    def test_returns_empty_dataframe_on_exception(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.side_effect = Exception('api error')
+        result = yfinanceinterface.get_exchange_rate_history('USD', 'AUD', start_date=date(2024, 1, 1))
+        self.assertTrue(result.empty)
+        self.assertIsInstance(result, pd.DataFrame)
+
+
+@patch('share_dinkum_app.yfinanceinterface.yf')
+class GetInstrumentPriceHistoryTests(TestCase):
+    """Tests for yfinanceinterface.get_instrument_price_history."""
+
+    def test_returns_dataframe_with_expected_columns_on_success(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        df = pd.DataFrame({
+            'Open': [50.0], 'High': [51.0], 'Low': [49.0], 'Close': [50.5],
+            'Volume': [1000000], 'Stock Splits': [0],
+        }, index=pd.DatetimeIndex([pd.Timestamp('2024-01-15')]))
+        df.index.name = 'Date'
+        mock_ticker.history.return_value = df.copy()
+        result = yfinanceinterface.get_instrument_price_history(instrument, start_date=date(2024, 1, 1))
+        self.assertFalse(result.empty)
+        self.assertIn('instrument', result.columns)
+        self.assertIn('date', result.columns)
+        self.assertIn('close', result.columns)
+        self.assertIn('open', result.columns)
+        self.assertIn('volume', result.columns)
+        self.assertIn('stock_splits', result.columns)
+
+    def test_returns_empty_dataframe_on_exception(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.side_effect = Exception('api error')
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_instrument_price_history(instrument, start_date=date(2024, 1, 1))
+        self.assertTrue(result.empty)
+        self.assertIsInstance(result, pd.DataFrame)
 
 
 # =============================================================================
