@@ -768,8 +768,7 @@ class Parcel(BaseModel):
     def is_sold(self):
         return self.remaining_quantity == 0
 
-    calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
-    
+
     @safe_property
     def adjusted_buy_price(self):
         adjusted_buy_price = self.buy.unit_price_converted / self.cumulative_split_multiplier
@@ -786,7 +785,6 @@ class Parcel(BaseModel):
         adjusted_unit_brokerage = self.buy.unit_brokerage_converted / self.cumulative_split_multiplier
         return adjusted_unit_brokerage
 
-    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def total_adjustments(self):
@@ -798,7 +796,9 @@ class Parcel(BaseModel):
 
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
-
+    
+    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    
     @safe_property
     def total_cost_base(self):
 
@@ -875,7 +875,7 @@ class Parcel(BaseModel):
             # Create remainder parcel
             parcel_remainder = Parcel.objects.get(pk=self.pk)
             parcel_remainder.pk = None
-            parcel_target.activation_date = date # Set new activation date
+            parcel_remainder.activation_date = date # Set new activation date
             parcel_remainder.parent_parcel = self
             parcel_remainder.parcel_quantity = remainder_quantity
             parcel_remainder.save()
