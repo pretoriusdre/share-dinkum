@@ -123,7 +123,7 @@ class FiscalYear(models.Model):
         if self.fiscal_year_type.start_month == 1:
             return f'{self.start_year}'
         else:
-            return f'FY{self.start_year}/{f'{str(self.start_year + 1)[2:]}'}'
+            return f'FY{self.start_year}/{str(self.start_year + 1)[2:]}'
         
     def save(self, *args, **kwargs):
         self.name = self.get_name()
@@ -904,10 +904,10 @@ class Parcel(BaseModel):
 
     def __str__(self):
         if self.is_active:
-            packacke_desc = f'{self.description} @ {self.adjusted_buy_price} / unit | Total cost base = {self.total_cost_base} |'
+            parcel_desc  = f'{self.description} @ {self.adjusted_buy_price} / unit | Total cost base = {self.total_cost_base} |'
             if self.is_sold:
-                packacke_desc += ' SOLD'
-            return packacke_desc 
+                parcel_desc  += ' SOLD'
+            return parcel_desc 
         else:
             return f'{self.pk} | INACTIVE'
 
