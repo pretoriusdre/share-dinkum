@@ -10,7 +10,8 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.urls import reverse
-from django.db.models import Sum
+from django.db.models import Sum, F, Q
+from django.db.models.functions import Coalesce
 from django.forms.models import model_to_dict
 
 # Djmoney imports
@@ -478,23 +479,27 @@ class Instrument(BaseModel):
 
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
     
+
     @safe_property
     def quantity_held(self):
-
-        total_bought = Parcel.objects.filter(  # using Parcels' qty, to account for share splits
+        # Remaining quantity is a bit more complicated than just buys minus sells, since parcels can be split, consolidated and bifurcated.
+        parcels = Parcel.objects.filter(
             account=self.account,
             buy__instrument=self,
             deactivation_date__isnull=True
-        ).aggregate(total=Sum('parcel_quantity'))['total'] or Decimal('0')
+        ).annotate(
+            allocated=Coalesce(
+                Sum(
+                    'sale_allocation__quantity',
+                    filter=Q(sale_allocation__is_active=True)
+                ),
+                Decimal('0')
+            )
+        )
 
-        total_sold = Sell.objects.filter(
-            account=self.account,
-            instrument=self
-        ).aggregate(total=Sum('quantity'))['total'] or Decimal('0')
-
-    
-        return total_bought - total_sold
-
+        return parcels.aggregate(
+            total=Sum(F('parcel_quantity') - F('allocated'))
+        )['total'] or Decimal('0')
 
     calculated_value_held =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -781,7 +786,7 @@ class Parcel(BaseModel):
     
     @safe_property
     def is_sold(self):
-        return self.remaining_quantity == 0
+        return self.remaining_quantity <= Decimal('0') # Using <= to account for any potential rounding issues
 
 
     @safe_property
@@ -807,7 +812,7 @@ class Parcel(BaseModel):
             deactivation_date__isnull=True
         ).aggregate(
             total=Sum('cost_base_increase')
-        )['total'] or 0
+        )['total'] or Decimal('0')
 
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
