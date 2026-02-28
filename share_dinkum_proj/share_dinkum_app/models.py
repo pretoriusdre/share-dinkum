@@ -81,7 +81,7 @@ class FiscalYearType(models.Model):
             start_year=start_year
         )
 
-        return fiscal_year
+        return (fiscal_year, created)
     
 
     def __str__(self):
@@ -629,7 +629,8 @@ class Trade(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
+        return fiscal_year
     
     calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -937,7 +938,8 @@ class SellAllocation(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
+        return fiscal_year
     
     calculated_days_held = models.IntegerField(null=True, blank=True, editable=False)
     
@@ -1005,7 +1007,8 @@ class CostBaseAdjustment(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
+        return fiscal_year
     
     @property
     def date(self):
@@ -1113,7 +1116,8 @@ class Income(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
+        return fiscal_year
 
     def save(self, *args, **kwargs):
         if self.is_active:
