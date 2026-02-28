@@ -893,12 +893,11 @@ class Parcel(BaseModel):
                 .filter(parcel__buy__instrument=self.buy.instrument) \
                 .filter(is_active=True)
             
-            target_fraction = quantity / (quantity + remainder_quantity)
+
             for adjustment in related_adjustments:
                 adjustment.bifurcate(
                     target_parcel=parcel_target,
                     remainder_parcel=parcel_remainder,
-                    target_fraction=target_fraction,
                     date=date
                     )
 
@@ -1053,14 +1052,14 @@ class CostBaseAdjustmentAllocation(BaseModel):
     activation_date = models.DateField(null=True, editable=False)   # not required
     deactivation_date = models.DateField(null=True, editable=False)
 
-    def bifurcate(self, target_parcel, remainder_parcel, target_fraction, date):
-        assert target_fraction >= 0, "Target fraction must be >= 0"
-        assert target_fraction <= 1, "Target fraction must be <= 1"
+    def bifurcate(self, target_parcel, remainder_parcel, date):
+
         assert self.is_active, "Parcel is inactive"
 
         target_parcel_qty = target_parcel.parcel_quantity
         remainder_parcel_qty = remainder_parcel.parcel_quantity
-        target_fraction = target_parcel_qty / (target_parcel_qty +  + remainder_parcel_qty)
+        
+        target_fraction = target_parcel_qty / (target_parcel_qty + remainder_parcel_qty)
 
         new_parcel_message = f'This CostBaseAdjustmentAllocation was created by splitting {self.pk} into two separate allocations.'
 
