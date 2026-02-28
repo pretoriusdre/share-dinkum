@@ -588,6 +588,7 @@ class InstrumentPriceHistory(models.Model):
         indexes = [
             models.Index(fields=['account', 'instrument', 'date'], name='instrument_date_idx')
         ]
+        ordering = ['date'] 
 
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
@@ -600,8 +601,6 @@ class InstrumentPriceHistory(models.Model):
     volume = models.BigIntegerField(editable=False)
     stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
 
-    class Meta:
-        ordering = ['date'] 
 
     def get_absolute_url(self):
         # Redirect stuff to admin
