@@ -15,7 +15,7 @@ from djmoney.money import Money
 from share_dinkum_app import excelinterface
 from share_dinkum_app import loading
 from share_dinkum_app.reports import RealisedCapitalGainReport
-
+from share_dinkum_app.constants import CGT_DISCOUNT_RATE, CGT_DISCOUNT_THRESHOLD_DAYS
 
 from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
 
@@ -90,9 +90,13 @@ def create_sell_allocations(sender, instance, created, **kwargs):
 
         def get_unit_net_capital_gain(parcel):
             capital_gain = unit_proceeds - parcel.unit_cost_base
-            if (instance.date - parcel.buy.date).days > 365:
-                capital_gain *= 0.5
+            if (instance.date - parcel.buy.date).days > CGT_DISCOUNT_THRESHOLD_DAYS:
+                capital_gain *= (1 - CGT_DISCOUNT_RATE) # Normally 0.5, defiend in constants
             return capital_gain
+
+
+
+
 
         available_parcels = sorted(available_parcels, key=get_unit_net_capital_gain)
 

@@ -31,4 +31,8 @@ def setup_logging(level=logging.INFO, log_dir=None, log_file="app.log"):
     logging.getLogger("django.db.backends").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+    # During tests, expected API errors are mocked; suppress INFO/ERROR from yfinanceinterface
+    if "test" in sys.argv:
+        logging.getLogger("share_dinkum_app.yfinanceinterface").setLevel(logging.CRITICAL)
+
     return logging.getLogger(__name__)

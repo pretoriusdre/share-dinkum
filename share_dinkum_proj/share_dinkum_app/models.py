@@ -23,6 +23,8 @@ from share_dinkum_app import yfinanceinterface
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.constants import DEFAULT_CURRENCY
+
 
 # Local but to be replaced in future
 from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid import uuid7", once this method is available in standard library
@@ -32,8 +34,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# global constant:
-DEFAULT_CURRENCY = 'AUD'
 
 
 class AppUser(AbstractUser):
@@ -81,7 +81,7 @@ class FiscalYearType(models.Model):
             start_year=start_year
         )
 
-        return fiscal_year
+        return (fiscal_year, created)
     
 
     def __str__(self):
@@ -123,7 +123,7 @@ class FiscalYear(models.Model):
         if self.fiscal_year_type.start_month == 1:
             return f'{self.start_year}'
         else:
-            return f'FY{self.start_year}/{f'{str(self.start_year + 1)[2:]}'}'
+            return f'FY{self.start_year}/{str(self.start_year + 1)[2:]}'
         
     def save(self, *args, **kwargs):
         self.name = self.get_name()
@@ -318,14 +318,23 @@ class CurrentExchangeRate(AbstractExchangeRate):
         )
 
         if needs_refresh:
-
-            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=None)
-            obj, _ = cls.objects.update_or_create(
-                account=account,
-                convert_from=convert_from,
-                convert_to=convert_to,
-                defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
+            exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(
+                convert_from=convert_from, convert_to=convert_to, exchange_date=None
             )
+            if exchange_rate_multiplier is not None:
+                obj, _ = cls.objects.update_or_create(
+                    account=account,
+                    convert_from=convert_from,
+                    convert_to=convert_to,
+                    defaults={"exchange_rate_multiplier": exchange_rate_multiplier},
+                )
+            else:
+                logger.warning(
+                    "Could not fetch exchange rate for %s to %s; keeping existing rate if any.",
+                    convert_from, convert_to,
+                )
+                if obj is None:
+                    return None
 
         return obj
 
@@ -363,13 +372,19 @@ class ExchangeRate(AbstractExchangeRate):
                 defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
             if created:
-                # Optionally update exchange rate history after creation
-                obj.exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(
+                fetched_rate = yfinanceinterface.get_exchange_rate(
                     convert_from=convert_from,
                     convert_to=convert_to,
-                    exchange_date=exchange_date
+                    exchange_date=exchange_date,
+                )
+                if fetched_rate is not None:
+                    obj.exchange_rate_multiplier = fetched_rate
+                    obj.save()
+                else:
+                    logger.warning(
+                        "Could not fetch exchange rate for %s to %s on %s; keeping default.",
+                        convert_from, convert_to, exchange_date,
                     )
-                obj.save()
 
             obj.update_current()
             return obj
@@ -588,6 +603,7 @@ class InstrumentPriceHistory(models.Model):
         indexes = [
             models.Index(fields=['account', 'instrument', 'date'], name='instrument_date_idx')
         ]
+        ordering = ['date'] 
 
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
@@ -600,8 +616,6 @@ class InstrumentPriceHistory(models.Model):
     volume = models.BigIntegerField(editable=False)
     stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
 
-    class Meta:
-        ordering = ['date'] 
 
     def get_absolute_url(self):
         # Redirect stuff to admin
@@ -630,7 +644,8 @@ class Trade(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
+        return fiscal_year
     
     calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -768,8 +783,7 @@ class Parcel(BaseModel):
     def is_sold(self):
         return self.remaining_quantity == 0
 
-    calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
-    
+
     @safe_property
     def adjusted_buy_price(self):
         adjusted_buy_price = self.buy.unit_price_converted / self.cumulative_split_multiplier
@@ -786,7 +800,6 @@ class Parcel(BaseModel):
         adjusted_unit_brokerage = self.buy.unit_brokerage_converted / self.cumulative_split_multiplier
         return adjusted_unit_brokerage
 
-    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def total_adjustments(self):
@@ -798,7 +811,9 @@ class Parcel(BaseModel):
 
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
-
+    
+    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    
     @safe_property
     def total_cost_base(self):
 
@@ -875,7 +890,7 @@ class Parcel(BaseModel):
             # Create remainder parcel
             parcel_remainder = Parcel.objects.get(pk=self.pk)
             parcel_remainder.pk = None
-            parcel_target.activation_date = date # Set new activation date
+            parcel_remainder.activation_date = date # Set new activation date
             parcel_remainder.parent_parcel = self
             parcel_remainder.parcel_quantity = remainder_quantity
             parcel_remainder.save()
@@ -893,12 +908,11 @@ class Parcel(BaseModel):
                 .filter(parcel__buy__instrument=self.buy.instrument) \
                 .filter(is_active=True)
             
-            target_fraction = quantity / (quantity + remainder_quantity)
+
             for adjustment in related_adjustments:
                 adjustment.bifurcate(
                     target_parcel=parcel_target,
                     remainder_parcel=parcel_remainder,
-                    target_fraction=target_fraction,
                     date=date
                     )
 
@@ -906,10 +920,10 @@ class Parcel(BaseModel):
 
     def __str__(self):
         if self.is_active:
-            packacke_desc = f'{self.description} @ {self.adjusted_buy_price} / unit | Total cost base = {self.total_cost_base} |'
+            parcel_desc  = f'{self.description} @ {self.adjusted_buy_price} / unit | Total cost base = {self.total_cost_base} |'
             if self.is_sold:
-                packacke_desc += ' SOLD'
-            return packacke_desc 
+                parcel_desc  += ' SOLD'
+            return parcel_desc 
         else:
             return f'{self.pk} | INACTIVE'
 
@@ -939,7 +953,8 @@ class SellAllocation(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
+        return fiscal_year
     
     calculated_days_held = models.IntegerField(null=True, blank=True, editable=False)
     
@@ -1007,7 +1022,8 @@ class CostBaseAdjustment(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
+        return fiscal_year
     
     @property
     def date(self):
@@ -1053,14 +1069,14 @@ class CostBaseAdjustmentAllocation(BaseModel):
     activation_date = models.DateField(null=True, editable=False)   # not required
     deactivation_date = models.DateField(null=True, editable=False)
 
-    def bifurcate(self, target_parcel, remainder_parcel, target_fraction, date):
-        assert target_fraction >= 0, "Target fraction must be >= 0"
-        assert target_fraction <= 1, "Target fraction must be <= 1"
+    def bifurcate(self, target_parcel, remainder_parcel, date):
+
         assert self.is_active, "Parcel is inactive"
 
         target_parcel_qty = target_parcel.parcel_quantity
         remainder_parcel_qty = remainder_parcel.parcel_quantity
-        target_fraction = target_parcel_qty / (target_parcel_qty +  + remainder_parcel_qty)
+        
+        target_fraction = target_parcel_qty / (target_parcel_qty + remainder_parcel_qty)
 
         new_parcel_message = f'This CostBaseAdjustmentAllocation was created by splitting {self.pk} into two separate allocations.'
 
@@ -1115,7 +1131,8 @@ class Income(BaseModel):
     
     @safe_property
     def fiscal_year(self):
-        return self.account.fiscal_year_type.classify_date(input_date=self.date)
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
+        return fiscal_year
 
     def save(self, *args, **kwargs):
         if self.is_active:
