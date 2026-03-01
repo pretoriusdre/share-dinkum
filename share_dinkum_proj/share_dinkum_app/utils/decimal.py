@@ -1,5 +1,14 @@
 from decimal import Decimal, ROUND_HALF_UP
 
+
+def convert_to_decimal_field(value, field):
+
+    max_digits = field.max_digits
+    decimal_places = field.decimal_places
+    return convert_to_decimal(value, max_digits, decimal_places)
+
+
+
 def convert_to_decimal(value, max_digits, decimal_places):
     if value is None or str(value).strip().lower() == 'nan':
         return None
