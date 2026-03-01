@@ -4,6 +4,7 @@ from datetime import date, datetime
 import shutil
 from tqdm import tqdm
 from pathlib import Path
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.apps import apps
 from django.db.models import DecimalField, FileField
@@ -203,6 +204,10 @@ class DataLoader():
             record['account_id'] = self.account.id
             id = record.pop('id', None)
 
+            if issubclass(model, app_models.Trade):
+                record = self._ensure_trade_exchange_rate(record=record, model=model)
+
+
             # This is used on loading sell allocations using legacy id.
             lookup_legacy_sell = record.pop('lookup_legacy_sell', None)
             if lookup_legacy_sell:
@@ -242,21 +247,72 @@ class DataLoader():
                 save_with_logging(obj=obj, context="Creating new object without provided ID")
 
 
+    def _ensure_trade_exchange_rate(self, record, model):
+        unit_price = record.get('unit_price')
+        exchange_rate = record.get('exchange_rate')
+        trade_date = record.get('date')
+        account_currency = str(self.account.currency)
+
+        unit_price_currency = None
+        if hasattr(unit_price, 'currency'):
+            unit_price_currency = str(unit_price.currency)
+        else:
+            unit_price_currency = record.get('unit_price_currency')
+
+        if unit_price_currency and unit_price_currency != account_currency and exchange_rate is None:
+            exchange_rate_obj = self.get_or_create_exchange_rate(
+                convert_from=unit_price_currency,
+                exchange_date=trade_date,
+            )
+            record['exchange_rate'] = exchange_rate_obj
+
+        return record
+
     def get_or_create_exchange_rate(self, convert_from, exchange_date):
-        convert_to = self.account.currency
-        if convert_from == convert_to:
+        convert_from_code = str(convert_from)
+        convert_to_code = str(self.account.currency)
+
+        if convert_from_code == convert_to_code:
             return None
-        
-        exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=exchange_date)
-        record = {
-            'account' : self.account,
-            'date' : date.fromisoformat(str(exchange_date)),
-            'convert_from' : convert_from,
-            'convert_to' : convert_to,
-            'exchange_rate_multiplier' : exchange_rate_multiplier
-            }
-        exchange_rate, created = app_models.ExchangeRate.objects.get_or_create(**{'convert_from': convert_from, 'convert_to' : convert_to, 'date' : exchange_date}, defaults=record)
+
+        if exchange_date is None:
+            raise ValueError("Trade date is required to determine exchange rate during data load.")
+
+        if isinstance(exchange_date, datetime):
+            exchange_date = exchange_date.date()
+        elif hasattr(exchange_date, 'to_pydatetime'):
+            exchange_date = exchange_date.to_pydatetime().date()
+        elif isinstance(exchange_date, str):
+            exchange_date = date.fromisoformat(exchange_date)
+        elif not isinstance(exchange_date, date):
+            raise ValueError(f"Unsupported date value for exchange rate lookup: {exchange_date!r}")
+
+        exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(
+            convert_from=convert_from_code,
+            convert_to=convert_to_code,
+            exchange_date=exchange_date
+        )
+
+        if exchange_rate_multiplier is None:
+            raise ValueError(
+                f"Could not fetch exchange rate for {convert_from_code} to {convert_to_code} on {exchange_date}."
+            )
+
+        exchange_rate_multiplier = Decimal(str(exchange_rate_multiplier)).quantize(
+            Decimal('0.000001'), rounding=ROUND_HALF_UP
+        )
+
+        exchange_rate, _ = app_models.ExchangeRate.objects.update_or_create(
+            account=self.account,
+            convert_from=convert_from_code,
+            convert_to=convert_to_code,
+            date=exchange_date,
+            defaults={'exchange_rate_multiplier': exchange_rate_multiplier}
+        )
+
+        exchange_rate.update_current()
         return exchange_rate
+
 
 
     def get_available_parcels(self, legacy_id):

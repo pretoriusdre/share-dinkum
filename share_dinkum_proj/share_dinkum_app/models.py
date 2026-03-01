@@ -1,7 +1,8 @@
 # Standard library imports
 from datetime import date, timedelta, datetime, UTC
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 import copy
+
 
 # Django imports
 from django.db import models, transaction
@@ -36,9 +37,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def quantize_decimal(value, exponent):
+    """Convert a numeric value to Decimal with fixed precision."""
+    if value is None:
+        raise ValueError(
+            f"Expected a numeric value when quantizing to {exponent}, received None."
+        )
+
+    try:
+        if isinstance(value, Decimal):
+            decimal_value = value
+        else:
+            decimal_value = Decimal(str(value))
+        return decimal_value.quantize(exponent, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Could not convert value {value!r} to Decimal with exponent {exponent}."
+        ) from exc
 
 
 class AppUser(AbstractUser):
+
     MODEL_DESCRIPTION = 'User accounts registered in the application.'
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
@@ -412,42 +431,47 @@ class ExchangeRate(AbstractExchangeRate):
                 return  # No buys, so no need to fetch exchange rates
             
         try:
-            price_history = yfinanceinterface.get_exchange_rate_history(convert_from=convert_from, convert_to=convert_to, start_date=start_date)
+            price_history = yfinanceinterface.get_exchange_rate_history(
+                convert_from=convert_from, convert_to=convert_to, start_date=start_date
+            )
+
+            if price_history is None or price_history.empty:
+                return
+
+            if 'exchange_rate_multiplier' not in price_history.columns:
+                raise ValueError("Exchange rate history data missing 'exchange_rate_multiplier' column.")
 
             price_history['account'] = account
-            price_history['id'] = price_history['date'].apply(lambda x : uuid7())
-            
-            # Bulk insert/update price history
-            price_history_entries = []
-            for _, row in price_history.iterrows():
-                price_history_entries.append(
-                    ExchangeRate(
-                        **row.to_dict()
-                    )
-                )
+            price_history['id'] = price_history['date'].apply(lambda x: uuid7())
 
-            # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
+            six_decimal_places = Decimal('0.000001')
+            price_history['exchange_rate_multiplier'] = price_history['exchange_rate_multiplier'].apply(
+                lambda value: quantize_decimal(value, six_decimal_places)
+            )
+
+            price_history_entries = [
+                ExchangeRate(**row.to_dict())
+                for _, row in price_history.iterrows()
+            ]
+
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
-            if not price_history.empty:
-                latest_row = price_history.loc[price_history['date'].idxmax()]
-                latest = ExchangeRate(
-                    id=latest_row['id'],
-                    account=latest_row['account'],
-                    convert_from=latest_row['convert_from'],
-                    convert_to=latest_row['convert_to'],
-                    date=latest_row['date'],
-                    exchange_rate_multiplier=Decimal(str(latest_row['exchange_rate_multiplier'])).quantize(
-                        Decimal('0.000001'), rounding=ROUND_HALF_UP
-                    )
-                )
-                latest.update_current()
-                return latest
-
+            latest_row = price_history.loc[price_history['date'].idxmax()]
+            latest = ExchangeRate(
+                id=latest_row['id'],
+                account=latest_row['account'],
+                convert_from=latest_row['convert_from'],
+                convert_to=latest_row['convert_to'],
+                date=latest_row['date'],
+                exchange_rate_multiplier=latest_row['exchange_rate_multiplier'],
+            )
+            latest.update_current()
+            return latest
 
         except Exception as e:
             logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
+
 
 
 
@@ -578,26 +602,47 @@ class Instrument(BaseModel):
 
         try:
             price_history = yfinanceinterface.get_instrument_price_history(instrument=self, start_date=start_date)
-            price_history['account'] = self.account
-            price_history['id'] = price_history['date'].apply(lambda x : uuid7())
-            self.current_unit_price = Decimal(list(price_history['close'])[-1])
-            self.save()
-            
-            # Bulk insert/update price history
-            price_history_entries = []
-            for _, row in price_history.iterrows():
-                price_history_entries.append(
-                    InstrumentPriceHistory(
-                        **row.to_dict()
-                    )
+
+            if price_history is None or price_history.empty:
+                return
+
+            decimal_columns = {
+                'open': Decimal('0.000001'),
+                'high': Decimal('0.000001'),
+                'low': Decimal('0.000001'),
+                'close': Decimal('0.000001'),
+                'stock_splits': Decimal('0.000001'),
+            }
+
+            for column, exponent in decimal_columns.items():
+                if column not in price_history.columns:
+                    raise ValueError(f"Instrument price history missing required column '{column}'.")
+                price_history[column] = price_history[column].apply(
+                    lambda value, exp=exponent: quantize_decimal(value, exp)
                 )
 
-            # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
+            if 'volume' not in price_history.columns:
+                raise ValueError("Instrument price history missing 'volume' column.")
+            price_history['volume'] = price_history['volume'].fillna(0).apply(lambda value: int(value))
+
+            price_history['account'] = self.account
+            price_history['id'] = price_history['date'].apply(lambda x: uuid7())
+
+            latest_close = price_history['close'].iloc[-1]
+            self.current_unit_price = quantize_decimal(latest_close, Decimal('0.0001'))
+            self.save()
+            
+            price_history_entries = [
+                InstrumentPriceHistory(**row.to_dict())
+                for _, row in price_history.iterrows()
+            ]
+
             with transaction.atomic():
                 InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
         except Exception as e:
             logger.error(f'Error getting price history for {self}, {e}', exc_info=True)
+
 
 
 class InstrumentPriceHistory(models.Model):
@@ -657,32 +702,62 @@ class Trade(BaseModel):
     
     @safe_property
     def total_brokerage_converted(self):
-        total_brokerage_converted =  self.total_brokerage
+        total_brokerage_converted = self.total_brokerage
+
+        if str(total_brokerage_converted.currency) == str(self.account.currency):
+            return total_brokerage_converted
+
         if self.exchange_rate:
-            total_brokerage_converted = self.exchange_rate.apply(total_brokerage_converted)
-        return total_brokerage_converted
-    
+            converted = self.exchange_rate.apply(total_brokerage_converted)
+            if str(converted.currency) != str(self.account.currency):
+                raise ValueError(
+                    f"Exchange rate {self.exchange_rate} does not convert brokerage into account currency "
+                    f"for trade {self.pk}."
+                )
+            return converted
+
+        raise ValueError(
+            f"Exchange rate is required to convert brokerage from {total_brokerage_converted.currency} "
+            f"to account currency {self.account.currency} for trade {self.pk}."
+        )
+
     calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def unit_brokerage_converted(self):
-        unit_brokerage_converted =  self.total_brokerage / self.quantity
-        if self.exchange_rate:
-            unit_brokerage_converted = self.exchange_rate.apply(unit_brokerage_converted)
-        return unit_brokerage_converted
+        if self.quantity == 0:
+            return Money(Decimal('0'), self.account.currency)
+
+        total_converted = self.total_brokerage_converted
+        return total_converted / self.quantity
     
     calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def unit_price_converted(self):
         logger.debug('Calculating unit price converted on %s', self)
-        unit_price_converted =  self.unit_price
+        unit_price_converted = self.unit_price
+
+        if str(unit_price_converted.currency) == str(self.account.currency):
+            logger.debug('Unit price already in account currency for %s', self)
+            return unit_price_converted
+
         if self.exchange_rate:
-            unit_price_converted = self.exchange_rate.apply(unit_price_converted)
-            logger.debug('Converted unit price is %s', unit_price_converted)
-        else:
-            logger.debug('No exchange rate available for %s', self)
-        return unit_price_converted
+            converted = self.exchange_rate.apply(unit_price_converted)
+            logger.debug('Converted unit price is %s', converted)
+            if str(converted.currency) != str(self.account.currency):
+                raise ValueError(
+                    f"Exchange rate {self.exchange_rate} does not convert unit price into account currency "
+                    f"for trade {self.pk}."
+                )
+            return converted
+
+        logger.debug('No exchange rate available for %s', self)
+        raise ValueError(
+            f"Exchange rate is required to convert unit price from {unit_price_converted.currency} "
+            f"to account currency {self.account.currency} for trade {self.pk}."
+        )
+
 
     def __str__(self):
         return f'{self.description}'
@@ -731,7 +806,15 @@ class Sell(Trade):
     @safe_property
     def proceeds(self):
         proceeds = (self.quantity * self.unit_price_converted) - self.total_brokerage_converted
+
+        if isinstance(proceeds, Money) and str(proceeds.currency) != str(self.account.currency):
+            raise ValueError(
+                f"Sell proceeds for trade {self.pk} remain in {proceeds.currency}. Provide an exchange rate "
+                f"to convert to the account currency {self.account.currency}."
+            )
+
         return proceeds
+
     
     calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
