@@ -1,8 +1,9 @@
 import yfinance as yf
 from datetime import date, timedelta, datetime, UTC
-from decimal import Decimal
 import pandas as pd
 import string
+
+from share_dinkum_app.utils import convert_to_decimal
 
 
 import logging
@@ -47,7 +48,10 @@ def get_instrument_price_history(instrument, start_date):
         price_history['stock_splits'] = pd.to_numeric(price_history['stock_splits'], errors='coerce')
 
         price_history = price_history[['instrument', 'date', 'open', 'high', 'low', 'close', 'volume', 'stock_splits']]
-        
+
+        for col in ['open', 'high', 'low', 'close', 'stock_splits']:
+            price_history[col] = price_history[col].apply(lambda val: convert_to_decimal(val, 16, 6))
+            
         return price_history
 
     except Exception as e:
@@ -73,7 +77,11 @@ def get_exchange_rate_history(convert_from, convert_to, start_date):
         price_history['date'] = price_history['date'].apply(lambda x : x.date())
         price_history['exchange_rate_multiplier'] = pd.to_numeric(price_history['close'], errors='coerce')
         price_history = price_history[['convert_from', 'convert_to', 'date', 'exchange_rate_multiplier']]
+
         price_history['is_continuous_history'] = True
+        price_history['exchange_rate_multiplier'] = price_history['exchange_rate_multiplier'].apply(
+            lambda val: convert_to_decimal(val, 16, 6)
+        )
         
         return price_history
 
@@ -97,7 +105,11 @@ def get_exchange_rate(convert_from, convert_to, exchange_date=None):
     end_date_str = (exchange_date + timedelta(days=3)).isoformat()
     try:
         exchange_rate_history = yfinance_obj.history(start=start_date_str, end=end_date_str)
-        return Decimal(exchange_rate_history['Close'].values[0])
+        close_values = exchange_rate_history['Close'].values
+        if len(close_values) == 0:
+            logger.warning('No exchange rate data returned for %s between %s and %s', ticker_code, start_date_str, end_date_str)
+            return None
+        return convert_to_decimal(close_values[0], 16, 6)
     except Exception as e:
         logger.error(f"Error fetching exchange rate for {ticker_code}: {e}", exc_info=True)
         logger.error('Try to update yfinance package to latest version if the issue persists.')

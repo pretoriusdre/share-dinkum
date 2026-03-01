@@ -22,6 +22,7 @@ from djmoney.money import Money
 
 # Local app imports
 from share_dinkum_app import yfinanceinterface
+from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
@@ -380,8 +381,9 @@ class ExchangeRate(AbstractExchangeRate):
                     exchange_date=exchange_date,
                 )
                 if fetched_rate is not None:
-                    obj.exchange_rate_multiplier = fetched_rate
-                    obj.save()
+                    field = cls._meta.get_field('exchange_rate_multiplier')
+                    obj.exchange_rate_multiplier = convert_to_decimal_field(fetched_rate, field)
+                    obj.save(update_fields=['exchange_rate_multiplier'])
                 else:
                     logger.warning(
                         "Could not fetch exchange rate for %s to %s on %s; keeping default.",
@@ -412,7 +414,13 @@ class ExchangeRate(AbstractExchangeRate):
                 return  # No buys, so no need to fetch exchange rates
             
         try:
+
             price_history = yfinanceinterface.get_exchange_rate_history(convert_from=convert_from, convert_to=convert_to, start_date=start_date)
+
+            field = cls._meta.get_field('exchange_rate_multiplier')
+            price_history['exchange_rate_multiplier'] = price_history['exchange_rate_multiplier'].apply(
+                lambda val: convert_to_decimal_field(val, field)
+            )
 
             price_history['account'] = account
             price_history['id'] = price_history['date'].apply(lambda x : uuid7())
@@ -432,15 +440,17 @@ class ExchangeRate(AbstractExchangeRate):
 
             if not price_history.empty:
                 latest_row = price_history.loc[price_history['date'].idxmax()]
+                latest_multiplier = convert_to_decimal_field(
+                    latest_row['exchange_rate_multiplier'],
+                    field
+                )
                 latest = ExchangeRate(
                     id=latest_row['id'],
                     account=latest_row['account'],
                     convert_from=latest_row['convert_from'],
                     convert_to=latest_row['convert_to'],
                     date=latest_row['date'],
-                    exchange_rate_multiplier=Decimal(str(latest_row['exchange_rate_multiplier'])).quantize(
-                        Decimal('0.000001'), rounding=ROUND_HALF_UP
-                    )
+                    exchange_rate_multiplier=latest_multiplier
                 )
                 latest.update_current()
                 return latest
@@ -578,9 +588,27 @@ class Instrument(BaseModel):
 
         try:
             price_history = yfinanceinterface.get_instrument_price_history(instrument=self, start_date=start_date)
+            if price_history.empty:
+                logger.warning('No price history returned for %s starting %s', self, start_date)
+                return
+
+            decimal_fields = {
+                field_name: InstrumentPriceHistory._meta.get_field(field_name)
+                for field_name in ['open', 'high', 'low', 'close', 'stock_splits']
+            }
+            for column, field in decimal_fields.items():
+                price_history[column] = price_history[column].apply(
+                    lambda val: convert_to_decimal_field(val, field)
+                )
+
             price_history['account'] = self.account
             price_history['id'] = price_history['date'].apply(lambda x : uuid7())
-            self.current_unit_price = Decimal(list(price_history['close'])[-1])
+
+            instrument_price_field = self._meta.get_field('current_unit_price')
+            self.current_unit_price = convert_to_decimal_field(
+                price_history['close'].iloc[-1],
+                instrument_price_field
+            )
             self.save()
             
             # Bulk insert/update price history
