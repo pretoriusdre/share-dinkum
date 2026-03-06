@@ -51,7 +51,7 @@ If you save your **[Account]** object, you have the option to update your price 
 ![Graphs 1](docs/images/graphs_1.png)
 ![Graphs 2](docs/images/graphs_2.png)
 ![Graphs 3](docs/images/graphs_3.png)
-
+(This is sample / fake data - TODO make it look more normal)
 
 ![Data Export Index](docs/images/data_export_index_sheet.png)
 
