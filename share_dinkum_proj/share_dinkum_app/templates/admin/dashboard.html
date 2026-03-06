@@ -162,6 +162,15 @@
                         <p class="no-data">{% trans "No trade history is available yet." %}</p>
                     {% endif %}
                 </section>
+
+                <section class="chart-card chart-card--wide">
+                    <h2>{% trans "Portfolio value over time" %}</h2>
+                    {% if value_chart_labels and value_chart_datasets %}
+                        <canvas id="portfolioValue" aria-label="{% trans "Portfolio value over time by instrument" %}"></canvas>
+                    {% else %}
+                        <p class="no-data">{% trans "No portfolio value data is available yet." %}</p>
+                    {% endif %}
+                </section>
             </div>
         </div>
 
@@ -187,6 +196,8 @@
 {{ income_chart_distributions|json_script:"income-distributions-data" }}
 {{ area_chart_labels|json_script:"area-labels-data" }}
 {{ area_chart_datasets|json_script:"area-datasets-data" }}
+{{ value_chart_labels|json_script:"value-labels-data" }}
+{{ value_chart_datasets|json_script:"value-datasets-data" }}
 
 <script>
     (function () {
@@ -236,6 +247,8 @@
         const incomeDistributionsNode = document.getElementById('income-distributions-data');
         const areaLabelsNode = document.getElementById('area-labels-data');
         const areaDatasetsNode = document.getElementById('area-datasets-data');
+        const valueLabelsNode = document.getElementById('value-labels-data');
+        const valueDatasetsNode = document.getElementById('value-datasets-data');
 
         const parcelLabels = parcelLabelsNode ? JSON.parse(parcelLabelsNode.textContent) : [];
         const parcelValues = parcelValuesNode ? JSON.parse(parcelValuesNode.textContent) : [];
@@ -244,6 +257,8 @@
         const incomeDistributions = incomeDistributionsNode ? JSON.parse(incomeDistributionsNode.textContent) : [];
         const areaLabels = areaLabelsNode ? JSON.parse(areaLabelsNode.textContent) : [];
         const areaDatasetsRaw = areaDatasetsNode ? JSON.parse(areaDatasetsNode.textContent) : [];
+        const valueLabels = valueLabelsNode ? JSON.parse(valueLabelsNode.textContent) : [];
+        const valueDatasetsRaw = valueDatasetsNode ? JSON.parse(valueDatasetsNode.textContent) : [];
 
         const parcelCanvas = document.getElementById('parcelDonut');
         if (parcelCanvas && parcelLabels.length) {
@@ -410,6 +425,69 @@
                             beginAtZero: true,
                             ticks: {
                                 callback: (value) => formatUnits(value),
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        const valueCanvas = document.getElementById('portfolioValue');
+        if (valueCanvas && valueLabels.length && valueDatasetsRaw.length) {
+            const valueDatasets = valueDatasetsRaw.map((dataset, idx) => {
+                const color = palette[idx % palette.length];
+                return {
+                    label: dataset.label,
+                    data: dataset.data,
+                    borderColor: color,
+                    backgroundColor: toRGBA(color, 0.25),
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                };
+            });
+
+            new window.Chart(valueCanvas, {
+                type: 'line',
+                data: {
+                    labels: valueLabels,
+                    datasets: valueDatasets,
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    spanGaps: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`,
+                                footer: (items) => {
+                                    const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                    return `${totalLabel}: ${formatCurrency(total)}`;
+                                },
+                            },
+                        },
+                        datalabels: false,
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 0,
+                                minRotation: 0,
+                            },
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: (value) => formatCurrency(value),
                             },
                         },
                     },

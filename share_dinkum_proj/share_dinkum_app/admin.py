@@ -394,7 +394,15 @@ def _prepare_dashboard_context(request, context):
                     baseline_date = earliest_date - timedelta(days=1)
                     available_dates.add(baseline_date)
                 available_dates.add(date.today())
-                sorted_dates = sorted(available_dates)
+
+                start_date = min(available_dates)
+                end_date = max(available_dates)
+                total_days = (end_date - start_date).days
+                sorted_dates = [
+                    start_date + timedelta(days=offset)
+                    for offset in range(total_days + 1)
+                ]
+
 
                 instrument_by_id = {instrument.id: instrument for instrument in instruments}
                 instrument_name_by_id = {inst_id: instrument.name for inst_id, instrument in instrument_by_id.items()}
