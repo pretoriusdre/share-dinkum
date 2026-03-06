@@ -155,12 +155,40 @@ class Account(models.Model):
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
 
     def update_all_price_history(self):
-        """Update price history for all instruments with a position > 0 in this account."""
+        """
+        Update price history for instruments held in this account.
+
+        Instruments with an open position are always refreshed. Instruments that have been fully
+        sold continue to refresh until at least one data point exists after their final sell date.
+        """
         instruments = Instrument.objects.filter(account=self, is_active=True)
 
         for instrument in instruments:
-            if instrument.quantity_held > 0:  # Only update instruments with a position > 0
+            if instrument.quantity_held > 0:
                 instrument.update_price_history()
+                continue
+
+            last_sell_date = (
+                Sell.objects.filter(account=self, instrument=instrument)
+                .order_by('-date')
+                .values_list('date', flat=True)
+                .first()
+            )
+
+            if not last_sell_date:
+                continue
+
+            has_history_after_sell = InstrumentPriceHistory.objects.filter(
+                account=self,
+                instrument=instrument,
+                date__gt=last_sell_date,
+            ).exists()
+
+            if has_history_after_sell:
+                continue
+
+            instrument.update_price_history(end_date=date.today())
+
 
     def update_all_exchange_rate_history(self):
 
@@ -572,24 +600,47 @@ class Instrument(BaseModel):
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
 
-    def update_price_history(self):
-        # Fetch the latest price history entry for the related instrument
-        latest_price_history = InstrumentPriceHistory.objects.filter(instrument=self).order_by('-date').first()
+    def update_price_history(self, end_date=None):
+        """
+        Refresh price history data for this instrument up to the supplied end_date.
 
-        # Determine the start date
+        When no end_date is provided the current date is used. The fetch always rewinds a few days
+        from the most recent stored price to account for weekends or suspensions.
+        """
+        end_date = end_date or date.today()
+
+        latest_price_history = (
+            InstrumentPriceHistory.objects.filter(instrument=self)
+            .order_by('-date')
+            .first()
+        )
+
         if latest_price_history:
-            start_date = latest_price_history.date - timedelta(days=4) # Go back a few days to ensure no missing data
+            start_date = latest_price_history.date - timedelta(days=4)
+            if start_date > end_date:
+                start_date = end_date
         else:
-            earliest_buy = Buy.objects.filter(instrument=self).order_by('date').first()
+            earliest_buy = (
+                Buy.objects.filter(instrument=self)
+                .order_by('date')
+                .first()
+            )
             if earliest_buy:
                 start_date = earliest_buy.date
             else:
                 start_date = date(2020, 1, 1)
 
+        if start_date > end_date:
+            return
+
         try:
-            price_history = yfinanceinterface.get_instrument_price_history(instrument=self, start_date=start_date)
+            price_history = yfinanceinterface.get_instrument_price_history(
+                instrument=self,
+                start_date=start_date,
+                end_date=end_date,
+            )
             if price_history.empty:
-                logger.warning('No price history returned for %s starting %s', self, start_date)
+                logger.warning('No price history returned for %s between %s and %s', self, start_date, end_date)
                 return
 
             decimal_fields = {
@@ -602,7 +653,7 @@ class Instrument(BaseModel):
                 )
 
             price_history['account'] = self.account
-            price_history['id'] = price_history['date'].apply(lambda x : uuid7())
+            price_history['id'] = price_history['date'].apply(lambda x: uuid7())
 
             instrument_price_field = self._meta.get_field('current_unit_price')
             self.current_unit_price = convert_to_decimal_field(
@@ -610,8 +661,7 @@ class Instrument(BaseModel):
                 instrument_price_field
             )
             self.save()
-            
-            # Bulk insert/update price history
+
             price_history_entries = []
             for _, row in price_history.iterrows():
                 price_history_entries.append(
@@ -620,12 +670,12 @@ class Instrument(BaseModel):
                     )
                 )
 
-            # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
             with transaction.atomic():
                 InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
         except Exception as e:
-            logger.error(f'Error getting price history for {self}, {e}', exc_info=True)
+            logger.error(f'Error getting price history for {self} between {start_date} and {end_date}, {e}', exc_info=True)
+
 
 
 class InstrumentPriceHistory(models.Model):

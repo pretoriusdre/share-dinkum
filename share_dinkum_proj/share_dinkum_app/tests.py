@@ -299,6 +299,8 @@ class GetInstrumentPriceHistoryTests(TestCase):
         self.assertIn('open', result.columns)
         self.assertIn('volume', result.columns)
         self.assertIn('stock_splits', result.columns)
+        mock_ticker.history.assert_called_once_with(start='2024-01-01')
+
 
     def test_returns_empty_dataframe_on_exception(self, mock_yf):
         mock_ticker = MagicMock()
@@ -309,11 +311,34 @@ class GetInstrumentPriceHistoryTests(TestCase):
         result = yfinanceinterface.get_instrument_price_history(instrument, start_date=date(2024, 1, 1))
         self.assertTrue(result.empty)
         self.assertIsInstance(result, pd.DataFrame)
+        mock_ticker.history.assert_called_once_with(start='2024-01-01')
+
+
+
+    def test_end_date_is_inclusive_and_forwarded_to_history(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        df = pd.DataFrame({
+            'Open': [50.0], 'High': [51.0], 'Low': [49.0], 'Close': [50.5],
+            'Volume': [1000000], 'Stock Splits': [0],
+        }, index=pd.DatetimeIndex([pd.Timestamp('2024-01-31')]))
+        df.index.name = 'Date'
+        mock_ticker.history.return_value = df.copy()
+        result = yfinanceinterface.get_instrument_price_history(
+            instrument,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        self.assertFalse(result.empty)
+        mock_ticker.history.assert_called_once_with(start='2024-01-01', end='2024-02-01')
 
 
 # =============================================================================
 # Decorators
 # =============================================================================
+
 
 
 class SafePropertyTests(TestCase):

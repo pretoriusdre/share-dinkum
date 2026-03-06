@@ -17,14 +17,46 @@ def to_snake_case(text):
     return snake_case
 
 
-def get_instrument_price_history(instrument, start_date):
+def get_instrument_price_history(instrument, start_date, end_date=None):
     
     ticker_code = instrument.yfinance_ticker_code
     logger.info('Fetching price history for %s', ticker_code)
 
     try:
+        if start_date is None:
+            logger.warning('Skipping price history for %s; start_date was not provided.', ticker_code)
+            return pd.DataFrame([])
+
+        if isinstance(start_date, datetime):
+            start_date = start_date.date()
+        elif isinstance(start_date, str):
+            start_date = date.fromisoformat(start_date)
+        elif not isinstance(start_date, date):
+            raise TypeError('start_date must be a date, datetime, or ISO formatted string.')
+
+        if end_date is not None:
+            if isinstance(end_date, datetime):
+                end_date = end_date.date()
+            elif isinstance(end_date, str):
+                end_date = date.fromisoformat(end_date)
+            elif not isinstance(end_date, date):
+                raise TypeError('end_date must be a date, datetime, or ISO formatted string.')
+
+            if end_date < start_date:
+                logger.warning(
+                    'Skipping price history for %s; end_date %s is before start_date %s',
+                    ticker_code,
+                    end_date,
+                    start_date,
+                )
+                return pd.DataFrame([])
+
+        history_kwargs = {'start': start_date.isoformat()}
+        if end_date:
+            history_kwargs['end'] = (end_date + timedelta(days=1)).isoformat()
+
         yfinance_obj = yf.Ticker(ticker_code)
-        price_history = yfinance_obj.history(start=start_date)
+        price_history = yfinance_obj.history(**history_kwargs)
         price_history = price_history.reset_index() # set the date as a column
 
         price_history.columns = [to_snake_case(col) for col in price_history.columns]
@@ -57,6 +89,7 @@ def get_instrument_price_history(instrument, start_date):
     except Exception as e:
         logger.error(f"Error fetching data for {ticker_code}: {e}", exc_info=True)
         return pd.DataFrame([])
+
 
 
 def get_exchange_rate_history(convert_from, convert_to, start_date):
