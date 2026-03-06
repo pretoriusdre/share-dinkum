@@ -19,7 +19,7 @@ import share_dinkum_app
 from share_dinkum_app import excelinterface
 from share_dinkum_app import yfinanceinterface
 import share_dinkum_app.models as app_models
-from share_dinkum_app.utils import convert_to_decimal, save_with_logging, process_filefield
+from share_dinkum_app.utils import convert_to_decimal_field, save_with_logging, process_filefield
 from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
 
 
@@ -186,11 +186,9 @@ class DataLoader():
             field_instance = model._meta.get_field(col)
 
             if isinstance(field_instance, DecimalField):
-                max_digits = field_instance.max_digits
-                decimal_places = field_instance.decimal_places
-                convert_to_decimal_to_apply = lambda value: convert_to_decimal(value, max_digits=max_digits, decimal_places=decimal_places)
-                df[col] = df[col].apply(convert_to_decimal_to_apply)
+                df[col] = df[col].apply(lambda v: convert_to_decimal_field(v, field_instance))
             
+
             elif isinstance(field_instance, FileField):
                 df[col] = df[col].apply(process_filefield)
 

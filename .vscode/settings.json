@@ -1,0 +1,7 @@
+{
+    "python.venvPath": "${workspaceFolder}",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}\\share_dinkum_proj"
+    ]
+}

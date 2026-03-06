@@ -1,0 +1,18 @@
+{% extends "admin/base.html" %}
+{% load i18n %}
+
+{% block title %}{% if title %}{{ title }} | {% endif %}{{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+<h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
+{% endblock %}
+
+{% block nav-global %}
+{% if has_permission %}
+<nav id="nav-global" aria-label="{% trans 'Global navigation' %}">
+    <ul>
+        <li><a href="{% url 'admin:index' %}">{% trans 'Dashboard' %}</a></li>
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}

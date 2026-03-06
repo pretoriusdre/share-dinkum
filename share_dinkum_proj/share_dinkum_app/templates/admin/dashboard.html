@@ -1,0 +1,499 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block title %}{% trans "Dashboard" %} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <link rel="stylesheet" type="text/css" href="{% static 'admin/css/dashboard.css' %}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0" crossorigin="anonymous"></script>
+    <style>
+        .dashboard-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 1.5rem;
+            align-items: start;
+        }
+
+        @media (min-width: 1024px) {
+            .dashboard-shell {
+                grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+            }
+        }
+
+        .dashboard-main,
+        .dashboard-wrapper,
+        .dashboard-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .dashboard-title {
+            font-size: 1.75rem;
+            margin: 0;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .chart-card {
+            background: var(--body-bg, #fff);
+            border: 1px solid var(--hairline-color, #d1d5db);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px -20px rgba(0, 0, 0, 0.45);
+        }
+
+        .chart-card h2 {
+            font-size: 1.1rem;
+            margin-top: 0;
+            margin-bottom: 1rem;
+        }
+
+        .dashboard-subtitle {
+            color: var(--body-quiet-color, #6b7280);
+            font-size: 0.95rem;
+        }
+
+        .dashboard-summary {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin: 0.25rem 0 0;
+        }
+
+        .chart-card--wide,
+        .chart-card--full {
+            grid-column: 1 / -1;
+        }
+
+        .chart-card--wide canvas,
+        .chart-card--full canvas {
+            max-height: 420px;
+            min-height: 300px;
+        }
+
+        .no-data {
+            color: var(--body-quiet-color, #6b7280);
+            font-style: italic;
+            margin: 0;
+        }
+
+        .admin-app-list .app-list {
+            margin-top: 1rem;
+        }
+
+        .admin-app-list table {
+            width: 100%;
+        }
+
+        .dashboard-sidebar .module {
+            background: var(--body-bg, #fff);
+            border: 1px solid var(--hairline-color, #d1d5db);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px -20px rgba(0, 0, 0, 0.45);
+        }
+
+        .dashboard-sidebar .module h2 {
+            margin-top: 0;
+        }
+
+        canvas {
+            width: 100% !important;
+            height: auto !important;
+            max-height: 380px;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell">
+    <div class="dashboard-main">
+        <div class="dashboard-wrapper">
+            <div>
+                <h1 class="dashboard-title">{% trans "Dashboard" %}{% if dashboard_account %} – {{ dashboard_account.description }}{% endif %}</h1>
+                {% if dashboard_account and dashboard_currency %}
+                    <p class="dashboard-subtitle">
+                        {% blocktrans with currency=dashboard_currency %}All amounts shown in {{ currency }}.{% endblocktrans %}
+                    </p>
+                {% endif %}
+                {% if dashboard_portfolio_value_display %}
+                    <p class="dashboard-summary">
+                        {% blocktrans with value=dashboard_portfolio_value_display %}Total portfolio value: {{ value }}{% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+
+            {% if dashboard_message %}
+                <ul class="messagelist">
+                    <li class="{{ dashboard_message_level|default:'info' }}">{{ dashboard_message }}</li>
+                </ul>
+            {% endif %}
+
+            <div class="chart-grid">
+                <section class="chart-card chart-card--full">
+                    <h2>{% trans "Remaining parcel value" %}</h2>
+                    {% if parcel_chart_labels %}
+                        <canvas id="parcelDonut" aria-label="{% trans "Remaining parcel value by instrument" %}"></canvas>
+                    {% else %}
+                        <p class="no-data">{% trans "No parcel data is available yet." %}</p>
+                    {% endif %}
+                </section>
+
+                <section class="chart-card chart-card--full">
+                    <h2>{% trans "Income by fiscal year" %}</h2>
+                    {% if income_chart_labels %}
+                        <canvas id="incomeStacked" aria-label="{% trans "Income split by dividends and distributions" %}"></canvas>
+                    {% else %}
+                        <p class="no-data">{% trans "No income data is available yet." %}</p>
+                    {% endif %}
+                </section>
+
+                <section class="chart-card chart-card--wide">
+                    <h2>{% trans "Units held over time" %}</h2>
+                    {% if area_chart_labels and area_chart_datasets %}
+                        <canvas id="portfolioArea" aria-label="{% trans "Units held over time by instrument" %}"></canvas>
+                    {% else %}
+                        <p class="no-data">{% trans "No trade history is available yet." %}</p>
+                    {% endif %}
+                </section>
+
+                <section class="chart-card chart-card--wide">
+                    <h2>{% trans "Portfolio value over time" %}</h2>
+                    {% if value_chart_labels and value_chart_datasets %}
+                        <canvas id="portfolioValue" aria-label="{% trans "Portfolio value over time by instrument" %}"></canvas>
+                    {% else %}
+                        <p class="no-data">{% trans "No portfolio value data is available yet." %}</p>
+                    {% endif %}
+                </section>
+            </div>
+        </div>
+
+        <section class="chart-card chart-card--full admin-app-list">
+            <h2>{% trans "Administrative modules" %}</h2>
+            {% if app_list %}
+                {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+            {% else %}
+                <p class="no-data">{% trans "No administrative modules are available for your account." %}</p>
+            {% endif %}
+        </section>
+    </div>
+
+    <aside class="dashboard-sidebar">
+        {% include "admin/index_sidebar.html" %}
+    </aside>
+</div>
+
+{{ parcel_chart_labels|json_script:"parcel-labels-data" }}
+{{ parcel_chart_values|json_script:"parcel-values-data" }}
+{{ income_chart_labels|json_script:"income-labels-data" }}
+{{ income_chart_dividends|json_script:"income-dividends-data" }}
+{{ income_chart_distributions|json_script:"income-distributions-data" }}
+{{ area_chart_labels|json_script:"area-labels-data" }}
+{{ area_chart_datasets|json_script:"area-datasets-data" }}
+{{ value_chart_labels|json_script:"value-labels-data" }}
+{{ value_chart_datasets|json_script:"value-datasets-data" }}
+
+<script>
+    (function () {
+        if (window.Chart && window.ChartDataLabels) {
+            window.Chart.register(window.ChartDataLabels);
+        }
+
+        const toRGBA = (hex, alpha) => {
+            const sanitized = (hex || '').replace('#', '');
+            if (sanitized.length !== 6) {
+                return hex || '';
+            }
+            const bigint = parseInt(sanitized, 16);
+            const r = (bigint >> 16) & 255;
+            const g = (bigint >> 8) & 255;
+            const b = bigint & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        };
+
+        const palette = [
+            '#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6',
+            '#0ea5e9', '#10b981', '#f97316', '#ec4899', '#94a3b8',
+            '#1f2937', '#22d3ee', '#a855f7', '#fb7185', '#65a30d',
+        ];
+
+        const currency = "{{ dashboard_currency|default:''|escapejs }}";
+        const totalLabel = '{% trans "Total" %}';
+        const formatCurrency = (value) => {
+            const numericValue = Number(value || 0);
+            const formatted = numericValue.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            });
+            return currency ? `${currency} ${formatted}` : formatted;
+        };
+        const formatUnits = (value) => {
+            const numericValue = Number(value || 0);
+            return numericValue.toLocaleString(undefined, {
+                maximumFractionDigits: 4,
+            });
+        };
+
+        const parcelLabelsNode = document.getElementById('parcel-labels-data');
+        const parcelValuesNode = document.getElementById('parcel-values-data');
+        const incomeLabelsNode = document.getElementById('income-labels-data');
+        const incomeDividendsNode = document.getElementById('income-dividends-data');
+        const incomeDistributionsNode = document.getElementById('income-distributions-data');
+        const areaLabelsNode = document.getElementById('area-labels-data');
+        const areaDatasetsNode = document.getElementById('area-datasets-data');
+        const valueLabelsNode = document.getElementById('value-labels-data');
+        const valueDatasetsNode = document.getElementById('value-datasets-data');
+
+        const parcelLabels = parcelLabelsNode ? JSON.parse(parcelLabelsNode.textContent) : [];
+        const parcelValues = parcelValuesNode ? JSON.parse(parcelValuesNode.textContent) : [];
+        const incomeLabels = incomeLabelsNode ? JSON.parse(incomeLabelsNode.textContent) : [];
+        const incomeDividends = incomeDividendsNode ? JSON.parse(incomeDividendsNode.textContent) : [];
+        const incomeDistributions = incomeDistributionsNode ? JSON.parse(incomeDistributionsNode.textContent) : [];
+        const areaLabels = areaLabelsNode ? JSON.parse(areaLabelsNode.textContent) : [];
+        const areaDatasetsRaw = areaDatasetsNode ? JSON.parse(areaDatasetsNode.textContent) : [];
+        const valueLabels = valueLabelsNode ? JSON.parse(valueLabelsNode.textContent) : [];
+        const valueDatasetsRaw = valueDatasetsNode ? JSON.parse(valueDatasetsNode.textContent) : [];
+
+        const parcelCanvas = document.getElementById('parcelDonut');
+        if (parcelCanvas && parcelLabels.length) {
+            new window.Chart(parcelCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels: parcelLabels,
+                    datasets: [
+                        {
+                            label: currency || undefined,
+                            data: parcelValues,
+                            backgroundColor: parcelLabels.map((_, idx) => palette[idx % palette.length]),
+                            hoverOffset: 12,
+                            borderWidth: 0,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.raw)}`,
+                            },
+                        },
+                        datalabels: {
+                            color: '#ffffff',
+                            font: {
+                                weight: '600',
+                                size: 12,
+                            },
+                            formatter: (value) => formatCurrency(value),
+                            padding: 4,
+                            clamp: true,
+                            align: 'center',
+                            anchor: 'center',
+                            display: (ctx) => Number(ctx.raw) > 0,
+                        },
+                    },
+                    animation: {
+                        animateScale: true,
+                    },
+                },
+            });
+        }
+
+        const incomeCanvas = document.getElementById('incomeStacked');
+        if (incomeCanvas && incomeLabels.length) {
+            new window.Chart(incomeCanvas, {
+                type: 'bar',
+                data: {
+                    labels: incomeLabels,
+                    datasets: [
+                        {
+                            label: '{% trans "Dividends" %}',
+                            data: incomeDividends,
+                            backgroundColor: '#2563eb',
+                            stack: 'income',
+                        },
+                        {
+                            label: '{% trans "Distributions" %}',
+                            data: incomeDistributions,
+                            backgroundColor: '#f59e0b',
+                            stack: 'income',
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`,
+                                footer: (items) => {
+                                    const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                    return `${totalLabel}: ${formatCurrency(total)}`;
+                                },
+                            },
+                        },
+                        datalabels: false,
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                        },
+                        y: {
+                            stacked: true,
+                            ticks: {
+                                callback: (value) => formatCurrency(value),
+                            },
+                            beginAtZero: true,
+                        },
+                    },
+                },
+            });
+        }
+
+        const areaCanvas = document.getElementById('portfolioArea');
+        if (areaCanvas && areaLabels.length && areaDatasetsRaw.length) {
+            const areaDatasets = areaDatasetsRaw.map((dataset, idx) => {
+                const color = palette[idx % palette.length];
+                return {
+                    label: dataset.label,
+                    data: dataset.data,
+                    borderColor: color,
+                    backgroundColor: toRGBA(color, 0.35),
+                    fill: true,
+                    tension: 0,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    stepped: 'before',
+                };
+            });
+
+            new window.Chart(areaCanvas, {
+                type: 'line',
+                data: {
+                    labels: areaLabels,
+                    datasets: areaDatasets,
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    spanGaps: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${formatUnits(ctx.parsed.y)}`,
+                                footer: (items) => {
+                                    const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                    return `${totalLabel}: ${formatUnits(total)}`;
+                                },
+                            },
+                        },
+                        datalabels: false,
+                    },
+                    scales: {
+                        x: {
+                            stacked: false,
+                            ticks: {
+                                maxRotation: 0,
+                                minRotation: 0,
+                            },
+                        },
+                        y: {
+                            stacked: false,
+                            beginAtZero: true,
+                            ticks: {
+                                callback: (value) => formatUnits(value),
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        const valueCanvas = document.getElementById('portfolioValue');
+        if (valueCanvas && valueLabels.length && valueDatasetsRaw.length) {
+            const valueDatasets = valueDatasetsRaw.map((dataset, idx) => {
+                const color = palette[idx % palette.length];
+                return {
+                    label: dataset.label,
+                    data: dataset.data,
+                    borderColor: color,
+                    backgroundColor: toRGBA(color, 0.25),
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                };
+            });
+
+            new window.Chart(valueCanvas, {
+                type: 'line',
+                data: {
+                    labels: valueLabels,
+                    datasets: valueDatasets,
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    spanGaps: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`,
+                                footer: (items) => {
+                                    const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                    return `${totalLabel}: ${formatCurrency(total)}`;
+                                },
+                            },
+                        },
+                        datalabels: false,
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 0,
+                                minRotation: 0,
+                            },
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: (value) => formatCurrency(value),
+                            },
+                        },
+                    },
+                },
+            });
+        }
+    })();
+</script>
+{% endblock %}

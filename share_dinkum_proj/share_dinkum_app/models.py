@@ -9,8 +9,10 @@ from django.contrib.auth.models import AbstractUser
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.exceptions import ValidationError
 from django.urls import reverse
-from django.db.models import Sum
+from django.db.models import Sum, F, Q
+from django.db.models.functions import Coalesce
 from django.forms.models import model_to_dict
 
 # Djmoney imports
@@ -20,6 +22,7 @@ from djmoney.money import Money
 
 # Local app imports
 from share_dinkum_app import yfinanceinterface
+from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
@@ -152,12 +155,40 @@ class Account(models.Model):
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
 
     def update_all_price_history(self):
-        """Update price history for all instruments with a position > 0 in this account."""
+        """
+        Update price history for instruments held in this account.
+
+        Instruments with an open position are always refreshed. Instruments that have been fully
+        sold continue to refresh until at least one data point exists after their final sell date.
+        """
         instruments = Instrument.objects.filter(account=self, is_active=True)
 
         for instrument in instruments:
-            if instrument.quantity_held > 0:  # Only update instruments with a position > 0
+            if instrument.quantity_held > 0:
                 instrument.update_price_history()
+                continue
+
+            last_sell_date = (
+                Sell.objects.filter(account=self, instrument=instrument)
+                .order_by('-date')
+                .values_list('date', flat=True)
+                .first()
+            )
+
+            if not last_sell_date:
+                continue
+
+            has_history_after_sell = InstrumentPriceHistory.objects.filter(
+                account=self,
+                instrument=instrument,
+                date__gt=last_sell_date,
+            ).exists()
+
+            if has_history_after_sell:
+                continue
+
+            instrument.update_price_history(end_date=date.today())
+
 
     def update_all_exchange_rate_history(self):
 
@@ -378,8 +409,9 @@ class ExchangeRate(AbstractExchangeRate):
                     exchange_date=exchange_date,
                 )
                 if fetched_rate is not None:
-                    obj.exchange_rate_multiplier = fetched_rate
-                    obj.save()
+                    field = cls._meta.get_field('exchange_rate_multiplier')
+                    obj.exchange_rate_multiplier = convert_to_decimal_field(fetched_rate, field)
+                    obj.save(update_fields=['exchange_rate_multiplier'])
                 else:
                     logger.warning(
                         "Could not fetch exchange rate for %s to %s on %s; keeping default.",
@@ -410,7 +442,13 @@ class ExchangeRate(AbstractExchangeRate):
                 return  # No buys, so no need to fetch exchange rates
             
         try:
+
             price_history = yfinanceinterface.get_exchange_rate_history(convert_from=convert_from, convert_to=convert_to, start_date=start_date)
+
+            field = cls._meta.get_field('exchange_rate_multiplier')
+            price_history['exchange_rate_multiplier'] = price_history['exchange_rate_multiplier'].apply(
+                lambda val: convert_to_decimal_field(val, field)
+            )
 
             price_history['account'] = account
             price_history['id'] = price_history['date'].apply(lambda x : uuid7())
@@ -430,15 +468,17 @@ class ExchangeRate(AbstractExchangeRate):
 
             if not price_history.empty:
                 latest_row = price_history.loc[price_history['date'].idxmax()]
+                latest_multiplier = convert_to_decimal_field(
+                    latest_row['exchange_rate_multiplier'],
+                    field
+                )
                 latest = ExchangeRate(
                     id=latest_row['id'],
                     account=latest_row['account'],
                     convert_from=latest_row['convert_from'],
                     convert_to=latest_row['convert_to'],
                     date=latest_row['date'],
-                    exchange_rate_multiplier=Decimal(str(latest_row['exchange_rate_multiplier'])).quantize(
-                        Decimal('0.000001'), rounding=ROUND_HALF_UP
-                    )
+                    exchange_rate_multiplier=latest_multiplier
                 )
                 latest.update_current()
                 return latest
@@ -478,23 +518,27 @@ class Instrument(BaseModel):
 
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
     
+
     @safe_property
     def quantity_held(self):
-
-        total_bought = Parcel.objects.filter(  # using Parcels' qty, to account for share splits
+        # Remaining quantity is a bit more complicated than just buys minus sells, since parcels can be split, consolidated and bifurcated.
+        parcels = Parcel.objects.filter(
             account=self.account,
             buy__instrument=self,
             deactivation_date__isnull=True
-        ).aggregate(total=Sum('parcel_quantity'))['total'] or Decimal('0')
+        ).annotate(
+            allocated=Coalesce(
+                Sum(
+                    'sale_allocation__quantity',
+                    filter=Q(sale_allocation__is_active=True)
+                ),
+                Decimal('0')
+            )
+        )
 
-        total_sold = Sell.objects.filter(
-            account=self.account,
-            instrument=self
-        ).aggregate(total=Sum('quantity'))['total'] or Decimal('0')
-
-    
-        return total_bought - total_sold
-
+        return parcels.aggregate(
+            total=Sum(F('parcel_quantity') - F('allocated'))
+        )['total'] or Decimal('0')
 
     calculated_value_held =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -556,28 +600,68 @@ class Instrument(BaseModel):
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
 
-    def update_price_history(self):
-        # Fetch the latest price history entry for the related instrument
-        latest_price_history = InstrumentPriceHistory.objects.filter(instrument=self).order_by('-date').first()
+    def update_price_history(self, end_date=None):
+        """
+        Refresh price history data for this instrument up to the supplied end_date.
 
-        # Determine the start date
+        When no end_date is provided the current date is used. The fetch always rewinds a few days
+        from the most recent stored price to account for weekends or suspensions.
+        """
+        end_date = end_date or date.today()
+
+        latest_price_history = (
+            InstrumentPriceHistory.objects.filter(instrument=self)
+            .order_by('-date')
+            .first()
+        )
+
         if latest_price_history:
-            start_date = latest_price_history.date - timedelta(days=4) # Go back a few days to ensure no missing data
+            start_date = latest_price_history.date - timedelta(days=4)
+            if start_date > end_date:
+                start_date = end_date
         else:
-            earliest_buy = Buy.objects.filter(instrument=self).order_by('date').first()
+            earliest_buy = (
+                Buy.objects.filter(instrument=self)
+                .order_by('date')
+                .first()
+            )
             if earliest_buy:
                 start_date = earliest_buy.date
             else:
                 start_date = date(2020, 1, 1)
 
+        if start_date > end_date:
+            return
+
         try:
-            price_history = yfinanceinterface.get_instrument_price_history(instrument=self, start_date=start_date)
+            price_history = yfinanceinterface.get_instrument_price_history(
+                instrument=self,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if price_history.empty:
+                logger.warning('No price history returned for %s between %s and %s', self, start_date, end_date)
+                return
+
+            decimal_fields = {
+                field_name: InstrumentPriceHistory._meta.get_field(field_name)
+                for field_name in ['open', 'high', 'low', 'close', 'stock_splits']
+            }
+            for column, field in decimal_fields.items():
+                price_history[column] = price_history[column].apply(
+                    lambda val: convert_to_decimal_field(val, field)
+                )
+
             price_history['account'] = self.account
-            price_history['id'] = price_history['date'].apply(lambda x : uuid7())
-            self.current_unit_price = Decimal(list(price_history['close'])[-1])
+            price_history['id'] = price_history['date'].apply(lambda x: uuid7())
+
+            instrument_price_field = self._meta.get_field('current_unit_price')
+            self.current_unit_price = convert_to_decimal_field(
+                price_history['close'].iloc[-1],
+                instrument_price_field
+            )
             self.save()
-            
-            # Bulk insert/update price history
+
             price_history_entries = []
             for _, row in price_history.iterrows():
                 price_history_entries.append(
@@ -586,12 +670,12 @@ class Instrument(BaseModel):
                     )
                 )
 
-            # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
             with transaction.atomic():
                 InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
         except Exception as e:
-            logger.error(f'Error getting price history for {self}, {e}', exc_info=True)
+            logger.error(f'Error getting price history for {self} between {start_date} and {end_date}, {e}', exc_info=True)
+
 
 
 class InstrumentPriceHistory(models.Model):
@@ -740,6 +824,14 @@ class Sell(Trade):
         allocated_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return (self.quantity or 0 ) - allocated_quantity
     
+    def clean(self):
+        super().clean()
+        # Ensure an exchange rate is provided for cross-currency sells
+        if self.instrument.currency != self.account.currency and not self.exchange_rate:
+            raise ValidationError(
+                "Exchange rate is required when instrument currency differs from account currency."
+            )
+
 
 class Parcel(BaseModel):
     MODEL_DESCRIPTION = 'Collections of shares with the same unit properties. Can be split into other parcels.'
@@ -781,7 +873,7 @@ class Parcel(BaseModel):
     
     @safe_property
     def is_sold(self):
-        return self.remaining_quantity == 0
+        return self.remaining_quantity <= Decimal('0') # Using <= to account for any potential rounding issues
 
 
     @safe_property
@@ -807,7 +899,7 @@ class Parcel(BaseModel):
             deactivation_date__isnull=True
         ).aggregate(
             total=Sum('cost_base_increase')
-        )['total'] or 0
+        )['total'] or Decimal('0')
 
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
