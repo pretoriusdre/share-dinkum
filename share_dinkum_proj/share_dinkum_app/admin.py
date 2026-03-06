@@ -13,19 +13,44 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm
 
 from django.db import models
-from django.db.models import Model, ForeignKey
+from django.db.models import Model, ForeignKey, Min
+
 from django.db.models.fields.reverse_related import ManyToManyRel
 from django.db.models import ManyToManyRel, ManyToManyField
+from django.template.response import TemplateResponse
+from django.urls import path
 
 import share_dinkum_app
+
 import share_dinkum_app.admin
 import share_dinkum_app.models
 
-from share_dinkum_app.models import AppUser, Account, Parcel, Buy
+from share_dinkum_app.models import (
+    AppUser,
+    Account,
+    Parcel,
+    Buy,
+    Instrument,
+    Dividend,
+    Distribution,
+    InstrumentPriceHistory,
+    ExchangeRate,
+    CurrentExchangeRate,
+    Sell,
+)
 
 
+
+from collections import defaultdict
+from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import logging
+from types import MethodType
+
 logger = logging.getLogger(__name__)
+
+
+
 
 
 class BaseInline(admin.TabularInline):
@@ -189,9 +214,389 @@ class AccountAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
 
 
+def _select_account_for_user(user):
+    if not getattr(user, 'is_authenticated', False):
+        return None
+    account = getattr(user, 'default_account', None)
+    if account:
+        return account
+    return Account.objects.filter(owner=user).order_by('created_at').first()
+
+
+def _decimal_to_float(value):
+    if value is None:
+        return 0.0
+    if not isinstance(value, Decimal):
+        value = Decimal(value)
+    return float(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+
+def _format_money(money):
+    if money is None:
+        return ''
+    amount = getattr(money, 'amount', None)
+    if amount is None:
+        return ''
+    if not isinstance(amount, Decimal):
+        amount = Decimal(amount)
+    formatted_amount = amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    currency = getattr(money, 'currency', '')
+    currency_text = str(currency) if currency else ''
+    if currency_text:
+        return f"{currency_text} {formatted_amount:,.2f}"
+    return f"{formatted_amount:,.2f}"
+
+
+def _prepare_dashboard_context(request, context):
+    account = _select_account_for_user(request.user)
+
+    dashboard_message = None
+    dashboard_message_level = 'info'
+    total_portfolio_value_display = None
+    parcel_labels = []
+    parcel_values = []
+    income_labels = []
+    dividend_series = []
+    distribution_series = []
+    area_chart_labels = []
+    area_chart_datasets = []
+    dashboard_currency = None
+
+    if not account:
+        dashboard_message = (
+            'No default account is associated with your user. '
+            'Select a default account on your user profile or create an account to view dashboard insights.'
+        )
+        dashboard_message_level = 'warning'
+    else:
+        dashboard_currency = str(account.currency)
+        instruments = list(
+            Instrument.objects.filter(account=account, is_active=True)
+            .select_related('market')
+            .order_by('name')
+        )
+
+        for instrument in instruments:
+            try:
+                converted_value = instrument.value_held_converted
+            except Exception as exc:  # pragma: no cover - defensive log
+                logger.warning(
+                    'Skipping instrument %s for dashboard value calculation: %s',
+                    instrument,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            if not converted_value:
+                continue
+
+            amount = getattr(converted_value, 'amount', None)
+            if amount is None or amount <= 0:
+                continue
+
+            parcel_labels.append(instrument.name)
+            parcel_values.append(_decimal_to_float(amount))
+
+        income_by_year = {}
+
+        dividends = Dividend.objects.filter(account=account, is_active=True)
+        for dividend in dividends:
+            fiscal_year = dividend.fiscal_year
+            if not fiscal_year:
+                continue
+
+            label = fiscal_year.name or fiscal_year.get_name()
+            year_key = fiscal_year.start_year
+            entry = income_by_year.setdefault(
+                year_key,
+                {'label': label, 'dividends': Decimal('0'), 'distributions': Decimal('0')},
+            )
+
+            total_money = dividend.total_dividend_converted or dividend.total_dividend
+            if total_money:
+                entry['dividends'] += Decimal(total_money.amount)
+
+        distributions = Distribution.objects.filter(account=account, is_active=True)
+        for distribution in distributions:
+            fiscal_year = distribution.fiscal_year
+            if not fiscal_year:
+                continue
+
+            label = fiscal_year.name or fiscal_year.get_name()
+            year_key = fiscal_year.start_year
+            entry = income_by_year.setdefault(
+                year_key,
+                {'label': label, 'dividends': Decimal('0'), 'distributions': Decimal('0')},
+            )
+
+            total_money = distribution.total_distribution_converted or distribution.total_distribution
+            if total_money:
+                entry['distributions'] += Decimal(total_money.amount)
+
+        sorted_years = sorted(income_by_year)
+        for year in sorted_years:
+            entry = income_by_year[year]
+            income_labels.append(entry['label'])
+            dividend_series.append(_decimal_to_float(entry['dividends']))
+            distribution_series.append(_decimal_to_float(entry['distributions']))
+
+        total_portfolio_value = account.portfolio_value_converted
+        if total_portfolio_value is not None:
+            total_portfolio_value_display = _format_money(total_portfolio_value)
+
+        buy_records = list(
+            Buy.objects.filter(
+                account=account,
+                is_active=True,
+            ).values('instrument_id', 'date', 'quantity')
+        )
+
+        area_instrument_ids = sorted({record['instrument_id'] for record in buy_records})
+
+        if area_instrument_ids:
+            sell_records = list(
+                Sell.objects.filter(
+                    account=account,
+                    is_active=True,
+                    instrument_id__in=area_instrument_ids,
+                ).values('instrument_id', 'date', 'quantity')
+            )
+
+            first_buy_by_instrument = {}
+            for record in buy_records:
+                inst_id = record['instrument_id']
+                record_date = record['date']
+                first_date = first_buy_by_instrument.get(inst_id)
+                if first_date is None or record_date < first_date:
+                    first_buy_by_instrument[inst_id] = record_date
+
+            overall_start_date = min(first_buy_by_instrument.values(), default=None)
+
+            if overall_start_date is None:
+                earliest_price_history = (
+                    InstrumentPriceHistory.objects.filter(
+                        account=account,
+                        instrument_id__in=area_instrument_ids,
+                    )
+                    .order_by('date')
+                    .values_list('date', flat=True)
+                    .first()
+                )
+                overall_start_date = earliest_price_history
+
+            if overall_start_date is None:
+                overall_start_date = date.today() - timedelta(days=180)
+            else:
+                overall_start_date = overall_start_date - timedelta(days=5)
+
+            price_history = list(
+                InstrumentPriceHistory.objects.filter(
+                    account=account,
+                    instrument_id__in=area_instrument_ids,
+                    date__gte=overall_start_date,
+                )
+                .select_related('instrument')
+                .order_by('date')
+            )
+
+            if price_history:
+                exchange_rate_cache = {}
+                last_rate_by_currency = {}
+
+                instrument_name_by_id = {instrument.id: instrument.name for instrument in instruments}
+                instrument_currency_by_id = {instrument.id: str(instrument.currency) for instrument in instruments}
+
+                missing_instrument_ids = [
+                    inst_id
+                    for inst_id in area_instrument_ids
+                    if inst_id not in instrument_name_by_id
+                ]
+                if missing_instrument_ids:
+                    for instrument_obj in Instrument.objects.filter(account=account, id__in=missing_instrument_ids):
+                        instrument_name_by_id[instrument_obj.id] = instrument_obj.name
+                        instrument_currency_by_id[instrument_obj.id] = str(instrument_obj.currency)
+
+                price_by_instrument = defaultdict(dict)
+
+                available_dates = set()
+
+                for history in price_history:
+                    price_by_instrument[history.instrument_id][history.date] = Decimal(history.close)
+                    available_dates.add(history.date)
+
+                trade_adjustments = defaultdict(dict)
+                for record in buy_records:
+                    inst_id = record['instrument_id']
+                    if inst_id not in area_instrument_ids:
+                        continue
+                    trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
+                    trade_adjustments[record['date']][inst_id] += record['quantity']
+
+                for record in sell_records:
+                    inst_id = record['instrument_id']
+                    if inst_id not in area_instrument_ids:
+                        continue
+                    trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
+                    trade_adjustments[record['date']][inst_id] -= record['quantity']
+
+                available_dates.update(trade_adjustments.keys())
+                sorted_dates = sorted(available_dates)
+
+                ordered_instrument_ids = sorted(
+                    area_instrument_ids,
+                    key=lambda inst_id: instrument_name_by_id.get(inst_id, ''),
+                )
+
+                quantities_current = {inst_id: Decimal('0') for inst_id in ordered_instrument_ids}
+                last_price = {inst_id: None for inst_id in ordered_instrument_ids}
+                dataset_values = {inst_id: [] for inst_id in ordered_instrument_ids}
+
+                def get_multiplier(currency_code, history_date):
+                    if currency_code == dashboard_currency:
+                        return Decimal('1')
+                    cache_key = (currency_code, history_date)
+                    if cache_key in exchange_rate_cache:
+                        return exchange_rate_cache[cache_key]
+                    rate = ExchangeRate.objects.filter(
+                        account=account,
+                        convert_from=currency_code,
+                        convert_to=dashboard_currency,
+                        date=history_date,
+                    ).only('exchange_rate_multiplier').first()
+                    if rate:
+                        multiplier_value = rate.exchange_rate_multiplier
+                        last_rate_by_currency[currency_code] = multiplier_value
+                    else:
+                        multiplier_value = last_rate_by_currency.get(currency_code)
+                        if multiplier_value is None:
+                            current_rate = CurrentExchangeRate.get_or_create(
+                                account=account,
+                                convert_from=currency_code,
+                                convert_to=dashboard_currency,
+                            )
+                            multiplier_value = (
+                                current_rate.exchange_rate_multiplier
+                                if current_rate
+                                else Decimal('1')
+                            )
+                            last_rate_by_currency[currency_code] = multiplier_value
+                    exchange_rate_cache[cache_key] = multiplier_value
+                    return multiplier_value
+
+                for date_key in sorted_dates:
+                    adjustments = trade_adjustments.get(date_key, {})
+                    for inst_id, delta in adjustments.items():
+                        quantities_current[inst_id] = (
+                            quantities_current[inst_id] + delta
+                        ).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
+                    for inst_id in ordered_instrument_ids:
+                        price_map = price_by_instrument.get(inst_id, {})
+                        if date_key in price_map:
+                            last_price[inst_id] = price_map[date_key]
+
+                        price_value = last_price[inst_id]
+                        quantity_value = quantities_current[inst_id]
+
+                        if price_value is None or quantity_value <= 0:
+                            dataset_values[inst_id].append(0.0)
+                            continue
+
+                        currency_code = instrument_currency_by_id.get(inst_id, dashboard_currency)
+                        multiplier = get_multiplier(currency_code, date_key)
+                        portfolio_value = price_value * quantity_value * multiplier
+                        dataset_values[inst_id].append(_decimal_to_float(portfolio_value))
+
+                area_chart_labels = [date.isoformat() for date in sorted_dates]
+                area_chart_datasets = [
+                    {
+                        'label': instrument_name_by_id.get(inst_id, str(inst_id)),
+                        'data': dataset_values[inst_id],
+                    }
+                    for inst_id in ordered_instrument_ids
+                ]
+
+        if not parcel_labels:
+            dashboard_message = (
+                f'No active parcels with a remaining value were found for {account.description}.'
+            )
+            dashboard_message_level = 'info'
+
+    context.update(
+        {
+            'dashboard_account': account,
+            'dashboard_currency': dashboard_currency,
+            'dashboard_message': dashboard_message,
+            'dashboard_message_level': dashboard_message_level,
+            'dashboard_portfolio_value_display': total_portfolio_value_display,
+            'parcel_chart_labels': parcel_labels,
+            'parcel_chart_values': parcel_values,
+            'income_chart_labels': income_labels,
+            'income_chart_dividends': dividend_series,
+            'income_chart_distributions': distribution_series,
+            'area_chart_labels': area_chart_labels,
+            'area_chart_datasets': area_chart_datasets,
+        }
+    )
+    return context
+
+
+def dashboard_view(request):
+    context = admin.site.each_context(request)
+    app_list = admin.site.get_app_list(request)
+    context['app_list'] = app_list
+    context['available_apps'] = app_list
+    context.setdefault('title', admin.site.index_title)
+    context.setdefault('subtitle', None)
+    _prepare_dashboard_context(request, context)
+    request.current_app = admin.site.name
+    return TemplateResponse(request, 'admin/dashboard.html', context)
+
+
+
+
+
+if not getattr(admin.site, '_dashboard_url_included', False):
+    original_get_urls = admin.site.get_urls
+
+    def get_urls():
+        urls = original_get_urls()
+        custom_urls = [
+            path('dashboard/', admin.site.admin_view(dashboard_view), name='dashboard'),
+        ]
+        return custom_urls + urls
+
+    admin.site.get_urls = get_urls
+    admin.site._dashboard_url_included = True
+
+
+if not getattr(admin.site, '_dashboard_index_overridden', False):
+
+    def _dashboard_index(self, request, extra_context=None):
+        app_list = self.get_app_list(request)
+        context = {
+            **self.each_context(request),
+            'title': self.index_title,
+            'subtitle': None,
+            'app_list': app_list,
+            'available_apps': app_list,
+        }
+        if extra_context:
+            context.update(extra_context)
+        _prepare_dashboard_context(request, context)
+        request.current_app = self.name
+        template = self.index_template or 'admin/dashboard.html'
+        return TemplateResponse(request, template, context)
+
+    admin.site.index = MethodType(_dashboard_index, admin.site)
+    admin.site._dashboard_index_overridden = True
+
 
 # Map specific models to custom admin if required, or hide them.
+
 model_admin_map = {
+
     Account : AccountAdmin,
     AppUser : AppUserAdmin,
     Group : HiddenModelAdmin,

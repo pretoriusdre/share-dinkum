@@ -1,0 +1,30 @@
+{% load i18n log %}
+
+<div class="module" id="recent-actions-module">
+    <h2>{% trans "Recent actions" %}</h2>
+    {% if user.is_authenticated and user.is_active and user.is_staff %}
+        {% get_admin_log 10 as admin_log %}
+        {% if admin_log %}
+            <ul class="actionlist">
+                {% for entry in admin_log %}
+                    <li class="{% if entry.is_addition %}addlink{% elif entry.is_change %}changelink{% elif entry.is_deletion %}deletelink{% endif %}">
+                        {% if entry.is_deletion or not entry.get_admin_url %}
+                            {{ entry.object_repr }}
+                        {% else %}
+                            <a href="{{ entry.get_admin_url }}">{{ entry.object_repr }}</a>
+                        {% endif %}
+                        <span class="mini quiet">
+                            {% filter force_escape %}
+                                {% blocktrans with user=entry.user.get_username %}by {{ user }}{% endblocktrans %}
+                            {% endfilter %}
+                        </span>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>{% trans "No recent actions available." %}</p>
+        {% endif %}
+    {% else %}
+        <p>{% trans "Recent actions are unavailable." %}</p>
+    {% endif %}
+</div>
