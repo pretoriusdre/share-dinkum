@@ -155,11 +155,11 @@
                 </section>
 
                 <section class="chart-card chart-card--wide">
-                    <h2>{% trans "Portfolio trend by instrument" %}</h2>
+                    <h2>{% trans "Units held over time" %}</h2>
                     {% if area_chart_labels and area_chart_datasets %}
-                        <canvas id="portfolioArea" aria-label="{% trans "Historical portfolio value split by instrument" %}"></canvas>
+                        <canvas id="portfolioArea" aria-label="{% trans "Units held over time by instrument" %}"></canvas>
                     {% else %}
-                        <p class="no-data">{% trans "No price history data is available yet." %}</p>
+                        <p class="no-data">{% trans "No trade history is available yet." %}</p>
                     {% endif %}
                 </section>
             </div>
@@ -221,6 +221,12 @@
                 maximumFractionDigits: 2,
             });
             return currency ? `${currency} ${formatted}` : formatted;
+        };
+        const formatUnits = (value) => {
+            const numericValue = Number(value || 0);
+            return numericValue.toLocaleString(undefined, {
+                maximumFractionDigits: 4,
+            });
         };
 
         const parcelLabelsNode = document.getElementById('parcel-labels-data');
@@ -355,10 +361,10 @@
                     borderColor: color,
                     backgroundColor: toRGBA(color, 0.35),
                     fill: true,
-                    stack: 'portfolio',
-                    tension: 0.25,
+                    tension: 0,
                     borderWidth: 2,
                     pointRadius: 0,
+                    stepped: 'before',
                 };
             });
 
@@ -371,7 +377,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    spanGaps: true,
+                    spanGaps: false,
                     interaction: {
                         mode: 'index',
                         intersect: false,
@@ -382,10 +388,10 @@
                         },
                         tooltip: {
                             callbacks: {
-                                label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`,
+                                label: (ctx) => `${ctx.dataset.label}: ${formatUnits(ctx.parsed.y)}`,
                                 footer: (items) => {
                                     const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
-                                    return `${totalLabel}: ${formatCurrency(total)}`;
+                                    return `${totalLabel}: ${formatUnits(total)}`;
                                 },
                             },
                         },
@@ -393,17 +399,17 @@
                     },
                     scales: {
                         x: {
-                            stacked: true,
+                            stacked: false,
                             ticks: {
                                 maxRotation: 0,
                                 minRotation: 0,
                             },
                         },
                         y: {
-                            stacked: true,
+                            stacked: false,
                             beginAtZero: true,
                             ticks: {
-                                callback: (value) => formatCurrency(value),
+                                callback: (value) => formatUnits(value),
                             },
                         },
                     },

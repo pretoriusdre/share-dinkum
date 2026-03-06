@@ -352,60 +352,48 @@ def _prepare_dashboard_context(request, context):
             ).values('instrument_id', 'date', 'quantity')
         )
 
-        area_instrument_ids = sorted({record['instrument_id'] for record in buy_records})
+        sell_records = list(
+            Sell.objects.filter(
+                account=account,
+                is_active=True,
+            ).values('instrument_id', 'date', 'quantity')
+        )
+
+        area_instrument_ids = sorted(
+            {
+                record['instrument_id']
+                for record in buy_records + sell_records
+            }
+        )
 
         if area_instrument_ids:
-            sell_records = list(
-                Sell.objects.filter(
-                    account=account,
-                    is_active=True,
-                    instrument_id__in=area_instrument_ids,
-                ).values('instrument_id', 'date', 'quantity')
-            )
+            trade_adjustments = defaultdict(dict)
 
-            first_buy_by_instrument = {}
             for record in buy_records:
                 inst_id = record['instrument_id']
-                record_date = record['date']
-                first_date = first_buy_by_instrument.get(inst_id)
-                if first_date is None or record_date < first_date:
-                    first_buy_by_instrument[inst_id] = record_date
+                if inst_id not in area_instrument_ids:
+                    continue
+                trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
+                trade_adjustments[record['date']][inst_id] += Decimal(record['quantity'])
 
-            overall_start_date = min(first_buy_by_instrument.values(), default=None)
+            for record in sell_records:
+                inst_id = record['instrument_id']
+                if inst_id not in area_instrument_ids:
+                    continue
+                trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
+                trade_adjustments[record['date']][inst_id] -= Decimal(record['quantity'])
 
-            if overall_start_date is None:
-                earliest_price_history = (
-                    InstrumentPriceHistory.objects.filter(
-                        account=account,
-                        instrument_id__in=area_instrument_ids,
-                    )
-                    .order_by('date')
-                    .values_list('date', flat=True)
-                    .first()
-                )
-                overall_start_date = earliest_price_history
+            available_dates = set(trade_adjustments.keys())
 
-            if overall_start_date is None:
-                overall_start_date = date.today() - timedelta(days=180)
-            else:
-                overall_start_date = overall_start_date - timedelta(days=5)
-
-            price_history = list(
-                InstrumentPriceHistory.objects.filter(
-                    account=account,
-                    instrument_id__in=area_instrument_ids,
-                    date__gte=overall_start_date,
-                )
-                .select_related('instrument')
-                .order_by('date')
-            )
-
-            if price_history:
-                exchange_rate_cache = {}
-                last_rate_by_currency = {}
+            if available_dates:
+                earliest_date = min(available_dates)
+                if earliest_date > date.min:
+                    baseline_date = earliest_date - timedelta(days=1)
+                    available_dates.add(baseline_date)
+                available_dates.add(date.today())
+                sorted_dates = sorted(available_dates)
 
                 instrument_name_by_id = {instrument.id: instrument.name for instrument in instruments}
-                instrument_currency_by_id = {instrument.id: str(instrument.currency) for instrument in instruments}
 
                 missing_instrument_ids = [
                     inst_id
@@ -415,33 +403,6 @@ def _prepare_dashboard_context(request, context):
                 if missing_instrument_ids:
                     for instrument_obj in Instrument.objects.filter(account=account, id__in=missing_instrument_ids):
                         instrument_name_by_id[instrument_obj.id] = instrument_obj.name
-                        instrument_currency_by_id[instrument_obj.id] = str(instrument_obj.currency)
-
-                price_by_instrument = defaultdict(dict)
-
-                available_dates = set()
-
-                for history in price_history:
-                    price_by_instrument[history.instrument_id][history.date] = Decimal(history.close)
-                    available_dates.add(history.date)
-
-                trade_adjustments = defaultdict(dict)
-                for record in buy_records:
-                    inst_id = record['instrument_id']
-                    if inst_id not in area_instrument_ids:
-                        continue
-                    trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
-                    trade_adjustments[record['date']][inst_id] += record['quantity']
-
-                for record in sell_records:
-                    inst_id = record['instrument_id']
-                    if inst_id not in area_instrument_ids:
-                        continue
-                    trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
-                    trade_adjustments[record['date']][inst_id] -= record['quantity']
-
-                available_dates.update(trade_adjustments.keys())
-                sorted_dates = sorted(available_dates)
 
                 ordered_instrument_ids = sorted(
                     area_instrument_ids,
@@ -449,40 +410,7 @@ def _prepare_dashboard_context(request, context):
                 )
 
                 quantities_current = {inst_id: Decimal('0') for inst_id in ordered_instrument_ids}
-                last_price = {inst_id: None for inst_id in ordered_instrument_ids}
                 dataset_values = {inst_id: [] for inst_id in ordered_instrument_ids}
-
-                def get_multiplier(currency_code, history_date):
-                    if currency_code == dashboard_currency:
-                        return Decimal('1')
-                    cache_key = (currency_code, history_date)
-                    if cache_key in exchange_rate_cache:
-                        return exchange_rate_cache[cache_key]
-                    rate = ExchangeRate.objects.filter(
-                        account=account,
-                        convert_from=currency_code,
-                        convert_to=dashboard_currency,
-                        date=history_date,
-                    ).only('exchange_rate_multiplier').first()
-                    if rate:
-                        multiplier_value = rate.exchange_rate_multiplier
-                        last_rate_by_currency[currency_code] = multiplier_value
-                    else:
-                        multiplier_value = last_rate_by_currency.get(currency_code)
-                        if multiplier_value is None:
-                            current_rate = CurrentExchangeRate.get_or_create(
-                                account=account,
-                                convert_from=currency_code,
-                                convert_to=dashboard_currency,
-                            )
-                            multiplier_value = (
-                                current_rate.exchange_rate_multiplier
-                                if current_rate
-                                else Decimal('1')
-                            )
-                            last_rate_by_currency[currency_code] = multiplier_value
-                    exchange_rate_cache[cache_key] = multiplier_value
-                    return multiplier_value
 
                 for date_key in sorted_dates:
                     adjustments = trade_adjustments.get(date_key, {})
@@ -492,23 +420,10 @@ def _prepare_dashboard_context(request, context):
                         ).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
 
                     for inst_id in ordered_instrument_ids:
-                        price_map = price_by_instrument.get(inst_id, {})
-                        if date_key in price_map:
-                            last_price[inst_id] = price_map[date_key]
+                        dataset_values[inst_id].append(float(quantities_current[inst_id]))
 
-                        price_value = last_price[inst_id]
-                        quantity_value = quantities_current[inst_id]
 
-                        if price_value is None or quantity_value <= 0:
-                            dataset_values[inst_id].append(0.0)
-                            continue
-
-                        currency_code = instrument_currency_by_id.get(inst_id, dashboard_currency)
-                        multiplier = get_multiplier(currency_code, date_key)
-                        portfolio_value = price_value * quantity_value * multiplier
-                        dataset_values[inst_id].append(_decimal_to_float(portfolio_value))
-
-                area_chart_labels = [date.isoformat() for date in sorted_dates]
+                area_chart_labels = [d.isoformat() for d in sorted_dates]
                 area_chart_datasets = [
                     {
                         'label': instrument_name_by_id.get(inst_id, str(inst_id)),
@@ -516,6 +431,7 @@ def _prepare_dashboard_context(request, context):
                     }
                     for inst_id in ordered_instrument_ids
                 ]
+
 
         if not parcel_labels:
             dashboard_message = (
