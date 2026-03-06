@@ -260,7 +260,10 @@ def _prepare_dashboard_context(request, context):
     distribution_series = []
     area_chart_labels = []
     area_chart_datasets = []
+    value_chart_labels = []
+    value_chart_datasets = []
     dashboard_currency = None
+
 
     if not account:
         dashboard_message = (
@@ -393,7 +396,8 @@ def _prepare_dashboard_context(request, context):
                 available_dates.add(date.today())
                 sorted_dates = sorted(available_dates)
 
-                instrument_name_by_id = {instrument.id: instrument.name for instrument in instruments}
+                instrument_by_id = {instrument.id: instrument for instrument in instruments}
+                instrument_name_by_id = {inst_id: instrument.name for inst_id, instrument in instrument_by_id.items()}
 
                 missing_instrument_ids = [
                     inst_id
@@ -402,7 +406,9 @@ def _prepare_dashboard_context(request, context):
                 ]
                 if missing_instrument_ids:
                     for instrument_obj in Instrument.objects.filter(account=account, id__in=missing_instrument_ids):
+                        instrument_by_id[instrument_obj.id] = instrument_obj
                         instrument_name_by_id[instrument_obj.id] = instrument_obj.name
+
 
                 ordered_instrument_ids = sorted(
                     area_instrument_ids,
@@ -411,6 +417,7 @@ def _prepare_dashboard_context(request, context):
 
                 quantities_current = {inst_id: Decimal('0') for inst_id in ordered_instrument_ids}
                 dataset_values = {inst_id: [] for inst_id in ordered_instrument_ids}
+                quantities_by_date = {}
 
                 for date_key in sorted_dates:
                     adjustments = trade_adjustments.get(date_key, {})
@@ -418,6 +425,11 @@ def _prepare_dashboard_context(request, context):
                         quantities_current[inst_id] = (
                             quantities_current[inst_id] + delta
                         ).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
+                    quantities_by_date[date_key] = {
+                        inst_id: quantities_current[inst_id]
+                        for inst_id in ordered_instrument_ids
+                    }
 
                     for inst_id in ordered_instrument_ids:
                         dataset_values[inst_id].append(float(quantities_current[inst_id]))
@@ -431,6 +443,148 @@ def _prepare_dashboard_context(request, context):
                     }
                     for inst_id in ordered_instrument_ids
                 ]
+
+                if sorted_dates:
+                    start_date = sorted_dates[0]
+                    end_date = sorted_dates[-1]
+
+                    price_history_map = defaultdict(dict)
+                    price_history_qs = (
+                        InstrumentPriceHistory.objects.filter(
+                            account=account,
+                            instrument_id__in=ordered_instrument_ids,
+                            date__range=(start_date, end_date),
+                        )
+                        .values('instrument_id', 'date', 'close')
+                    )
+                    for record in price_history_qs:
+                        price_history_map[record['instrument_id']][record['date']] = record['close']
+
+                    initial_prices = {}
+                    for inst_id in ordered_instrument_ids:
+                        prior_close = (
+                            InstrumentPriceHistory.objects.filter(
+                                account=account,
+                                instrument_id=inst_id,
+                                date__lt=start_date,
+                            )
+                            .order_by('-date')
+                            .values_list('close', flat=True)
+                            .first()
+                        )
+                        if prior_close is not None:
+                            initial_prices[inst_id] = prior_close
+
+                    account_currency = str(account.currency)
+                    instrument_currency_by_id = {}
+                    currencies_requiring_conversion = set()
+
+                    for inst_id in ordered_instrument_ids:
+                        instrument_obj = instrument_by_id.get(inst_id)
+                        if instrument_obj is None:
+                            continue
+                        currency_code = str(instrument_obj.currency)
+                        instrument_currency_by_id[inst_id] = currency_code
+                        if currency_code != account_currency:
+                            currencies_requiring_conversion.add(currency_code)
+
+                    exchange_rate_maps = {currency: {} for currency in currencies_requiring_conversion}
+                    initial_exchange_rates = {}
+
+                    if currencies_requiring_conversion:
+                        exchange_rate_qs = (
+                            ExchangeRate.objects.filter(
+                                account=account,
+                                convert_to=account.currency,
+                                convert_from__in=currencies_requiring_conversion,
+                                date__range=(start_date, end_date),
+                            )
+                            .values('convert_from', 'date', 'exchange_rate_multiplier')
+                        )
+
+                        for record in exchange_rate_qs:
+                            exchange_rate_maps.setdefault(record['convert_from'], {})[
+                                record['date']
+                            ] = record['exchange_rate_multiplier']
+
+                        for currency_code in currencies_requiring_conversion:
+                            prior_rate = (
+                                ExchangeRate.objects.filter(
+                                    account=account,
+                                    convert_from=currency_code,
+                                    convert_to=account.currency,
+                                    date__lt=start_date,
+                                )
+                                .order_by('-date')
+                                .values_list('exchange_rate_multiplier', flat=True)
+                                .first()
+                            )
+                            if prior_rate is not None:
+                                initial_exchange_rates[currency_code] = prior_rate
+                            else:
+                                current_rate = CurrentExchangeRate.get_or_create(
+                                    account=account,
+                                    convert_from=currency_code,
+                                    convert_to=account.currency,
+                                )
+                                if current_rate:
+                                    initial_exchange_rates[currency_code] = current_rate.exchange_rate_multiplier
+
+                    price_state = {inst_id: initial_prices.get(inst_id) for inst_id in ordered_instrument_ids}
+                    exchange_state = {
+                        currency: initial_exchange_rates.get(currency)
+                        for currency in currencies_requiring_conversion
+                    }
+
+                    value_series_by_instrument = {inst_id: [] for inst_id in ordered_instrument_ids}
+
+                    for date_key in sorted_dates:
+                        for inst_id in ordered_instrument_ids:
+                            instrument_prices = price_history_map.get(inst_id, {})
+                            if date_key in instrument_prices:
+                                price_state[inst_id] = instrument_prices[date_key]
+
+                        for currency_code in currencies_requiring_conversion:
+                            rate_map = exchange_rate_maps.get(currency_code, {})
+                            if date_key in rate_map:
+                                exchange_state[currency_code] = rate_map[date_key]
+
+                        quantities_snapshot = quantities_by_date.get(date_key, {})
+                        for inst_id in ordered_instrument_ids:
+                            quantity = quantities_snapshot.get(inst_id, Decimal('0'))
+                            if not quantity:
+                                value_series_by_instrument[inst_id].append(Decimal('0'))
+                                continue
+
+                            price = price_state.get(inst_id)
+                            if price is None:
+                                value_series_by_instrument[inst_id].append(Decimal('0'))
+                                continue
+
+                            price_decimal = price if isinstance(price, Decimal) else Decimal(price)
+                            value = (quantity * price_decimal).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
+                            currency_code = instrument_currency_by_id.get(inst_id)
+                            if currency_code and currency_code != account_currency:
+                                rate = exchange_state.get(currency_code)
+                                if rate is None:
+                                    value_series_by_instrument[inst_id].append(Decimal('0'))
+                                    continue
+                                rate_decimal = rate if isinstance(rate, Decimal) else Decimal(rate)
+                                value = (value * rate_decimal).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
+                            value_series_by_instrument[inst_id].append(value)
+
+                    if value_series_by_instrument:
+                        value_chart_labels = [d.isoformat() for d in sorted_dates]
+                        value_chart_datasets = [
+                            {
+                                'label': instrument_name_by_id.get(inst_id, str(inst_id)),
+                                'data': [_decimal_to_float(amount) for amount in series],
+                            }
+                            for inst_id, series in value_series_by_instrument.items()
+                        ]
+
 
 
         if not parcel_labels:
@@ -453,8 +607,11 @@ def _prepare_dashboard_context(request, context):
             'income_chart_distributions': distribution_series,
             'area_chart_labels': area_chart_labels,
             'area_chart_datasets': area_chart_datasets,
+            'value_chart_labels': value_chart_labels,
+            'value_chart_datasets': value_chart_datasets,
         }
     )
+
     return context
 
 
