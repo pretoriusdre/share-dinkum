@@ -181,7 +181,7 @@ class Account(models.Model):
             has_history_after_sell = InstrumentPriceHistory.objects.filter(
                 account=self,
                 instrument=instrument,
-                date__gt=last_sell_date,
+                date__gte=last_sell_date,
             ).exists()
 
             if has_history_after_sell:
