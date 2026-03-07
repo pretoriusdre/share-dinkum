@@ -155,8 +155,12 @@ class DataLoader():
 
         if 'is_active' in df.columns:
             df['is_active'] = df['is_active'].fillna(True)
+
+        # Normalise pandas null sentinels (NaN, NaT, pd.NA) before field processing
+        df = df.astype(object).where(pd.notna(df), None)
         
         logger.debug('Starting to process columns')
+
         # Preprocess columns to handle foreign keys,  decimal fields, and file fields.
         for col in df.columns:
             logger.debug('Starting to process columns %s', col)
