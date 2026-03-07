@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 # Annoying data types
 from uuid import UUID
-from djmoney.money import Money
+
 from django.db.models.fields.files import FieldFile
 
 import logging
@@ -33,12 +33,12 @@ def get_all_tables_in_excel(filename):
             header = content[0]
             rest = content[1:]
             df = pd.DataFrame(rest, columns=header)
-
-
             df = make_tz_naive(df)
+            df = df.astype(object).where(pd.notna(df), None)
             df = df.dropna(how='all')  # Blank rows would cause not null errors.
 
             mapping[entry] = df
+
 
     if not mapping:
         # OpenOffice files do not support Named DataTables, so fall back to reading all sheets.
@@ -60,6 +60,7 @@ def get_all_tables_from_worksheets(filename):
         rest = content[1:]
         df = pd.DataFrame(rest, columns=header)
         df = make_tz_naive(df)
+        df = df.astype(object).where(pd.notna(df), None)
         df = df.dropna(how='all')  # Blank rows would cause not null errors.
         mapping[ws.title] = df
 
@@ -224,7 +225,8 @@ class ExcelGen:
                     val_to_print = str(val_to_print)
                     cell.style = self.id_col_style
 
-                elif isinstance(val_to_print, Money):
+                elif hasattr(val_to_print, 'amount') and hasattr(val_to_print, 'currency'):
+                    # is a money instance (doing this to avoid the import)
                     val_to_print = val_to_print.amount
                 
                 elif isinstance(val_to_print, FieldFile):
