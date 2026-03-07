@@ -74,25 +74,38 @@ This project uses [`uv`](https://github.com/astral-sh/uv) for dependency managem
 To install dependencies:
 
 ```bash
-uv venv
-uv pip install .
+uv sync
 ```
+
+This creates `.venv/` (if needed) and installs the dependencies pinned in `uv.lock`.
+
 To activate the virtual environment:
-```bash
-.venv\Scripts\activate
-```
+
+- PowerShell (Windows): `.venv\Scripts\Activate.ps1`
+- Command Prompt (Windows): `.venv\Scripts\activate.bat`
+- macOS/Linux: `source .venv/bin/activate`
+
 ### 3. Configure environment variables
 
 Copy and rename the `.env.sample` file to `.env`:
 
 ```bash
 cd share_dinkum_proj
-copy .env.sample .env
 ```
+
+- Windows (PowerShell or Command Prompt):
+  ```powershell
+  copy .env.sample .env
+  ```
+- macOS/Linux:
+  ```bash
+  cp .env.sample .env
+  ```
 
 (Optional) Edit the `.env` file with your environment-specific settings.
 
 By default, the project uses a local SQLite database which requires no additional setup.
+
 
 ### 4. Set Up the Database
 
@@ -103,7 +116,8 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
-Make sure you are in the same directory as `manage.py`.
+If `python` points to Python 2 on your system (common on macOS/Linux), use `python3` instead. Make sure you are in the same directory as `manage.py`.
+
 
 ### 5. (Optional) Create a Superuser
 
@@ -139,9 +153,15 @@ cd share_dinkum_proj/share_dinkum_app/import_data
 
 Copy the public template and rename it:
 
-```bash
-cp data_import_template_public.xlsx data_import_template_private.xlsx
-```
+- Windows (PowerShell or Command Prompt):
+  ```powershell
+  copy data_import_template_public.xlsx data_import_template_private.xlsx
+  ```
+- macOS/Linux:
+  ```bash
+  cp data_import_template_public.xlsx data_import_template_private.xlsx
+  ```
+
 
 ### 2. Edit the Template
 
