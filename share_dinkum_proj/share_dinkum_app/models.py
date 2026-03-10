@@ -119,9 +119,13 @@ class FiscalYear(models.Model):
 
     @safe_property
     def end_date(self):
-        end_year = self.start_year + 1 if self.fiscal_year_type.start_month != 1 else self.start_year
-        return date(end_year, self.fiscal_year_type.start_month, self.fiscal_year_type.start_day) - timedelta(days=1)
-    
+        next_start_year = self.start_year + 1
+        next_start = date(next_start_year,
+                        self.fiscal_year_type.start_month,
+                        self.fiscal_year_type.start_day)
+        return next_start - timedelta(days=1)
+
+
     def get_name(self):
         if self.fiscal_year_type.start_month == 1:
             return f'{self.start_year}'
