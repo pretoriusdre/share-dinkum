@@ -401,6 +401,68 @@ class FiscalYearTypeTests(TestCase):
         fy_type = create_fiscal_year_type(description='AU Tax')
         self.assertIn('AU Tax', str(fy_type))
 
+    def test_classify_date_boundaries_default_parameters(self):
+        fy_type = FiscalYearType.objects.create(
+            description='Australian Tax Year',
+            start_month=7,
+            start_day=1,
+        )
+
+        scenarios = [
+            (date(2024, 6, 30), 2023),
+            (date(2024, 7, 1), 2024),
+            (date(2024, 12, 31), 2024),
+            (date(2025, 1, 1), 2024),
+        ]
+
+        encountered_years = {}
+
+        for input_date, expected_year in scenarios:
+            fiscal_year, _ = fy_type.classify_date(input_date)
+            self.assertEqual(
+                fiscal_year.start_year,
+                expected_year,
+                f"{input_date} should map to fiscal year starting {expected_year}",
+            )
+            if expected_year in encountered_years:
+                self.assertEqual(encountered_years[expected_year], fiscal_year.id)
+            else:
+                encountered_years[expected_year] = fiscal_year.id
+
+    def test_classify_date_calendar_year_boundaries(self):
+        fy_type = FiscalYearType.objects.create(
+            description='Calendar Year',
+            start_month=1,
+            start_day=1,
+        )
+
+        scenarios = [
+            (date(2023, 12, 31), 2023),
+            (date(2024, 1, 1), 2024),
+            (date(2024, 2, 29), 2024),
+            (date(2024, 12, 31), 2024),
+            (date(2025, 1, 1), 2025),
+        ]
+
+        encountered_years = {}
+
+        for input_date, expected_year in scenarios:
+            fiscal_year, _ = fy_type.classify_date(input_date)
+            self.assertEqual(
+                fiscal_year.start_year,
+                expected_year,
+                f"{input_date} should map to fiscal year starting {expected_year}",
+            )
+            if expected_year in encountered_years:
+                self.assertEqual(encountered_years[expected_year], fiscal_year.id)
+            else:
+                encountered_years[expected_year] = fiscal_year.id
+
+        fy_mid_year, _ = fy_type.classify_date(date(2024, 6, 30))
+        fy_late_year, _ = fy_type.classify_date(date(2024, 11, 15))
+        self.assertEqual(fy_mid_year.id, fy_late_year.id)
+
+
 
 class FiscalYearTests(TestCase):
     """Tests for FiscalYear model."""
@@ -424,6 +486,33 @@ class FiscalYearTests(TestCase):
         )
         fy = FiscalYear.objects.create(fiscal_year_type=fy_type, start_year=2024)
         self.assertEqual(fy.get_name(), '2024')
+
+    def test_calendar_year_start_and_end_dates_cover_full_year(self):
+        fy_type = FiscalYearType.objects.create(
+            description='Calendar Year',
+            start_month=1,
+            start_day=1,
+        )
+        fy = FiscalYear.objects.create(fiscal_year_type=fy_type, start_year=2024)
+
+        self.assertEqual(fy.start_date, date(2024, 1, 1))
+        self.assertEqual(fy.end_date, date(2024, 12, 31))
+        self.assertEqual(
+            (fy.end_date - fy.start_date).days + 1,
+            366,
+            "Leap year should span all 366 days",
+        )
+
+        fy_non_leap = FiscalYear.objects.create(fiscal_year_type=fy_type, start_year=2023)
+        self.assertEqual(fy_non_leap.start_date, date(2023, 1, 1))
+        self.assertEqual(fy_non_leap.end_date, date(2023, 12, 31))
+        self.assertEqual(
+            (fy_non_leap.end_date - fy_non_leap.start_date).days + 1,
+            365,
+            "Non-leap fiscal year should span 365 days",
+        )
+
+
 
 
 # =============================================================================
