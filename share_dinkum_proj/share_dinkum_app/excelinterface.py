@@ -22,55 +22,85 @@ logger = logging.getLogger(__name__)
 
 
 def get_all_tables_in_excel(filename):
-    """A helper function to extract all Named DataTables from an Excel file,
-    and store these in a dictionary (key = Table name, value = Dataframe)"""
+    """Extract named tables from an Excel workbook, auto-expanding them when
+    additional data exists beneath the defined range. If a worksheet has no named
+    tables, fall back to loading the entire sheet."""
+
+    def _sheet_to_dataframe(ws):
+        data_iter = ws.values
+        try:
+            header = next(data_iter)
+        except StopIteration:
+            return pd.DataFrame()
+
+        rows = list(data_iter)
+        df = pd.DataFrame(rows, columns=header)
+        df = make_tz_naive(df)
+        df = df.astype(object).where(pd.notna(df), None) # Cast NaN to Nones as NaN is truthy
+        df = df.dropna(how='all')
+        return df
+
     wb = load_workbook(filename, data_only=True)
     mapping = {}
+
     for ws in wb.worksheets:
-        for entry, data_boundary in ws.tables.items():
-            data = ws[data_boundary]
-            content = [[cell.value for cell in ent] for ent in data]
-            header = content[0]
-            rest = content[1:]
-            df = pd.DataFrame(rest, columns=header)
-            df = make_tz_naive(df)
-            df = df.astype(object).where(pd.notna(df), None)
-            df = df.dropna(how='all')  # Blank rows would cause not null errors.
+        tables = list(ws.tables.values())
 
-            mapping[entry] = df
+        if tables:
+            for table in tables:
+                cell_range = CellRange(table.ref)
+                last_data_row = cell_range.max_row
 
+                for row_idx in range(cell_range.max_row + 1, ws.max_row + 1):
+                    row_has_data = any(
+                        ws.cell(row=row_idx, column=col_idx).value not in (None, '')
+                        for col_idx in range(cell_range.min_col, cell_range.max_col + 1)
+                    )
+                    if row_has_data:
+                        last_data_row = row_idx
 
-    if not mapping:
-        # OpenOffice files do not support Named DataTables, so fall back to reading all sheets.
-        # Sheet names must match the expected table names.
-        return get_all_tables_from_worksheets(filename)
+                if last_data_row > cell_range.max_row:
+                    expanded_range = CellRange(
+                        min_col=cell_range.min_col,
+                        min_row=cell_range.min_row,
+                        max_col=cell_range.max_col,
+                        max_row=last_data_row,
+                    )
+                    logger.warning(
+                        "Table '%s' on sheet '%s' expanded from %s to %s to include data below the named table.",
+                        table.name,
+                        ws.title,
+                        cell_range.coord,
+                        expanded_range.coord,
+                    )
+                    table.ref = expanded_range.coord
+                    cell_range = expanded_range
+
+                data = ws[cell_range.coord]
+                content = [[cell.value for cell in row] for row in data]
+                if not content:
+                    continue
+
+                header = content[0]
+                rest = content[1:]
+                df = pd.DataFrame(rest, columns=header)
+                df = make_tz_naive(df)
+                df = df.astype(object).where(pd.notna(df), None)
+                df = df.dropna(how='all')
+
+                mapping[table.name] = df
+        else:
+            df = _sheet_to_dataframe(ws)
+            if not df.empty:
+                mapping.setdefault(ws.title, df)
+                logger.warning(
+                    "Sheet '%s' has no named tables; loaded entire sheet as fallback. Ensure that the sheet is named according to the corresponding model (eg Buy, Sell etc)",
+                    ws.title,
+                )
+
     return mapping
 
 
-def get_all_tables_from_worksheets(filename):
-    """A helper function to extract all sheets from an Excel file.
-    This is normally only required if the file does not contain Named DataTables (eg OpenOffice does not support them)
-    """
-    wb= load_workbook(filename, data_only=True)
-    mapping = {}
-    for ws in wb.worksheets:
-        data = ws.values
-        content = list(data)
-        header = content[0]
-        rest = content[1:]
-        df = pd.DataFrame(rest, columns=header)
-        df = make_tz_naive(df)
-        df = df.astype(object).where(pd.notna(df), None)
-        df = df.dropna(how='all')  # Blank rows would cause not null errors.
-        mapping[ws.title] = df
-
-    # Rename the sheet names to the expected table names as outlined in the Index
-    index_df = mapping.get('Index', None)
-    if isinstance(index_df, pd.DataFrame):
-        rename_keys = dict(zip(index_df['sheet_name'], index_df['table_name']))
-        mapping = {rename_keys.get(key, key): val for key, val in mapping.items()}
-
-    return mapping
 
 
 def make_tz_naive(df):
