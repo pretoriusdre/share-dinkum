@@ -659,6 +659,12 @@ class Instrument(BaseModel):
             price_history['account'] = self.account
             price_history['id'] = price_history['date'].apply(lambda x: uuid7())
 
+            # Drop rows with null close prices (yfinance sometimes returns NaN for recent dates)
+            price_history = price_history.dropna(subset=['close'])
+            if price_history.empty:
+                logger.warning('No valid close prices for %s between %s and %s', self, start_date, end_date)
+                return
+
             instrument_price_field = self._meta.get_field('current_unit_price')
             self.current_unit_price = convert_to_decimal_field(
                 price_history['close'].iloc[-1],
