@@ -666,10 +666,16 @@ class Instrument(BaseModel):
                 return
 
             instrument_price_field = self._meta.get_field('current_unit_price')
-            self.current_unit_price = convert_to_decimal_field(
-                price_history['close'].iloc[-1],
-                instrument_price_field
-            )
+
+            # Try current price first, fall back to last valid close
+            current_price = yfinanceinterface.get_current_price(self)
+            if current_price is not None:
+                self.current_unit_price = convert_to_decimal_field(current_price, instrument_price_field)
+            elif not price_history.empty:
+                self.current_unit_price = convert_to_decimal_field(
+                    price_history['close'].iloc[-1],
+                    instrument_price_field
+                )
             self.save()
 
             price_history_entries = []
