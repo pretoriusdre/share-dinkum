@@ -270,7 +270,7 @@ Computation of the 30% minimum tax itself stays out of scope. It's applied by th
 
 ## Part 3: Implementing this in share-dinkum
 
-The detailed implementation plan for share-dinkum — data model, gating strategy, calculation pipeline, and verification approach — is broken out into a separate document: [`capital_gains_changes_plan.md`](./capital_gains_changes_plan.md).
+The detailed implementation plan for share-dinkum is broken out into a separate document: [`capital_gains_changes_plan.md`](./capital_gains_changes_plan.md).
 
 ---
 
