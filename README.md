@@ -40,7 +40,42 @@ If you encounter a **[ShareSplit]** event, you enter the before and after units 
 
 If you save your **[Account]** object, you have the option to update your price history. This will incrementally historise the daily price for all of your shares, storing that into the **[InstrumentPriceHistory]** table.
 
-![Simplified Data Model](docs/images/data_model.png)
+### Simplified overview
+
+```mermaid
+flowchart LR
+    Market --> Account
+    Instrument --> Market
+    InstrumentPriceHistory --> Instrument
+
+    Buy --> Instrument
+    Sell --> Instrument
+    Dividend --> Instrument
+    Distribution --> Instrument
+    CostBaseAdjustment --> Instrument
+    ShareSplit --> Instrument
+
+    Parcel --> Buy
+    Parcel --> Parcel
+    SellAllocation --> Parcel
+    SellAllocation --> Sell
+
+    CostBaseAdjustmentAllocation --> CostBaseAdjustment
+    CostBaseAdjustmentAllocation --> Parcel
+    ShareSplit --> Parcel
+```
+
+*Not shown: AppUser, FiscalYearType, FiscalYear, ExchangeRate, CurrentExchangeRate, LogEntry, DataExport.*
+
+For a full entity relationship diagram with fields and all relationships, see [Detailed data model](docs/data_model.md).
+
+---
+
+## Capital Gains Changes (not yet legislated)
+
+The Australian Government has proposed changes to CGT taking effect from 1 July 2027. The changes are not yet legislated, but Share Dinkum is being designed to accommodate them so existing data continues to work once the rules apply.
+
+See [Capital gains changes — implementation plan](docs/capital_gains_changes_plan.md) for the planned data-model and calculation changes.
 
 ---
 ## Example screenshots

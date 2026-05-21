@@ -92,6 +92,21 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
 
 
 
+def get_current_price(instrument):
+    """Fetch live/current price from yfinance ticker info."""
+    ticker_code = instrument.yfinance_ticker_code
+    try:
+        ticker = yf.Ticker(ticker_code)
+        info = ticker.info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if price is not None:
+            return convert_to_decimal(price, 16, 6)
+        return None
+    except Exception as e:
+        logger.warning('Could not fetch current price for %s: %s', ticker_code, e)
+        return None
+
+
 def get_exchange_rate_history(convert_from, convert_to, start_date):
     
     ticker_code = f'{convert_from}{convert_to}=X'

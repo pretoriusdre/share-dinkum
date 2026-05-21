@@ -335,6 +335,57 @@ class GetInstrumentPriceHistoryTests(TestCase):
         mock_ticker.history.assert_called_once_with(start='2024-01-01', end='2024-02-01')
 
 
+@patch('share_dinkum_app.yfinanceinterface.yf')
+class GetCurrentPriceTests(TestCase):
+    """Tests for yfinanceinterface.get_current_price."""
+
+    def test_returns_decimal_when_current_price_exists(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.info = {'currentPrice': 150.25}
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_current_price(instrument)
+        self.assertEqual(result.quantize(Decimal('0.01')), Decimal('150.25'))
+
+    def test_falls_back_to_regular_market_price(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.info = {'regularMarketPrice': 148.50}
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_current_price(instrument)
+        self.assertEqual(result.quantize(Decimal('0.01')), Decimal('148.50'))
+
+    def test_prefers_current_price_over_regular_market_price(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.info = {'currentPrice': 150.25, 'regularMarketPrice': 148.50}
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_current_price(instrument)
+        self.assertEqual(result.quantize(Decimal('0.01')), Decimal('150.25'))
+
+    def test_returns_none_when_no_price_available(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.info = {}
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_current_price(instrument)
+        self.assertIsNone(result)
+
+    def test_returns_none_on_exception(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.info = property(lambda self: (_ for _ in ()).throw(Exception('network error')))
+        type(mock_ticker).info = property(lambda self: (_ for _ in ()).throw(Exception('network error')))
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        result = yfinanceinterface.get_current_price(instrument)
+        self.assertIsNone(result)
+
+
 # =============================================================================
 # Decorators
 # =============================================================================
