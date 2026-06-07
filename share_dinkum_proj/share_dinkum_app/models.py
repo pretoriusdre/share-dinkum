@@ -299,7 +299,25 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
         return Money(new_amount, str(self.convert_to))
 
     def update_current(self):
-        """Update or create the CurrentExchangeRate for this historical rate."""
+        """Update or create the CurrentExchangeRate for this historical rate.
+
+        Only the most recent known rate may drive the "current" rate. A backfilled
+        or older row must not clobber a more recent value with a stale figure.
+        """
+
+        if hasattr(self, 'date'):
+            newer_exists = type(self).objects.filter(
+                account=self.account,
+                convert_from=self.convert_from,
+                convert_to=self.convert_to,
+                date__gt=self.date,
+            ).exists()
+            if newer_exists:
+                return CurrentExchangeRate.objects.filter(
+                    account=self.account,
+                    convert_from=self.convert_from,
+                    convert_to=self.convert_to,
+                ).first()
 
         current, created = CurrentExchangeRate.objects.get_or_create(
             account=self.account,
@@ -407,20 +425,40 @@ class ExchangeRate(AbstractExchangeRate):
                 defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
             if created:
+                field = cls._meta.get_field('exchange_rate_multiplier')
                 fetched_rate = yfinanceinterface.get_exchange_rate(
                     convert_from=convert_from,
                     convert_to=convert_to,
                     exchange_date=exchange_date,
                 )
                 if fetched_rate is not None:
-                    field = cls._meta.get_field('exchange_rate_multiplier')
                     obj.exchange_rate_multiplier = convert_to_decimal_field(fetched_rate, field)
                     obj.save(update_fields=['exchange_rate_multiplier'])
-                else:
-                    logger.warning(
-                        "Could not fetch exchange rate for %s to %s on %s; keeping default.",
-                        convert_from, convert_to, exchange_date,
-                    )
+                elif convert_from != convert_to:
+                    # A failed cross-currency fetch must NOT keep the 1.0 default - that
+                    # relabels foreign amounts as base currency (e.g. USD shown as AUD).
+                    # Fall back to the most recent known rate for this pair instead.
+                    fallback = cls.objects.filter(
+                        account=account,
+                        convert_from=convert_from,
+                        convert_to=convert_to,
+                    ).exclude(pk=obj.pk).order_by('-date').first()
+                    if fallback is not None:
+                        obj.exchange_rate_multiplier = fallback.exchange_rate_multiplier
+                        obj.save(update_fields=['exchange_rate_multiplier'])
+                        logger.warning(
+                            "Could not fetch exchange rate for %s to %s on %s; using most "
+                            "recent known rate from %s (%s).",
+                            convert_from, convert_to, exchange_date,
+                            fallback.date, fallback.exchange_rate_multiplier,
+                        )
+                    else:
+                        logger.error(
+                            "Could not fetch exchange rate for %s to %s on %s and no prior "
+                            "rate exists; leaving multiplier at 1.0. Figures for this currency "
+                            "will be unconverted until a rate is available.",
+                            convert_from, convert_to, exchange_date,
+                        )
 
             obj.update_current()
             return obj
