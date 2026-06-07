@@ -144,10 +144,24 @@ def get_exchange_rate(convert_from, convert_to, exchange_date=None):
     ticker_code = f'{convert_from}{convert_to}=X'
     yfinance_obj = yf.Ticker(ticker_code)
 
+    today = datetime.now(UTC).date()
     if not exchange_date:
-        exchange_date = datetime.now(UTC).date()
+        exchange_date = today
 
     exchange_date = date.fromisoformat(str(exchange_date))
+
+    # No market data can exist for a future date (usually a data-entry error).
+    # Fall back to today's rate rather than silently failing, and flag it.
+    # Allow a one-day grace: markets ahead of UTC (e.g. ASX in Sydney UTC+10/+11,
+    # users entering in AWST UTC+8) can legitimately be on "tomorrow" relative to
+    # UTC near the date boundary, so only dates clearly in the future are clamped.
+    if exchange_date > today + timedelta(days=1):
+        logger.warning(
+            'Requested exchange rate date %s for %s is in the future; using current date %s instead.',
+            exchange_date, ticker_code, today,
+        )
+        exchange_date = today
+
     # Get a few days in case of gaps, then take first record.
     start_date_str = exchange_date.isoformat()
     end_date_str = (exchange_date + timedelta(days=3)).isoformat()
