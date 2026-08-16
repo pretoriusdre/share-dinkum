@@ -75,7 +75,7 @@ For a full entity relationship diagram with fields and all relationships, see [D
 
 The Australian Government has proposed changes to CGT taking effect from 1 July 2027. The changes are not yet legislated, but Share Dinkum is being designed to accommodate them so existing data continues to work once the rules apply.
 
-See [Capital gains changes — implementation plan](docs/capital_gains_changes_plan.md) for the planned data-model and calculation changes.
+See [Capital gains changes - implementation plan](docs/capital_gains_changes_plan.md) for the planned data-model and calculation changes.
 
 ---
 ## Example screenshots
@@ -95,82 +95,138 @@ See [Capital gains changes — implementation plan](docs/capital_gains_changes_p
 ---
 ## Setup instructions
 
-### 1. Clone the repository
+These steps are written for Windows 10/11 using PowerShell, and work the same on macOS and Linux
+except where noted. They should take about ten minutes.
 
-```bash
-git clone <repository-url>
+### Prerequisites
+
+You need two tools installed before you start. **You do not need to install Python separately**,
+`uv` downloads the correct version (3.13) for you.
+
+| Tool | What it is for | Install with `winget` | Or download |
+|---|---|---|---|
+| **Git** | Downloads the code | `winget install Git.Git` | [git-scm.com](https://git-scm.com/download/win) |
+| **uv** | Manages Python and the dependencies | `winget install astral-sh.uv` | [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) |
+
+After installing, **close and reopen your terminal** so it picks up the new commands. Check both work:
+
+```powershell
+git --version
+uv --version
+```
+
+### 1. Download the code
+
+```powershell
+git clone https://github.com/pretoriusdre/share-dinkum.git
 cd share-dinkum
 ```
 
-### 2. Install dependencies
+### 2. Install the dependencies
 
-This project uses [`uv`](https://github.com/astral-sh/uv) for dependency management. Make sure `uv` is installed on your system.
-
-To install dependencies:
-
-```bash
+```powershell
 uv sync
 ```
 
-This creates `.venv/` (if needed) and installs the dependencies pinned in `uv.lock`.
+This creates a `.venv` folder, downloads Python 3.13 if you do not already have it, and installs
+the exact package versions pinned in `uv.lock`.
 
-To activate the virtual environment:
+You never need to "activate" the virtual environment. Every command below uses `uv run`, which
+takes care of it for you.
 
-- PowerShell (Windows): `.venv\Scripts\Activate.ps1`
-- Command Prompt (Windows): `.venv\Scripts\activate.bat`
-- macOS/Linux: `source .venv/bin/activate`
+### 3. Create your settings file
 
-### 3. Configure environment variables
-
-Copy and rename the `.env.sample` file to `.env`:
-
-```bash
+```powershell
 cd share_dinkum_proj
+copy .env.sample .env
 ```
 
-- Windows (PowerShell or Command Prompt):
-  ```powershell
-  copy .env.sample .env
-  ```
-- macOS/Linux:
-  ```bash
-  cp .env.sample .env
-  ```
+On macOS/Linux use `cp .env.sample .env` instead.
 
-(Optional) Edit the `.env` file with your environment-specific settings.
+The defaults work as-is and use a local SQLite database file, so there is nothing else to configure.
+If you want to, open `.env` and replace `SECRET_KEY=__REPLACE_ME__` with any long random string.
 
-By default, the project uses a local SQLite database which requires no additional setup.
+### 4. Create the database
 
+From the repository root (`cd ..` if you are still in `share_dinkum_proj`):
 
-### 4. Set Up the Database
-
-Run the following commands to create the database schema:
-
-```bash
-python manage.py makemigrations
-python manage.py migrate
+```powershell
+uv run dev migrate
 ```
 
-If `python` points to Python 2 on your system (common on macOS/Linux), use `python3` instead. Make sure you are in the same directory as `manage.py`.
+### 5. Create your login
 
-
-### 5. (Optional) Create a Superuser
-
-If you are not using the bulk-import script, create a superuser to access the Django admin:
-
-```bash
-python manage.py createsuperuser
+```powershell
+uv run dev createsuperuser
 ```
 
-Note the username and password you create. If using the bulk-import script, update it to reflect the superuser credentials as needed.
+Enter a username and password when prompted, and remember them; you will use them to log in. The
+password is not shown as you type, which is normal.
 
-### 6. Run the Development Server
+### 6. Start the app
 
-Start the development server:
-
-```bash
-python manage.py runserver
+```powershell
+uv run dev
 ```
+
+Then open **http://127.0.0.1:8000/** in your browser and log in with the account from step 5.
+
+Leave the terminal window open while you use the app. Press `Ctrl+C` there to stop the server.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `git` or `uv` is not recognised | Close and reopen the terminal after installing, so `PATH` updates. |
+| `Activate.ps1 cannot be loaded because running scripts is disabled` | You do not need to activate anything, use the `uv run` commands above. |
+| `That port is already in use` | Something else is on port 8000. Run `uv run dev runserver 8001` and browse to port 8001. |
+| `No such file or directory: manage.py` | `uv run dev` works from the repository root. Use `cd` to get back there. |
+| Browser shows "DisallowedHost" | Use `127.0.0.1`, not your machine name. |
+
+Any other command can be passed straight through, so `uv run dev test share_dinkum_app` runs the
+test suite and `uv run dev collectstatic` collects static files.
+
+---
+
+## Updating to a newer version
+
+This project is under active development, so it is worth updating from time to time.
+
+**Stop the server first**, with `Ctrl+C` in the terminal running it. Everything below assumes it is
+not running: copying a database while the app is writing to it can capture an incomplete file.
+
+**Then back up your data.** Your data is two things: the database `share_dinkum_proj/db.sqlite3`,
+and `share_dinkum_proj/media`, which holds any documents you attached to a transaction. Copy both,
+to somewhere outside the project folder:
+
+```powershell
+$backup = "$env:USERPROFILE\share-dinkum-backups\$(Get-Date -Format yyyy-MM-dd)"
+New-Item -ItemType Directory -Path $backup -Force
+Copy-Item share_dinkum_proj\db.sqlite3 $backup
+Copy-Item share_dinkum_proj\media $backup -Recurse
+```
+
+To roll back later, stop the server and copy both back over the originals.
+
+If you use the import notebook, its `backup()` helper is a better option: it captures the database
+and media in the same way, adds an Excel export of every account, keeps the five most recent copies,
+and takes a consistent database snapshot even if the server happens to be running.
+
+**Now update.** From the repository root:
+
+```powershell
+git pull
+uv sync
+uv run dev migrate
+```
+
+Each of those three matters. `git pull` brings the new code, `uv sync` installs any dependencies
+that were added or changed, and `uv run dev migrate` applies any changes to the database structure.
+Skipping the last one typically shows up as an error mentioning a missing column or table.
+
+Start the app again with `uv run dev`.
+
+Your own data is never touched by `git pull`. The database, the `media` folder and your `.env` file are all excluded from the repository.
 
 ---
 
@@ -206,19 +262,17 @@ Fill in your personal share data in `data_import_template_private.xlsx` using Ex
 
 Once your data is ready:
 
-1. Go to the main project directory:
+Open `share_dinkum_proj/data_import.ipynb` and run the cells in order. Either of these works:
 
-    ```bash
-    cd share_dinkum_proj
+- **In VS Code** (simplest on Windows): install the *Python* and *Jupyter* extensions, open the
+  file, and select the `.venv` interpreter when prompted. Everything it needs is already installed.
+- **In your browser**, without installing Jupyter permanently:
+
+    ```powershell
+    uv run --with notebook jupyter notebook share_dinkum_proj/data_import.ipynb
     ```
 
-2. Open the import notebook:
-
-    ```bash
-    jupyter notebook data_import.ipynb
-    ```
-
-3. Follow the notebook instructions to load your data into the system.
+The notebook clears any existing data before loading, so only run it when that is what you want.
 
 ---
 
