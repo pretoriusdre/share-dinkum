@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 dev = "devserver:main"
+update = "devserver:update"
 
 [build-system]
 requires = ["setuptools>=61"]
