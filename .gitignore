@@ -17,6 +17,10 @@ data_import_old.ipynb
 data_import_template_personal.xlsx
 ~$data_import_template_personal.xlsx
 data_import_template_private.xlsx
+
+# Your own working copy of the import notebook, copied from data_import.ipynb.
+data_import_private.ipynb
+
 ~$data_import_template_private.xlsx
 
 # Byte-compiled / optimized / DLL files

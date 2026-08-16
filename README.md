@@ -182,6 +182,7 @@ Leave the terminal window open while you use the app. Press `Ctrl+C` there to st
 | `That port is already in use` | Something else is on port 8000. Run `uv run dev runserver 8001` and browse to port 8001. |
 | `No such file or directory: manage.py` | `uv run dev` works from the repository root. Use `cd` to get back there. |
 | Browser shows "DisallowedHost" | Use `127.0.0.1`, not your machine name. |
+| Updating stops with `Your local changes to the following files would be overwritten by merge` | You have changed a file that the update also changes, most often `data_import.ipynb` because running it rewrites its saved output. Copy it elsewhere if you want to keep your version, then `git checkout -- share_dinkum_proj/data_import.ipynb` and update again. Working in your own `data_import_private.ipynb` copy avoids this. |
 
 Any other command can be passed straight through, so `uv run dev test share_dinkum_app` runs the
 test suite and `uv run dev collectstatic` collects static files.
@@ -192,27 +193,31 @@ test suite and `uv run dev collectstatic` collects static files.
 
 This project is under active development, so it is worth updating from time to time.
 
-**Stop the server first**, with `Ctrl+C` in the terminal running it. Everything below assumes it is
-not running: copying a database while the app is writing to it can capture an incomplete file.
-
-**Then back up your data.** Your data is two things: the database `share_dinkum_proj/db.sqlite3`,
-and `share_dinkum_proj/media`, which holds any documents you attached to a transaction. Copy both,
-to somewhere outside the project folder:
+Stop the server with `Ctrl+C`, then from the repository root run:
 
 ```powershell
-$backup = "$env:USERPROFILE\share-dinkum-backups\$(Get-Date -Format yyyy-MM-dd)"
-New-Item -ItemType Directory -Path $backup -Force
-Copy-Item share_dinkum_proj\db.sqlite3 $backup
-Copy-Item share_dinkum_proj\media $backup -Recurse
+uv run update
 ```
 
-To roll back later, stop the server and copy both back over the originals.
+That is the whole update. It backs up your data, fetches the latest code, installs any new
+dependencies, and applies any changes to the database structure. When it finishes, start the app
+again with `uv run dev`.
 
-If you use the import notebook, its `backup()` helper is a better option: it captures the database
-and media in the same way, adds an Excel export of every account, keeps the five most recent copies,
-and takes a consistent database snapshot even if the server happens to be running.
+The backup goes into a `share-dinkum-backups` folder in your home directory, and covers both things
+that make up your data: the database `share_dinkum_proj/db.sqlite3`, and `share_dinkum_proj/media`,
+which holds any documents you attached to a transaction. To roll back, stop the server and copy both
+back over the originals.
 
-**Now update.** From the repository root:
+If you have edited any of the project's own files, the update stops before changing anything and
+tells you which files are affected, so your edits cannot be lost in a merge. Commit or discard them
+and run it again.
+
+Your own data is never touched by an update. The database, the `media` folder and your `.env` file are all excluded from the repository.
+
+<details>
+<summary>Running the steps individually</summary>
+
+`uv run update` is equivalent to backing up your data and then running:
 
 ```powershell
 git pull
@@ -224,9 +229,7 @@ Each of those three matters. `git pull` brings the new code, `uv sync` installs 
 that were added or changed, and `uv run dev migrate` applies any changes to the database structure.
 Skipping the last one typically shows up as an error mentioning a missing column or table.
 
-Start the app again with `uv run dev`.
-
-Your own data is never touched by `git pull`. The database, the `media` folder and your `.env` file are all excluded from the repository.
+</details>
 
 ---
 
@@ -262,14 +265,23 @@ Fill in your personal share data in `data_import_template_private.xlsx` using Ex
 
 Once your data is ready:
 
-Open `share_dinkum_proj/data_import.ipynb` and run the cells in order. Either of these works:
+Take your own copy of the notebook first, in the same way you copied the Excel template:
+
+```powershell
+copy share_dinkum_proj\data_import.ipynb share_dinkum_proj\data_import_private.ipynb
+```
+
+Your `_private` copy is excluded from the repository, so your settings stay yours and updates leave
+it alone. Run that one, not the original.
+
+Open `share_dinkum_proj/data_import_private.ipynb` and run the cells in order. Either of these works:
 
 - **In VS Code** (simplest on Windows): install the *Python* and *Jupyter* extensions, open the
   file, and select the `.venv` interpreter when prompted. Everything it needs is already installed.
 - **In your browser**, without installing Jupyter permanently:
 
     ```powershell
-    uv run --with notebook jupyter notebook share_dinkum_proj/data_import.ipynb
+    uv run --with notebook jupyter notebook share_dinkum_proj/data_import_private.ipynb
     ```
 
 The notebook clears any existing data before loading, so only run it when that is what you want.
