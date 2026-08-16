@@ -313,8 +313,11 @@ def update_account_price_history(sender, instance, created, **kwargs):
 
     if instance.update_price_history:
         # Ideally run this as a background task (Celery, Django-Q, etc.)
-        instance.update_all_price_history()
+        # Exchange rates must be refreshed first. Saving an instrument stores its value converted at
+        # whatever the current rate is at that moment, and nothing re-converts it afterwards, so
+        # refreshing the rate second leaves every holding valued at the previous rate.
         instance.update_all_exchange_rate_history()
+        instance.update_all_price_history()
 
         # Mark flag as cleared
         instance.update_price_history = False

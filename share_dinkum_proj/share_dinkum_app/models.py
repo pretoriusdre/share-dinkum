@@ -208,9 +208,35 @@ class Account(models.Model):
             if convert_from != self.currency:
                 ExchangeRate.update_exchange_rate_history(account=self, convert_from=convert_from, convert_to=self.currency)
 
+                # The staleness check in CurrentExchangeRate.get_or_create is based on updated_at,
+                # which auto_now sets whenever the row is written, not on the age of the rate itself.
+                # An import, restore or backfill therefore writes an old rate with a current timestamp
+                # and it is then treated as fresh for the next hour. Force the fetch so the current
+                # rate is genuinely current before any instrument is valued against it.
+                CurrentExchangeRate.get_or_create(
+                    account=self,
+                    convert_from=convert_from,
+                    convert_to=convert_to,
+                    force_refresh=True,
+                )
+
+    CALCULATED_FIELDS = frozenset({
+        'calculated_portfolio_value_converted',
+        'calculated_portfolio_value_converted_currency',
+    })
+
     def save(self, *args, **kwargs):
         self.calculated_portfolio_value_converted = self.portfolio_value_converted
         self.calculated_portfolio_value_converted_currency = self.currency
+
+        # Every save recomputes the portfolio value, so a partial save has to write it too.
+        # Without this, a caller narrowing update_fields to its own field (as the price refresh
+        # signal does) silently discards the freshly calculated total and leaves the stored
+        # figure behind whatever the instruments now say.
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = set(update_fields) | self.CALCULATED_FIELDS
+
         user = kwargs.pop('user', None)
         super().save(*args, **kwargs)
 
