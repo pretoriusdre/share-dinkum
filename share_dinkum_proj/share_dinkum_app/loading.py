@@ -2,6 +2,7 @@ import pandas as pd
 
 from datetime import date, datetime
 import shutil
+import sqlite3
 from tqdm import tqdm
 from pathlib import Path
 
@@ -329,8 +330,55 @@ from share_dinkum_app.models import Account, DataExport
 
 class DataBackupManager:
 
+    # Seconds are included so two backups taken in the same minute do not collide. Sorting stays
+    # chronological against older folders created before seconds were added, because those names
+    # are a prefix of the longer ones.
+    BACKUP_FOLDER_FORMAT = "%Y-%m-%dT%H%M%S"
+
+    RETAIN_BACKUPS = 5
+
+    # Restores copy the live data here first, so an unwanted restore can be undone.
+    PRE_RESTORE_NAME = 'pre_restore'
+    RETAIN_PRE_RESTORE = 3
+
     def __init__(self, base_path: Path):
         self.base_path = Path(base_path)
+
+
+    def list_backups(self, name):
+        """Backup folder names within a set, newest first.
+
+        Every caller orders backups through this one method. Listing and selecting from separate
+        orderings is how a restore ends up loading a different backup from the one displayed.
+        """
+        backup_base_path = self.base_path / name
+        if not backup_base_path.exists():
+            return []
+
+        return sorted(
+            (folder.name for folder in backup_base_path.iterdir() if folder.is_dir()),
+            reverse=True,
+        )
+
+
+    @staticmethod
+    def copy_sqlite_database(source: Path, destination: Path):
+        """Copy a SQLite database using its online backup API.
+
+        A plain file copy of a database that is being written to can capture a torn file, and the
+        development server may well be running while a backup is taken. The backup API takes a
+        consistent snapshot regardless.
+        """
+        source_connection = sqlite3.connect(f'file:{source}?mode=ro', uri=True)
+        try:
+            destination_connection = sqlite3.connect(destination)
+            try:
+                with destination_connection:
+                    source_connection.backup(destination_connection)
+            finally:
+                destination_connection.close()
+        finally:
+            source_connection.close()
 
 
     def create_data_exports_for_all_accounts(self, include_price_history: bool = True):
@@ -359,11 +407,8 @@ class DataBackupManager:
             logger.info(f"No backups found in {backup_base_path} to clean up.")
             return
 
-        backups = [folder for folder in backup_base_path.iterdir() if folder.is_dir()]
-        backups_sorted = sorted(backups, key=lambda x: x.name, reverse=True)
-
-        old_backups = backups_sorted[keep:]
-        for old_backup in old_backups:
+        for folder_name in self.list_backups(name)[keep:]:
+            old_backup = backup_base_path / folder_name
             try:
                 shutil.rmtree(old_backup)
                 logger.info(f"Deleted old backup: {old_backup}")
@@ -376,7 +421,7 @@ class DataBackupManager:
         """
         Backup SQLite DB, media folder, and create DataExport files for all accounts.
         """
-        folder_name = datetime.now().strftime("%Y-%m-%dT%H%M")
+        folder_name = datetime.now().strftime(self.BACKUP_FOLDER_FORMAT)
         backup_path = self.base_path / name / folder_name
 
         backup_path.mkdir(parents=True, exist_ok=False)
@@ -388,15 +433,13 @@ class DataBackupManager:
         db_file = Path(settings.DATABASES['default']['NAME'])
         backup_db_file = backup_path / db_file.name
         logger.info(f"Backing up SQLite DB from {db_file} to {backup_db_file}")
-        shutil.copy2(db_file, backup_db_file)
+        self.copy_sqlite_database(db_file, backup_db_file)
 
         # Backup media folder (includes DataExport files)
         media_backup = backup_path / "media"
-        if media_backup.exists():
-            shutil.rmtree(media_backup)
         shutil.copytree(Path(settings.MEDIA_ROOT), media_backup)
 
-        self.cleanup_old_backups(name=name, keep=5)
+        self.cleanup_old_backups(name=name, keep=self.RETAIN_BACKUPS)
 
         logger.info(f"Backup completed successfully at {backup_path}")
 
@@ -406,40 +449,47 @@ class DataBackupManager:
         """
 
         backup_base_path = self.base_path / name
- 
-        backups = [folder.name for folder in backup_base_path.iterdir() if folder.is_dir()]
-        backups_sorted = sorted(backups, reverse=True)
-        backups_sorted = backups_sorted[:5]  # Show only the 5 most recent backups
-        if not backups_sorted:
+
+        # The menu and the selection must index the same list, or the restore loads a different
+        # backup from the one shown.
+        recent_backups = self.list_backups(name)[:5]
+        if not recent_backups:
             logger.error(f"No backups found in {backup_base_path}")
             return
-        backup_choice_text = "\n".join([f"{i+1}. {backup[:10]}" for i, backup in enumerate(backups_sorted)])
 
-        choice = input(f"Available backups:\n{backup_choice_text}\nSelect a backup to restore (1-{len(backups_sorted)}). Type '1' to choose the latest backup.\n:")
+        backup_choice_text = "\n".join(
+            f"{i + 1}. {backup}{'   (latest)' if i == 0 else ''}"
+            for i, backup in enumerate(recent_backups)
+        )
+
+        choice = input(f"Available backups:\n{backup_choice_text}\nSelect a backup to restore (1-{len(recent_backups)}). Type '1' to choose the latest backup.\n:")
         try:
             choice_index = int(choice) - 1
-            if choice_index < 0 or choice_index >= len(backups_sorted):
+            if choice_index < 0 or choice_index >= len(recent_backups):
                 raise ValueError("Choice out of range")
-            selected_backup = backups[choice_index]
+            selected_backup = recent_backups[choice_index]
         except Exception as e:
             logger.error(f"Invalid choice. Restore cancelled.")
             return
 
         backup_path = backup_base_path / selected_backup
 
-        res = input("Type 'X' to OVERWRITE current data with backup.")
-        if res.upper() != 'X':
-            logger.info("Restore cancelled.")
-            return
-        
-        logger.info(f"Restoring from backup: {backup_path}")
-
         db_file = Path(settings.DATABASES['default']['NAME'])
         backup_db_file = backup_path / db_file.name
         media_backup = backup_path / "media"
 
+        # Validate before asking to confirm, so an unusable backup cannot destroy the live data.
         if not backup_db_file.exists() or not media_backup.exists():
-            raise FileNotFoundError("Backup is incomplete or missing files")
+            raise FileNotFoundError(f"Backup {selected_backup} is incomplete or missing files")
+
+        res = input(f"Type 'X' to OVERWRITE current data with the backup taken at {selected_backup}.")
+        if res.upper() != 'X':
+            logger.info("Restore cancelled.")
+            return
+
+        logger.info(f"Restoring from backup: {backup_path}")
+
+        self.snapshot_current_data()
 
         # Close DB connections
         connections.close_all()
@@ -454,3 +504,28 @@ class DataBackupManager:
         shutil.copytree(media_backup, Path(settings.MEDIA_ROOT))
 
         logger.info("Restore completed successfully.")
+
+
+    def snapshot_current_data(self):
+        """Copy the live database and media aside so that a restore can be undone.
+
+        Deliberately does not create DataExport records the way backup() does: this runs on data
+        that is about to be replaced, and should not write to the database it is preserving.
+        Recover with restore(name=DataBackupManager.PRE_RESTORE_NAME).
+        """
+        folder_name = datetime.now().strftime(self.BACKUP_FOLDER_FORMAT)
+        snapshot_path = self.base_path / self.PRE_RESTORE_NAME / folder_name
+        snapshot_path.mkdir(parents=True, exist_ok=True)
+
+        db_file = Path(settings.DATABASES['default']['NAME'])
+        if db_file.exists():
+            self.copy_sqlite_database(db_file, snapshot_path / db_file.name)
+
+        media_root = Path(settings.MEDIA_ROOT)
+        if media_root.exists():
+            shutil.copytree(media_root, snapshot_path / 'media')
+
+        self.cleanup_old_backups(name=self.PRE_RESTORE_NAME, keep=self.RETAIN_PRE_RESTORE)
+
+        logger.info(f"Current data saved to {snapshot_path} before restoring.")
+        return snapshot_path
