@@ -23,16 +23,37 @@ MEDIA = PROJECT / "media"
 BACKUP_ROOT = Path.home() / "share-dinkum-backups"
 
 
+def _call(command, cwd=None):
+    """Run a command to completion and return its exit code, surviving Ctrl+C.
+
+    Ctrl+C in a console is delivered to every process attached to it, so the child gets it too and
+    stops on its own. Waiting through the interrupt lets it print its own shutdown message and set
+    its own exit code, instead of this process dying first and printing a traceback over the top.
+    A second Ctrl+C means the child is not stopping by itself, so it gets stopped here rather than
+    leaving the window stuck with no way out.
+    """
+    process = subprocess.Popen(command, cwd=cwd)
+
+    interrupts = 0
+    while True:
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            interrupts += 1
+            if interrupts > 1:
+                process.terminate()
+
+
 def main():
     argv = sys.argv[1:] or ["runserver"]
-    raise SystemExit(subprocess.call([sys.executable, str(MANAGE), *argv]))
+    raise SystemExit(_call([sys.executable, str(MANAGE), *argv]))
 
 
 def _run(description, command):
     """Run one step, stopping the update if it fails."""
     print(f"\n==> {description}")
     print(f"    {' '.join(command)}")
-    if subprocess.call(command, cwd=ROOT) != 0:
+    if _call(command, cwd=ROOT) != 0:
         print(f"\nUpdate stopped: '{' '.join(command)}' failed.")
         print("Your data has not been changed. Fix the problem above, then run the update again.")
         raise SystemExit(1)
@@ -159,3 +180,10 @@ def update():
     print("\nUpdate complete. Start the app with:  uv run dev")
     if backup_path:
         print(f"If something looks wrong, your previous data is in {backup_path}")
+
+
+if __name__ == "__main__":
+    # Normally reached as the `dev` console script rather than as a file. Without this, running the
+    # file directly defines these functions, does nothing and exits 0, which looks like a server
+    # that started and stopped instantly.
+    main()

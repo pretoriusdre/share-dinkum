@@ -154,22 +154,16 @@ From the repository root (`cd ..` if you are still in `share_dinkum_proj`):
 uv run dev migrate
 ```
 
-### 5. Create your login
-
-```powershell
-uv run dev createsuperuser
-```
-
-Enter a username and password when prompted, and remember them; you will use them to log in. The
-password is not shown as you type, which is normal.
-
-### 6. Start the app
+### 5. Start the app
 
 ```powershell
 uv run dev
 ```
 
-Then open **http://127.0.0.1:8000/** in your browser and log in with the account from step 5.
+Then open **http://127.0.0.1:8000/** in your browser. There is no login to set up and no password to
+remember: the app runs on your own machine against your own database, so it signs you in
+automatically. If you ever make an install reachable by anyone else, put `LOCAL_AUTO_LOGIN=False` in
+`.env` and create an account with `uv run dev createsuperuser`, and the normal login page comes back.
 
 Leave the terminal window open while you use the app. Press `Ctrl+C` there to stop the server.
 

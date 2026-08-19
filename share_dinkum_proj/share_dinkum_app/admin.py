@@ -217,10 +217,7 @@ class AccountAdmin(admin.ModelAdmin):
 def _select_account_for_user(user):
     if not getattr(user, 'is_authenticated', False):
         return None
-    account = getattr(user, 'default_account', None)
-    if account:
-        return account
-    return Account.objects.filter(owner=user).order_by('created_at').first()
+    return getattr(user, 'visible_account', None)
 
 
 def _decimal_to_float(value):
