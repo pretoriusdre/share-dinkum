@@ -43,8 +43,13 @@ SECRET_KEY = ensure_secret_key(ENV_PATH)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', cast=bool)
 
+# This is a personal, single-user app that runs on your own machine, so it signs you in
+# automatically and never asks for a password. Set LOCAL_AUTO_LOGIN=False in .env if you ever
+# make an install reachable by anyone else.
+LOCAL_AUTO_LOGIN = config('LOCAL_AUTO_LOGIN', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.pythonanywhere.com']
+
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 
 
@@ -79,8 +84,10 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'share_dinkum_app.middleware.AutoLoginMiddleware',          # This line bypasses login (for local use only)
 ]
+
+if LOCAL_AUTO_LOGIN:
+    MIDDLEWARE.append('share_dinkum_app.middleware.AutoLoginMiddleware')
 
 if DEBUG:
     MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
@@ -121,10 +128,21 @@ CORS_ALLOWED_ORIGINS = [
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 
+DB_ENGINE = config('DB_ENGINE')
+DB_NAME = config('DB_NAME')
+
+# For SQLite the name is a file path, and a relative one is resolved against the working directory
+# of whatever started Django. That makes `uv run dev` from the repository root and a notebook run
+# from share_dinkum_proj open two different database files, each looking like an empty portfolio to
+# the other. Anchor the path to the project so every way of starting the app finds the same data.
+# ':memory:' and 'file:...' URIs name a database rather than a file on disk, so they are left be.
+if 'sqlite' in DB_ENGINE and not os.path.isabs(DB_NAME) and not DB_NAME.startswith((':', 'file:')):
+    DB_NAME = os.path.join(BASE_DIR, DB_NAME)
+
 DATABASES = {
     'default': {
-        'ENGINE': config('DB_ENGINE'),
-        'NAME': config('DB_NAME'),
+        'ENGINE': DB_ENGINE,
+        'NAME': DB_NAME,
         'USER': config('DB_USER'),
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),

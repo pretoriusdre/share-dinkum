@@ -44,6 +44,16 @@ class AppUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
 
+    @property
+    def visible_account(self):
+        """The portfolio this user sees: the default they chose, else the first one they created.
+
+        The dashboard and the local auto-login both need this answer, and they have to agree: if
+        auto-login picks a user on one basis and the dashboard resolves a portfolio on another, you
+        get signed in to an account whose data you cannot see.
+        """
+        return self.default_account or Account.objects.filter(owner=self).order_by('created_at').first()
+
     def save(self, *args, **kwargs):
         update_fields = kwargs.get('update_fields', None)
 
