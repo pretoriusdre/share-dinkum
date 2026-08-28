@@ -36,4 +36,4 @@ Version 0.2.0 is the start of formal version tagging, although the tool has been
 - Updating an existing record during a load saved it twice, running every signal twice.
 
 
-Planning is ongoing for implementation of the 2027 Austrlaian Capital Gains Tax changes.
+Planning is ongoing for implementation of the 2027 Australian Capital Gains Tax changes.
