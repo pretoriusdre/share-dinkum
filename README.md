@@ -16,7 +16,7 @@ There may be bugs, and usage is entirely at your own risk. Please refer to the l
 
 ### Data entry
 
-You can either enter items via the web interface or using the bulk import tool (from Excel). If you want to bulk import data, you create a **[DataImport]** object, attaching the template. If you want to export the data, you create a **[DataExport]** object. The data export output file can be imported again to update values.
+You can either enter items via the web interface or in bulk from Excel. Bulk loading is done from the `data_import.ipynb` notebook, which loads one Excel file into one portfolio; see [Data import instructions](#optional-data-import-instructions). If you want to export the data, you create a **[DataExport]** object. The data export output file can be imported again to update values in the portfolio it came from.
 
 ### Data model / principal of operation
 
@@ -233,27 +233,35 @@ You can bulk load your share data from Excel using the provided tools.
 
 ### 1. Prepare the Data Loading Template
 
-Navigate to the import directory:
+From the repository root, generate an empty template:
 
-```bash
-cd share_dinkum_proj/share_dinkum_app/import_data
+```powershell
+uv run dev make_import_template
 ```
 
-Copy the public template and rename it:
+That writes `share_dinkum_proj/share_dinkum_app/import_data/data_import_template_blank.xlsx`, with
+every sheet and column the loader understands and no data in it. Take one copy per portfolio:
 
 - Windows (PowerShell or Command Prompt):
   ```powershell
-  copy data_import_template_public.xlsx data_import_template_private.xlsx
+  cd share_dinkum_proj\share_dinkum_app\import_data
+  copy data_import_template_blank.xlsx data_import_template_private.xlsx
   ```
 - macOS/Linux:
   ```bash
-  cp data_import_template_public.xlsx data_import_template_private.xlsx
+  cd share_dinkum_proj/share_dinkum_app/import_data
+  cp data_import_template_blank.xlsx data_import_template_private.xlsx
   ```
 
+Anything ending in `_private.xlsx` is excluded from the repository, so your files stay yours and
+updates leave them alone.
+
+If you would rather see worked examples first, `data_import_template_public.xlsx` is the same
+template filled in with sample data.
 
 ### 2. Edit the Template
 
-Fill in your personal share data in `data_import_template_private.xlsx` using Excel.
+Fill in your share data in `data_import_template_private.xlsx` using Excel.
 
 ### 3. Run the Bulk Load Script
 
@@ -278,7 +286,53 @@ Open `share_dinkum_proj/data_import_private.ipynb` and run the cells in order. E
     uv run --with notebook jupyter notebook share_dinkum_proj/data_import_private.ipynb
     ```
 
-The notebook clears any existing data before loading, so only run it when that is what you want.
+Loading only ever adds to the portfolio a file is listed against. Nothing you have already loaded is
+removed, so it is safe to run again after a new year of trades. The one cell that deletes anything is
+at the very bottom of the notebook under **Danger zone**, and it is commented out; it wipes every
+portfolio, not just one, and is only there for starting again from nothing.
+
+### Multiple portfolios
+
+Each Excel file is loaded into exactly one portfolio, so keeping several is a matter of listing them.
+Generate a blank template per portfolio as above, then edit the `portfolios` list near the top of
+your `data_import_private.ipynb`:
+
+```python
+portfolios = [
+    {
+        'description': 'Default Portfolio',
+        'input_file': import_data_folder / 'data_import_template_private.xlsx',
+    },
+    {
+        'description': "Partner's Portfolio",
+        'input_file': import_data_folder / 'partner_private.xlsx',
+    },
+]
+```
+
+Run the cells in order and each file is loaded into its own portfolio. Adding a portfolio to the list
+later and running it again loads only the new one; the others are untouched. Portfolios are matched
+by name, so keep the descriptions distinct.
+
+Two things to know:
+
+- Rows carrying a `legacy_id` are matched on it, so loading a corrected file again updates those rows
+  rather than duplicating them. Rows with no `legacy_id` are always added.
+- A **[DataExport]** file can be loaded back into the portfolio it came from, but not into a
+  different one. Its rows carry their identity with them, so loading it elsewhere would move them out
+  of the original portfolio rather than copying them. The loader refuses and tells you so.
+
+---
+
+## Version and updates
+
+The version is shown on the dashboard, next to Recent actions. Once a day the app checks GitHub for a
+newer [release](https://github.com/pretoriusdre/share-dinkum/releases) and tells you there if one is
+available, along with a link to what changed. If you are offline it simply says nothing.
+
+To upgrade, stop the server and run `uv run update`. See
+[Updating to a newer version](#updating-to-a-newer-version) for what that does, and
+[CHANGELOG.md](CHANGELOG.md) for the history.
 
 ---
 

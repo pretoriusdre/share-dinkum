@@ -150,6 +150,14 @@ class FiscalYear(models.Model):
 
 class Account(models.Model):
     MODEL_DESCRIPTION = 'Represents a particular portfolio.'
+
+    class Meta:
+        constraints = [
+            # Portfolios are looked up by description when loading a file, so two of one name would
+            # make it ambiguous which one a file was meant for.
+            models.UniqueConstraint(fields=['owner', 'description'], name='account_keys')
+        ]
+
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     description = models.CharField(max_length=40)
     created_at = models.DateTimeField(auto_now_add=True)

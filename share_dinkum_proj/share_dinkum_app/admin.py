@@ -25,6 +25,8 @@ import share_dinkum_app
 import share_dinkum_app.admin
 import share_dinkum_app.models
 
+from share_dinkum_app import version
+
 from share_dinkum_app.models import (
     AppUser,
     Account,
@@ -614,6 +616,17 @@ def _prepare_dashboard_context(request, context):
             'area_chart_datasets': area_chart_datasets,
             'value_chart_labels': value_chart_labels,
             'value_chart_datasets': value_chart_datasets,
+        }
+    )
+
+    # Never raises, and answers from a cached result for most of the day.
+    update_check = version.check_for_update()
+    context.update(
+        {
+            'app_version': update_check['current_version'],
+            'latest_version': update_check['latest_version'],
+            'release_url': update_check['release_url'],
+            'update_available': update_check['update_available'],
         }
     )
 

@@ -1,0 +1,20 @@
+{% load i18n %}
+
+<div class="module" id="version-module">
+    <h2>{% trans "Version" %}</h2>
+
+    <p class="version-current">Share Dinkum v{{ app_version }}</p>
+
+    {% if update_available %}
+        <p class="version-update">{% trans "Version" %} {{ latest_version }} {% trans "is available." %}</p>
+        <p class="version-howto">
+            {% trans "Stop the server, then run" %} <code>uv run update</code>
+        </p>
+        <p><a href="{{ release_url }}" target="_blank" rel="noopener">{% trans "What's new" %}</a></p>
+    {% elif latest_version %}
+        <p class="no-data">{% trans "This is the latest version." %}</p>
+    {% else %}
+        {# Either there is no network, or no release has been published yet. Neither is worth an alarm. #}
+        <p><a href="{{ release_url }}" target="_blank" rel="noopener">{% trans "Releases" %}</a></p>
+    {% endif %}
+</div>
