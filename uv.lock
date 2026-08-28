@@ -781,7 +781,7 @@ wheels = [
 
 [[package]]
 name = "share-dinkum"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "django" },
@@ -792,6 +792,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "python-decouple" },
+    { name = "requests" },
     { name = "tqdm" },
     { name = "whitenoise" },
     { name = "yfinance" },
@@ -807,6 +808,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "python-decouple", specifier = ">=3.8" },
+    { name = "requests", specifier = ">=2.32.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "whitenoise", specifier = ">=6.9.0" },
     { name = "yfinance", specifier = ">=0.2.64" },

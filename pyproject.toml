@@ -1,6 +1,6 @@
 [project]
 name = "share-dinkum"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open source share tracker for Australian and other shares"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -13,6 +13,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pandas>=2.3.0",
     "python-decouple>=3.8",
+    "requests>=2.32.0",
     "tqdm>=4.67.1",
     "whitenoise>=6.9.0",
     "yfinance>=0.2.64",

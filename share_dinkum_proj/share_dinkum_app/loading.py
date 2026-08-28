@@ -125,19 +125,26 @@ class DataLoader():
     
 
     def load_all_tables(self):
+        """Load every table in the file, or none of them.
+
+        A file can fail part way through, most often where a transaction names an instrument which
+        was never listed. Without a transaction that leaves a half loaded portfolio, which is hard
+        to tell apart from a complete one, so the whole file is applied as a single unit.
+        """
 
         model_load_order = self.get_model_load_order()
 
-        for model in model_load_order:
-            table_name = model.__name__
+        with transaction.atomic():
+            for model in model_load_order:
+                table_name = model.__name__
 
-            if table_name in ['LogEntry']:
-                continue  # Skip loading LogEntry as ContentType as a name property, not field. Hard to loookup by name.
+                if table_name in ['LogEntry']:
+                    continue  # Skip loading LogEntry as ContentType as a name property, not field. Hard to loookup by name.
 
-            df = self.mapping.get(table_name)
-            if df is not None:
-                logger.info(f"Loading {table_name}")
-                self.load_table_to_model(model=model, df=df)
+                df = self.mapping.get(table_name)
+                if df is not None:
+                    logger.info(f"Loading {table_name}")
+                    self.load_table_to_model(model=model, df=df)
 
 
     def load_table_to_model(self, model, df):
@@ -200,10 +207,13 @@ class DataLoader():
         # Change any NaT, NaN etc to None
         df = df.where(pd.notnull(df), None)
 
+        model_has_account = 'account' in [f.name for f in model._meta.fields]
+
         for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
-            record['account_id'] = self.account.id
+            if model_has_account:
+                record['account_id'] = self.account.id
             id = record.pop('id', None)
 
             # This is used on loading sell allocations using legacy id.
@@ -230,19 +240,93 @@ class DataLoader():
                 # Try to update, otherwise create
                 try:
                     obj = model.objects.get(id=id)
+                    self.check_belongs_to_account(obj=obj, model=model)
                     for field, value in record.items():
                         setattr(obj, field, value)
                     save_with_logging(obj=obj, context="Updating existing object")
-                    obj.save()
-                
+
                 except ObjectDoesNotExist:
                     # Object with ID does not exist; create new
                     record['id'] = id  # Preserve provided ID
                     obj = model(**record)
                     save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
             else:
-                obj = model(**record)
-                save_with_logging(obj=obj, context="Creating new object without provided ID")
+                obj = self.get_existing_by_unique_fields(model=model, record=record)
+                if obj is not None:
+                    for field, value in record.items():
+                        setattr(obj, field, value)
+                    save_with_logging(obj=obj, context="Updating existing object matched on its unique fields")
+                else:
+                    obj = model(**record)
+                    save_with_logging(obj=obj, context="Creating new object without provided ID")
+
+
+    def check_belongs_to_account(self, obj, model):
+        """Refuse to move an existing record into a different portfolio.
+
+        Records are matched on their id alone, so an export taken from one portfolio can be pointed
+        at another. The account would then be overwritten rather than a copy being made, emptying
+        the portfolio the records came from. Nobody loading a file means that, so it is stopped here.
+        """
+        existing_account_id = getattr(obj, 'account_id', None)
+        if existing_account_id is None or existing_account_id == self.account.id:
+            return
+
+        existing_account = app_models.Account.objects.filter(id=existing_account_id).first()
+        raise ValueError(
+            f'{model.__name__} {obj.id} already belongs to the portfolio "{existing_account}", so it'
+            f' cannot be loaded into "{self.account}". Loading an export into a different portfolio'
+            ' would move those records out of the original one rather than copying them. Remove the'
+            ' id column from the file to load them as new records instead.'
+        )
+
+
+    def get_existing_by_unique_fields(self, model, record):
+        """Find the record this one would collide with, on whichever unique constraint it satisfies.
+
+        Reference tables such as Market and Instrument are unique per portfolio, so a second file
+        covering the same instruments would otherwise fail on the first repeated code.
+
+        Transactions have no unique constraint, because two identical buys on the same day are two
+        real buys. They are matched on legacy_id instead, which is the reference you give a row in
+        the file, so loading the same file twice updates those rows rather than doubling your
+        holdings. A row with no legacy_id is always added.
+        """
+        legacy_id = record.get('legacy_id')
+        model_field_names = {field.name for field in model._meta.fields}
+        if legacy_id and 'legacy_id' in model_field_names and 'account_id' in record:
+            existing = model.objects.filter(account_id=record['account_id'], legacy_id=legacy_id).first()
+            if existing is not None:
+                return existing
+
+        for constraint in model._meta.constraints:
+            field_names = getattr(constraint, 'fields', None)
+            if not field_names:
+                continue  # Not a unique constraint over plain fields, so nothing to match on.
+
+            filters = {}
+            for field_name in field_names:
+                # A foreign key is present in the record either as the object ('instrument') or as
+                # the raw id ('account_id'), depending on how the column was processed above.
+                attname = model._meta.get_field(field_name).attname
+                if attname in record:
+                    value = record[attname]
+                elif field_name in record:
+                    value = record[field_name]
+                else:
+                    filters = None
+                    break
+                if value is None:
+                    filters = None
+                    break
+                filters[field_name] = value
+
+            if filters:
+                existing = model.objects.filter(**filters).first()
+                if existing is not None:
+                    return existing
+
+        return None
 
 
     def get_or_create_exchange_rate(self, convert_from, exchange_date):

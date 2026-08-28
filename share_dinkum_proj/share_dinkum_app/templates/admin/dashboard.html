@@ -103,6 +103,19 @@
             margin-top: 0;
         }
 
+        #version-module p {
+            margin: 0.25rem 0;
+        }
+
+        #version-module .version-update {
+            font-weight: 600;
+        }
+
+        #version-module .version-howto {
+            color: var(--body-quiet-color, #6b7280);
+            font-size: 0.9rem;
+        }
+
         canvas {
             width: 100% !important;
             height: auto !important;
@@ -185,6 +198,7 @@
     </div>
 
     <aside class="dashboard-sidebar">
+        {% include "admin/version_card.html" %}
         {% include "admin/index_sidebar.html" %}
     </aside>
 </div>

@@ -3,12 +3,15 @@ Comprehensive test suite for share_dinkum_app.
 
 Run with: python manage.py test share_dinkum_app
 """
+import tempfile
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pandas as pd
 
+from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase
 from django.db import IntegrityError
 from djmoney.money import Money
@@ -39,7 +42,8 @@ from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
 from share_dinkum_app.decorators import safe_property
 from share_dinkum_app.reports import RealisedCapitalGainReport
-from share_dinkum_app import yfinanceinterface
+from share_dinkum_app import excelinterface, loading, version, yfinanceinterface
+from share_dinkum_app.management.commands import make_import_template
 
 
 # --- Test data factories (minimal objects for isolation) ---
@@ -1018,3 +1022,263 @@ class ConstantsTests(TestCase):
 
     def test_default_currency(self):
         self.assertEqual(DEFAULT_CURRENCY, 'AUD')
+
+
+# =============================================================================
+# Loading: importing files into more than one portfolio
+# =============================================================================
+
+
+class ImportWorkbookMixin:
+    """Builds the kind of file a person fills in, so the tests go through the real loading path."""
+
+    def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None):
+        if markets is None:
+            markets = [{'code': 'ASX', 'description': 'Australian Securities Exchange', 'suffix': 'AX'}]
+        if instruments is None:
+            instruments = [{'name': 'BHP', 'description': 'BHP Group', 'currency': 'AUD', 'market__code': 'ASX'}]
+        if buys is None:
+            buys = [{
+                'legacy_id': 'buy-1',
+                'instrument__name': 'BHP',
+                'date': date(2023, 7, 1),
+                'quantity': Decimal('100'),
+                'unit_price': Decimal('40'),
+                'unit_price_currency': 'AUD',
+                'total_brokerage': Decimal('10'),
+                'total_brokerage_currency': 'AUD',
+            }]
+
+        if market_ids is not None:
+            markets = [dict(market, id=market_id) for market, market_id in zip(markets, market_ids)]
+
+        generator = excelinterface.ExcelGen(title='Test import')
+        generator.add_table(pd.DataFrame(markets), table_name='Market')
+        generator.add_table(pd.DataFrame(instruments), table_name='Instrument')
+        generator.add_table(pd.DataFrame(buys), table_name='Buy')
+        generator.save(path)
+        return path
+
+
+class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
+    """A file is loaded into exactly one portfolio, and never at the expense of another."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+
+        self.owner = create_user(username='owner')
+        fy_type = create_fiscal_year_type()
+        self.account_a = Account.objects.create(
+            owner=self.owner, description='Portfolio A', currency='AUD', fiscal_year_type=fy_type)
+        self.account_b = Account.objects.create(
+            owner=self.owner, description='Portfolio B', currency='AUD', fiscal_year_type=fy_type)
+
+    def test_each_portfolio_gets_its_own_records(self):
+        self.build_workbook(self.workbook)
+
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+        loading.DataLoader(account=self.account_b, input_file=self.workbook)
+
+        for account in (self.account_a, self.account_b):
+            self.assertEqual(Market.objects.filter(account=account).count(), 1)
+            self.assertEqual(Instrument.objects.filter(account=account).count(), 1)
+            self.assertEqual(Buy.objects.filter(account=account).count(), 1)
+            self.assertEqual(Parcel.objects.filter(account=account).count(), 1)
+
+    def test_loading_a_second_portfolio_leaves_the_first_alone(self):
+        self.build_workbook(self.workbook)
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+
+        buy_ids_before = set(Buy.objects.filter(account=self.account_a).values_list('id', flat=True))
+
+        other_workbook = Path(self.temp_dir.name) / 'other.xlsx'
+        self.build_workbook(
+            other_workbook,
+            instruments=[{'name': 'CBA', 'description': 'CBA', 'currency': 'AUD', 'market__code': 'ASX'}],
+            buys=[{
+                'legacy_id': 'buy-99',
+                'instrument__name': 'CBA',
+                'date': date(2024, 2, 1),
+                'quantity': Decimal('5'),
+                'unit_price': Decimal('100'),
+                'unit_price_currency': 'AUD',
+                'total_brokerage': Decimal('10'),
+                'total_brokerage_currency': 'AUD',
+            }],
+        )
+        loading.DataLoader(account=self.account_b, input_file=other_workbook)
+
+        buy_ids_after = set(Buy.objects.filter(account=self.account_a).values_list('id', flat=True))
+        self.assertEqual(buy_ids_before, buy_ids_after)
+        self.assertEqual(Instrument.objects.filter(account=self.account_a, name='CBA').count(), 0)
+
+    def test_loading_the_same_file_twice_is_not_doubled_up(self):
+        self.build_workbook(self.workbook)
+
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+
+        # Reference tables are unique per portfolio, and the buy is matched on its legacy_id.
+        self.assertEqual(Market.objects.filter(account=self.account_a).count(), 1)
+        self.assertEqual(Instrument.objects.filter(account=self.account_a).count(), 1)
+        self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 1)
+        self.assertEqual(Parcel.objects.filter(account=self.account_a).count(), 1)
+
+    def test_a_row_with_no_legacy_id_is_always_added(self):
+        buy = {
+            'instrument__name': 'BHP',
+            'date': date(2023, 7, 1),
+            'quantity': Decimal('100'),
+            'unit_price': Decimal('40'),
+            'unit_price_currency': 'AUD',
+            'total_brokerage': Decimal('10'),
+            'total_brokerage_currency': 'AUD',
+        }
+        self.build_workbook(self.workbook, buys=[buy])
+
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+
+        self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 2)
+
+    def test_records_are_not_moved_between_portfolios(self):
+        self.build_workbook(self.workbook)
+        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+
+        market = Market.objects.get(account=self.account_a)
+
+        # An export carries the id of every row, so pointing one at another portfolio would
+        # otherwise move the records rather than copy them.
+        reparenting_workbook = Path(self.temp_dir.name) / 'export.xlsx'
+        self.build_workbook(reparenting_workbook, market_ids=[str(market.id)])
+
+        with self.assertRaises(ValueError) as raised:
+            loading.DataLoader(account=self.account_b, input_file=reparenting_workbook)
+
+        self.assertIn('Portfolio A', str(raised.exception))
+        market.refresh_from_db()
+        self.assertEqual(market.account_id, self.account_a.id)
+
+    def test_a_file_that_fails_part_way_leaves_nothing_behind(self):
+        # The buy names an instrument the file never lists, which fails after the reference tables
+        # have already been written.
+        self.build_workbook(
+            self.workbook,
+            buys=[{
+                'legacy_id': 'buy-1',
+                'instrument__name': 'NOT_LISTED',
+                'date': date(2023, 7, 1),
+                'quantity': Decimal('100'),
+                'unit_price': Decimal('40'),
+                'unit_price_currency': 'AUD',
+                'total_brokerage': Decimal('10'),
+                'total_brokerage_currency': 'AUD',
+            }],
+        )
+
+        with self.assertRaises(Instrument.DoesNotExist):
+            loading.DataLoader(account=self.account_a, input_file=self.workbook)
+
+        self.assertEqual(Market.objects.filter(account=self.account_a).count(), 0)
+        self.assertEqual(Instrument.objects.filter(account=self.account_a).count(), 0)
+        self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 0)
+
+
+class AccountUniquenessTests(TestCase):
+    """Portfolios are found by name when loading a file, so a duplicate name would be ambiguous."""
+
+    def test_one_owner_cannot_have_two_portfolios_of_the_same_name(self):
+        owner = create_user(username='duplicate-owner')
+        fy_type = create_fiscal_year_type()
+        Account.objects.create(owner=owner, description='Shared name', fiscal_year_type=fy_type)
+
+        with self.assertRaises(IntegrityError):
+            Account.objects.create(owner=owner, description='Shared name', fiscal_year_type=fy_type)
+
+    def test_different_owners_may_use_the_same_name(self):
+        fy_type = create_fiscal_year_type()
+        first = create_user(username='first-owner')
+        second = create_user(username='second-owner')
+
+        Account.objects.create(owner=first, description='My Portfolio', fiscal_year_type=fy_type)
+        Account.objects.create(owner=second, description='My Portfolio', fiscal_year_type=fy_type)
+
+        self.assertEqual(Account.objects.filter(description='My Portfolio').count(), 2)
+
+
+# =============================================================================
+# Version and update check
+# =============================================================================
+
+
+class VersionTests(TestCase):
+
+    def test_parse_version_accepts_a_tag(self):
+        self.assertEqual(version.parse_version('v1.2.3'), (1, 2, 3))
+        self.assertEqual(version.parse_version('1.2.3'), (1, 2, 3))
+
+    def test_parse_version_ignores_anything_else(self):
+        self.assertIsNone(version.parse_version(None))
+        self.assertIsNone(version.parse_version(''))
+        self.assertIsNone(version.parse_version('not-a-version'))
+
+    def test_an_unreachable_github_reports_no_update(self):
+        with patch.object(version.requests, 'get', side_effect=OSError('no network')):
+            with patch.object(version, 'read_cache', return_value=None):
+                result = version.check_for_update()
+
+        self.assertFalse(result['update_available'])
+        self.assertIsNone(result['latest_version'])
+        self.assertEqual(result['current_version'], version.__version__)
+
+    def test_no_published_release_reports_no_update(self):
+        response = MagicMock(status_code=404)
+        with patch.object(version.requests, 'get', return_value=response):
+            with patch.object(version, 'read_cache', return_value=None):
+                with patch.object(version, 'write_cache', side_effect=lambda latest_version, release_url: {
+                        'latest_version': latest_version, 'release_url': release_url}):
+                    result = version.check_for_update()
+
+        self.assertFalse(result['update_available'])
+        self.assertIsNone(result['latest_version'])
+
+    def test_a_newer_release_is_reported(self):
+        cached = {'latest_version': '99.0.0', 'release_url': 'https://example.invalid/releases/99.0.0'}
+        with patch.object(version, 'read_cache', return_value=cached):
+            result = version.check_for_update()
+
+        self.assertTrue(result['update_available'])
+        self.assertEqual(result['latest_version'], '99.0.0')
+        self.assertEqual(result['release_url'], 'https://example.invalid/releases/99.0.0')
+
+    def test_the_installed_release_is_not_reported_as_an_update(self):
+        cached = {'latest_version': version.__version__, 'release_url': 'https://example.invalid/'}
+        with patch.object(version, 'read_cache', return_value=cached):
+            result = version.check_for_update()
+
+        self.assertFalse(result['update_available'])
+
+
+class ImportTemplateCommandTests(TestCase):
+    """The generated template has to stay loadable by the loader it is generated for."""
+
+    def test_the_template_round_trips_as_an_empty_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / 'blank.xlsx'
+            call_command('make_import_template', output=str(output_path))
+
+            tables = excelinterface.get_all_tables_in_excel(output_path)
+
+        for model in make_import_template.TEMPLATE_MODELS:
+            # The loader finds each table by the model's own name.
+            self.assertIn(model.__name__, tables)
+            self.assertEqual(len(tables[model.__name__]), 0)
+
+    def test_the_template_offers_no_column_the_app_owns(self):
+        for model in make_import_template.TEMPLATE_MODELS:
+            columns = make_import_template.get_template_columns(model)
+            for owned in ('id', 'account', 'account_id', 'created_at', 'updated_at', 'current_unit_price'):
+                self.assertNotIn(owned, columns, f'{model.__name__} should not offer {owned}')
+            self.assertFalse([column for column in columns if column.startswith('calculated_')])
