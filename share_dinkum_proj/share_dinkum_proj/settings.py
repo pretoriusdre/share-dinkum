@@ -190,6 +190,15 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
 
+# Django's default is 1000, which a change page here passes without trying. The admin
+# builds an inline for every related model, so an instrument held for a decade arrives with
+# a form field for every buy, sell and dividend against it -- AFI alone is around 2,000.
+# The setting exists to blunt a denial of service against a public site by making a form
+# submission expensive to parse; this application runs locally against one person's own
+# data, where the same submission is simply a long page. The admin caps how much it will
+# build (see GenericModelAdmin.get_inline_instances), and this leaves room for that cap.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+
 # Todo change this if the app scales needs to scale to many users.
 WHITENOISE_ALLOW_ALL_ORIGINS = True
 

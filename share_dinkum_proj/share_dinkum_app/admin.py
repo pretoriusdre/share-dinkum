@@ -13,6 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db.models import Model, ForeignKey, Max, Min
 
@@ -156,26 +157,60 @@ class GenericModelAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
+    #: Roughly how many form fields all the inlines on one change page may add up to.
+    #: The 200-row rule below is about how long a page takes to build; this is about
+    #: whether it can be submitted at all. A form field is a POST parameter, and Django
+    #: refuses a submission with too many of them -- so a page over the limit renders
+    #: perfectly, then raises TooManyFieldsSent when you press Save, which reads as the
+    #: save being broken rather than the page being too big. Rows are the wrong unit for
+    #: that: 35 dividends carry more fields than 100 of something narrow.
+    INLINE_FIELD_BUDGET = 6000
+
     def get_inline_instances(self, request, obj=None):
 
         inline_instances = super().get_inline_instances(request, obj)
-        
+
         #added_inlines = set()
 
         if obj is not None:
+            remaining_fields = self.INLINE_FIELD_BUDGET
 
             for rel in self.model._meta.related_objects:
                 related_model = rel.related_model
                 if related_model == share_dinkum_app.models.AppUser:
                     continue
                 related_manager_name = rel.get_accessor_name()
-                related_manager = getattr(obj, related_manager_name)
-                related_count = related_manager.count()
+
+                # A reverse one-to-one is an object, not a manager, and accessing it raises
+                # when there is nothing on the other side -- unlike a reverse foreign key,
+                # which just gives an empty manager. Every CostBaseAdjustment without an
+                # AttributionStatement made this page a 500, which is all of them until one
+                # is linked. The absent side is exactly when you would open the page to
+                # create it.
+                if rel.one_to_one:
+                    try:
+                        getattr(obj, related_manager_name)
+                        related_count = 1
+                    except ObjectDoesNotExist:
+                        related_count = 0
+                else:
+                    related_manager = getattr(obj, related_manager_name)
+                    related_count = related_manager.count()
+
                 # Don't show the Inline if there are more than 200 related objects, due to loading speed concerns.
                 if related_count < 200:
                     # We only want to ManyToOneRel to the through tables.
                     if isinstance(rel, ManyToManyRel):
                         continue
+
+                    # What this inline will cost in form fields, near enough: one per
+                    # editable field per row, plus the blank rows the formset adds.
+                    editable = sum(1 for f in related_model._meta.fields if f.editable)
+                    cost = (related_count + BaseInline.extra) * editable
+                    if cost > remaining_fields:
+                        continue
+                    remaining_fields -= cost
+
                     inline = type('DynamicInline', (BaseInline,), {'model': related_model})
                     #if related_model not in added_inlines:
                     inline_instances.append(inline(self.model, self.admin_site))

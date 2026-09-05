@@ -155,7 +155,7 @@
     <div class="dashboard-main">
         <div class="dashboard-wrapper">
             <div>
-                <h1 class="dashboard-title">{% trans "Dashboard" %}{% if dashboard_account %} – {{ dashboard_account.description }}{% endif %}</h1>
+                <h1 class="dashboard-title">{% trans "Dashboard" %}{% if dashboard_account %}: {{ dashboard_account.description }}{% endif %}</h1>
                 {% if dashboard_account and dashboard_currency %}
                     <p class="dashboard-subtitle">
                         {% blocktrans with currency=dashboard_currency %}All amounts shown in {{ currency }}.{% endblocktrans %}

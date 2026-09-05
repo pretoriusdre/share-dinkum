@@ -123,7 +123,7 @@ class SellStrategy(models.TextChoices):
 class AllocationMethod(models.TextChoices):
     """How a cost base adjustment is spread across parcels."""
 
-    QTY_HELD = 'QTY_HELD', 'Alllocate to parcels, weighting by (qty * days_held) in the F.Y.'
+    QTY_HELD = 'QTY_HELD', 'Allocate to parcels, weighting by (qty * days_held) in the F.Y.'
     MANUAL = 'MANUAL', 'Manually create allocations'
 
 
@@ -156,6 +156,32 @@ class AttributionComponent(models.TextChoices):
     # parcel is CostBaseAdjustment, linked from the statement.
     COSTBASE_INCREASE = 'COSTBASE_INCREASE', 'AMIT cost base net amount - shortfall (increase cost base)'
     COSTBASE_DECREASE = 'COSTBASE_DECREASE', 'AMIT cost base net amount - excess (reduce cost base)'
+
+    # The pre-AMIT equivalents. A statement from before the fund elected into the AMIT
+    # regime -- everything up to roughly 2018 -- states these instead, and without them
+    # such a statement cannot be transcribed at all. Which line moves a cost base differs
+    # between the two, and getting that backwards is the whole reason to record them
+    # separately rather than mapping them onto the AMIT names.
+    #: Reduces the cost base under CGT event E4. On a pre-AMIT statement this is the line
+    #: that does what the AMIT cost base net amount does, and a nil here is what shows a
+    #: nil adjustment was read rather than never entered.
+    TAX_DEFERRED = 'TAX_DEFERRED', 'Tax-deferred amount (reduces cost base)'
+    #: Does not touch the cost base. s104-71(3) excludes the part of a non-assessable
+    #: payment attributable to the CGT discount from the E4 reduction, so recording this as
+    #: a cost base movement would understate every later gain.
+    CGT_CONCESSION = 'CGT_CONCESSION', 'CGT concession amount (does not adjust cost base)'
+    #: Leaves the cost base alone but reduces the reduced cost base, so it can only ever
+    #: make a loss smaller, never a gain larger. Tax-free and tax-exempt are stated as
+    #: separate lines on a Vanguard statement and are kept separate here for that reason:
+    #: a transcription that has to merge two printed lines into one is not a transcription.
+    TAX_FREE = 'TAX_FREE', 'Tax-free amount (reduces reduced cost base only)'
+    TAX_EXEMPT = 'TAX_EXEMPT', 'Tax-exempt amount (reduces reduced cost base only)'
+    #: Cash distributed in excess of what the trust attributed. Some AMIT statements
+    #: state this instead of an AMIT cost base net amount, under 'other non-assessable
+    #: amounts', and it is what reduces the cost base on those. Kept distinct from
+    #: TAX_DEFERRED because the two belong to different regimes and appear on
+    #: differently shaped statements; reading one as the other loses that.
+    NON_ATTRIBUTABLE = 'NON_ATTRIBUTABLE', 'Other non-attributable amount (reduces cost base)'
 
     # Income, which is not a capital gain but arrives on the same statement.
     FRANKED_DISTRIBUTION = 'FRANKED_DISTRIBUTION', 'Franked distributions from trusts'

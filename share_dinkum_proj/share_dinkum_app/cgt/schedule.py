@@ -245,11 +245,37 @@ def build(account, fiscal_year, prior_year_losses=None):
         # s119-5: the gains remaining after step 6. The Division 30 and 31 deductions that
         # reduce it are not portfolio data, so this is the base and not the final figure.
         minimum_tax_capital_gain_base=Money(total_net, currency),
-        warnings=_warnings(account, live, all_events),
+        warnings=_warnings(account, live, all_events, year_name),
     )
 
 
-def _warnings(account, live_events, all_events):
+def _statements_disagreeing_on_cost_base(account, year_name):
+    """Statements whose cost base line contradicts the adjustment linked to them.
+
+    Queried from the statements rather than from the events, and that is the whole point.
+    An attribution event is only built where a statement attributed a capital gain, so a
+    statement declaring nil gains and a large cost base movement -- which is most of them
+    for a property trust -- produces no event at all and would be invisible to a check that
+    walked the year's events.
+    """
+    from share_dinkum_app.models import AttributionStatement
+
+    disagreeing = []
+    statements = (
+        AttributionStatement.objects
+        .filter(account=account, is_active=True, cost_base_adjustment__isnull=False)
+        .select_related('instrument', 'cost_base_adjustment')
+    )
+    for statement in statements:
+        fiscal_year = statement.fiscal_year
+        if year_name is not None and getattr(fiscal_year, 'name', None) != year_name:
+            continue
+        if statement.cost_base_agrees is False:
+            disagreeing.append(statement)
+    return disagreeing
+
+
+def _warnings(account, live_events, all_events, year_name=None):
     """Everything that stops this schedule being final.
 
     Each of these is a case where the application knows it does not know something. Emitting
@@ -301,6 +327,18 @@ def _warnings(account, live_events, all_events):
             'when Australian residency ceased, so s104-165(3) would otherwise deem them '
             'taxable Australian property. Clear the setting to have it worked out per '
             f'parcel instead: {", ".join(overridden)}.')
+
+    disagreeing = _statements_disagreeing_on_cost_base(account, year_name)
+    if disagreeing:
+        detail = '; '.join(
+            f'{s.instrument.name} states {s.stated_cost_base_movement} '
+            f'and the adjustment records {s.cost_base_adjustment.cost_base_increase.amount}'
+            for s in sorted(disagreeing, key=lambda s: s.instrument.name))
+        warnings.append(
+            'These annual statements disagree with the cost base adjustment recorded '
+            f'against them, so one of the two was misread: {detail}. A cost base adjustment '
+            'is spread across parcels once, when it is created, so a wrong figure here has '
+            'already moved every gain derived from those parcels.')
 
     unreconciled = sorted({
         e.instrument for e in live_events if e.source_reconciles is False})

@@ -3538,6 +3538,47 @@ class CapitalGainScheduleTests(TransactionTestCase):
         self.assertEqual(schedule.warnings, [])
         self.assertFalse(schedule.is_draft)
 
+    def test_a_statement_disagreeing_on_cost_base_makes_the_schedule_a_draft(self):
+        """And it must surface even though the statement attributes no capital gain.
+
+        `_attribution_events` builds an event only where there is a gain, so a nil-gain
+        statement produces none at all -- and a nil-gain statement with a large cost base
+        movement is the normal shape for a property trust. A check walking the year's events
+        would miss exactly the statements this exists to check.
+        """
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        declare(self.account, 'RESIDENT', date(2000, 1, 1))
+
+        instrument = self.data['instrument']
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(Decimal('100.00'), 'AUD'))
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_adjustment=adjustment)
+        AttributionComponent.objects.create(
+            account=self.account, statement=statement,
+            component='COSTBASE_INCREASE', amount=Money(Decimal('251.84'), 'AUD'))
+
+        self.assertEqual(
+            [e for e in cgt.attribution_events(self.account) if e.instrument == instrument.name],
+            [], 'this statement should attribute no capital gain at all')
+
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        joined = ' '.join(schedule.warnings)
+        self.assertTrue(schedule.is_draft)
+        self.assertIn('disagree with the cost base adjustment', joined)
+        self.assertIn('251.84', joined)
+        self.assertIn('100.00', joined)
+
+        AttributionComponent.objects.filter(statement=statement).update(
+            amount=Money(Decimal('100.00'), 'AUD'))
+        cleared = ' '.join(cgt.build_schedule(self.account, 'FY2023/24').warnings)
+        self.assertNotIn('disagree with the cost base adjustment', cleared)
+
     def test_an_override_suppressing_the_deeming_makes_the_schedule_a_draft(self):
         """A blanket "no" takes every assessable gain to zero, and says nothing.
 
@@ -4823,6 +4864,188 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertEqual(instrument.legal_form, 'UNIT_TRUST')
         self.assertEqual(instrument.legal_form_source, 'SUGGESTED')
         self.assertFalse(instrument.is_classified)
+
+
+class InlineFieldBudgetTests(TransactionTestCase):
+    """A change page has to be submittable, not just renderable.
+
+    Every form field is a POST parameter, and Django refuses a submission carrying too many.
+    The page renders perfectly and then fails on Save, which reads as saving being broken
+    rather than the page being too large -- and it blocked confirming an instrument's legal
+    form, which is a single checkbox on a page carrying a decade of dividends.
+    """
+
+    def setUp(self):
+        from django.contrib.admin.sites import AdminSite
+        from share_dinkum_app.admin import GenericModelAdmin
+
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        self.admin = GenericModelAdmin(Instrument, AdminSite())
+        for index in range(12):
+            Buy.objects.create(
+                account=self.account, instrument=self.instrument,
+                date=date(2020, 1, 1) + timedelta(days=index),
+                quantity=Decimal('10'), unit_price=Money(50, 'AUD'),
+                total_brokerage=Money(10, 'AUD'))
+
+    def _request(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = AppUser.objects.first()
+        return request
+
+    def _models(self):
+        return {i.model.__name__
+                for i in self.admin.get_inline_instances(self._request(), self.instrument)}
+
+    def test_inlines_are_shown_within_the_budget(self):
+        self.assertIn('Buy', self._models())
+
+    def test_an_inline_over_the_budget_is_dropped_rather_than_breaking_the_save(self):
+        """Dropping the inline loses a convenience; exceeding the limit loses the page."""
+        self.admin.INLINE_FIELD_BUDGET = 10
+        self.assertNotIn('Buy', self._models())
+
+    def test_the_budget_is_measured_in_fields_rather_than_rows(self):
+        """Rows are the wrong unit: a wide model costs more per row than a narrow one.
+
+        Set the budget just under what the buys actually cost and the inline must go, even
+        though there are only twelve rows -- well inside the 200-row rule that governed this
+        before and could not see the difference.
+        """
+        editable = sum(1 for f in Buy._meta.fields if f.editable)
+        self.admin.INLINE_FIELD_BUDGET = editable * 12
+        self.assertNotIn('Buy', self._models())
+
+        self.admin.INLINE_FIELD_BUDGET = editable * 13
+        self.assertIn('Buy', self._models())
+
+
+class CostBaseAgreesWithStatementTests(TransactionTestCase):
+    """The statement and the adjustment are entered separately, so they can disagree.
+
+    Nothing read the cost base components before this: they were recorded for completeness
+    and no code touched them, so a statement could state one figure while the adjustment
+    that actually moves parcel cost bases carried another, and the schedule said nothing.
+    """
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        self.end = date(2024, 6, 30)
+
+    def _pair(self, recorded, components):
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=self.end,
+            cost_base_increase=Money(Decimal(recorded), 'AUD'))
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=self.end, cost_base_adjustment=adjustment)
+        for component, amount in components:
+            AttributionComponent.objects.create(
+                account=self.account, statement=statement, component=component,
+                amount=Money(Decimal(amount), 'AUD'))
+        return statement
+
+    def test_a_matching_shortfall_agrees(self):
+        statement = self._pair('251.84', [('COSTBASE_INCREASE', '251.84')])
+        self.assertEqual(statement.stated_cost_base_movement, Decimal('251.84'))
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_an_excess_is_a_reduction(self):
+        statement = self._pair('-86.98', [('COSTBASE_DECREASE', '86.98')])
+        self.assertEqual(statement.stated_cost_base_movement, Decimal('-86.98'))
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_equal_legs_net_to_nil_rather_than_disagreeing(self):
+        """The case that makes reading one leg alone wrong.
+
+        A statement can declare a large excess and an equal shortfall. Checking against the
+        shortfall alone would report a 1,958.03 discrepancy on an adjustment that is
+        correctly nil -- which is a real statement from this portfolio, twice.
+        """
+        statement = self._pair('0.00', [('COSTBASE_INCREASE', '1958.03'),
+                                        ('COSTBASE_DECREASE', '1958.03')])
+        self.assertEqual(statement.stated_cost_base_movement, Decimal('0'))
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_a_pre_amit_tax_deferred_amount_reduces_the_cost_base(self):
+        statement = self._pair('-23.30', [('TAX_DEFERRED', '23.30')])
+        self.assertEqual(statement.stated_cost_base_movement, Decimal('-23.30'))
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_a_non_attributable_amount_reduces_the_cost_base(self):
+        statement = self._pair('-671.54', [('NON_ATTRIBUTABLE', '671.54')])
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_the_amit_pair_takes_precedence_over_other_lines(self):
+        """A statement can state both; the AMIT net amount is the governing figure."""
+        statement = self._pair('122.70', [('COSTBASE_INCREASE', '122.70'),
+                                          ('NON_ATTRIBUTABLE', '66.53')])
+        self.assertEqual(statement.stated_cost_base_movement, Decimal('122.70'))
+        self.assertTrue(statement.cost_base_agrees)
+
+    def test_a_disagreement_is_reported(self):
+        statement = self._pair('100.00', [('COSTBASE_INCREASE', '251.84')])
+        self.assertFalse(statement.cost_base_agrees)
+
+    def test_nothing_to_compare_is_not_a_pass(self):
+        """An absent check must not read as a passing one."""
+        no_component = self._pair('100.00', [])
+        self.assertIsNone(no_component.stated_cost_base_movement)
+        self.assertIsNone(no_component.cost_base_agrees)
+
+        unlinked = AttributionStatement.objects.create(
+            account=self.account, instrument=create_instrument(
+                account=self.account, market=self.instrument.market, name='OTH'),
+            financial_year_end_date=self.end)
+        self.assertIsNone(unlinked.cost_base_agrees)
+
+
+class ReverseOneToOneInlineTests(TransactionTestCase):
+    """A reverse one-to-one is an object, not a manager, and raises when it is absent.
+
+    `AttributionStatement.cost_base_adjustment` is the app's only `OneToOneField`, and its
+    reverse accessor made every CostBaseAdjustment change page a 500 until a statement was
+    linked to it -- which is to say all of them, since the page is where you would go to
+    link one. A reverse foreign key hands back an empty manager and never raises, so the
+    generic loop over `related_objects` had no reason to expect this.
+    """
+
+    def setUp(self):
+        from django.contrib.admin.sites import AdminSite
+        from share_dinkum_app.admin import GenericModelAdmin
+
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        self.admin = GenericModelAdmin(CostBaseAdjustment, AdminSite())
+        self.adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(Decimal('100'), 'AUD'),
+        )
+
+    def _request(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = AppUser.objects.first()
+        return request
+
+    def test_the_change_page_builds_without_a_linked_statement(self):
+        inlines = self.admin.get_inline_instances(self._request(), self.adjustment)
+        models_shown = {inline.model for inline in inlines}
+        self.assertIn(AttributionStatement, models_shown)
+
+    def test_the_change_page_builds_with_one(self):
+        AttributionStatement.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_adjustment=self.adjustment,
+        )
+        inlines = self.admin.get_inline_instances(self._request(), self.adjustment)
+        self.assertIn(AttributionStatement, {inline.model for inline in inlines})
 
 
 class ConfirmLegalFormInAdminTests(TransactionTestCase):

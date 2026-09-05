@@ -1811,6 +1811,59 @@ class AttributionStatement(BaseModel):
             return None
         return abs(self.total_current_year_capital_gain - stated.amount.amount) < Decimal('0.02')
 
+    @safe_property
+    def stated_cost_base_movement(self):
+        """The cost base movement this statement declares, signed, or None.
+
+        Positive increases the cost base. Three shapes of statement say this three ways, and
+        the order below is the order they take precedence in, because a statement that
+        states an AMIT cost base net amount states the governing figure even where other
+        non-assessable lines also appear.
+
+        **The AMIT pair must be netted, never read one leg at a time.** A statement can
+        declare an excess and a shortfall that are both large and exactly equal -- 1,958.03
+        each way, netting to nil, is a real example from this portfolio -- so a check against
+        the shortfall alone would report a 1,958.03 discrepancy where the correct answer is
+        zero.
+        """
+        def total(*components):
+            found = self.components.filter(component__in=components, is_active=True)
+            return sum((row.amount.amount for row in found), Decimal('0')) if found else None
+
+        increase = total('COSTBASE_INCREASE')
+        decrease = total('COSTBASE_DECREASE')
+        if increase is not None or decrease is not None:
+            return (increase or Decimal('0')) - (decrease or Decimal('0'))
+
+        # Pre-AMIT, and the AMIT statements that state a non-attributable amount instead.
+        # Both only ever reduce a cost base, so both are negated.
+        for component in ('NON_ATTRIBUTABLE', 'TAX_DEFERRED'):
+            amount = total(component)
+            if amount is not None:
+                return -amount
+        return None
+
+    @safe_property
+    def cost_base_agrees(self):
+        """Whether the linked cost base adjustment matches what this statement states.
+
+        The two are entered separately and deliberately stay that way: the adjustment moves
+        parcel cost bases and the statement records what the issuer said, and a check is only
+        worth having while both sides are read independently. Deriving one from the other
+        would make them agree by construction and detect nothing.
+
+        Returns None where there is nothing to compare -- no linked adjustment, or no cost
+        base line transcribed -- because an absent check is not a passing one.
+        """
+        adjustment = getattr(self, 'cost_base_adjustment', None)
+        if adjustment is None:
+            return None
+        stated = self.stated_cost_base_movement
+        if stated is None:
+            return None
+        recorded = adjustment.cost_base_increase.amount
+        return abs(stated - recorded) < Decimal('0.02')
+
 
 class AttributionComponent(BaseModel):
     """One line from an annual tax statement.
