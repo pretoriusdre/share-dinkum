@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 import threading
 
 from django.apps import apps
@@ -15,9 +16,13 @@ from djmoney.money import Money
 from share_dinkum_app import excelinterface
 from share_dinkum_app import loading
 from share_dinkum_app.reports import RealisedCapitalGainReport
-from share_dinkum_app.constants import CGT_DISCOUNT_RATE, CGT_DISCOUNT_THRESHOLD_DAYS
+from share_dinkum_app import cgt
+from share_dinkum_app.choices import (
+    AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
+)
+from share_dinkum_app.utils import convert_to_decimal_field
 
-from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate
+from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate, Market, Instrument
 
 import logging
 logger = logging.getLogger(__name__)
@@ -31,6 +36,44 @@ def assign_default_account(sender, instance, created, **kwargs):
     if created and instance.owner.default_account is None:
         instance.owner.default_account = instance
         instance.owner.save()
+
+
+@receiver(post_save, sender=Market)
+def suggest_market_country(sender, instance, created, **kwargs):
+    """Fill in where a market is, when it can be told from the code or suffix.
+
+    Only on creation, and only when nothing was supplied. The country decides whether
+    instruments on this market are "Australian listed" for capital gains reporting, so a
+    later edit by the user must never be undone by a signal.
+    """
+    if not created or instance.country:
+        return
+
+    suggestion = cgt.suggested_country(instance)
+    if suggestion:
+        Market.objects.filter(pk=instance.pk).update(country=suggestion)
+        instance.country = suggestion
+
+
+@receiver(post_save, sender=Instrument)
+def suggest_instrument_legal_form(sender, instance, created, **kwargs):
+    """Suggest whether a well known code is a company or a trust.
+
+    Recorded as a suggestion, never as a confirmation: the distinction is what lets a
+    capital gains schedule say it is a draft. Anything the user has confirmed is left
+    alone, and so is anything not on the seed list.
+    """
+    if not created or instance.legal_form_source == LegalFormSource.USER:
+        return
+    if instance.legal_form != LegalForm.UNKNOWN:
+        return
+
+    suggestion = cgt.suggest_legal_form(instance)
+    if suggestion:
+        Instrument.objects.filter(pk=instance.pk).update(
+            legal_form=suggestion, legal_form_source=LegalFormSource.SUGGESTED)
+        instance.legal_form = suggestion
+        instance.legal_form_source = LegalFormSource.SUGGESTED
 
 
 @receiver(post_save, sender=Buy)
@@ -69,7 +112,7 @@ def create_sell_allocations(sender, instance, created, **kwargs):
     if not created or instance._creation_handled:
         return
 
-    if instance.strategy == 'MANUAL':
+    if instance.strategy == SellStrategy.MANUAL:
         instance._creation_handled = True
         instance.save(update_fields=["_creation_handled"])
         return
@@ -81,21 +124,29 @@ def create_sell_allocations(sender, instance, created, **kwargs):
         buy__date__lte=instance.date,
     )
 
-    if instance.strategy == 'FIFO':
+    if instance.strategy == SellStrategy.FIFO:
         available_parcels = available_parcels.order_by('buy__date')
-    elif instance.strategy == 'LIFO':
+    elif instance.strategy == SellStrategy.LIFO:
         available_parcels = available_parcels.order_by('-buy__date')
-    elif instance.strategy == 'MIN_CGT':
+    elif instance.strategy == SellStrategy.MIN_CGT:
         unit_proceeds = instance.unit_proceeds
 
         def get_unit_net_capital_gain(parcel):
+            """Rank parcels by the gain per unit left after any discount.
+
+            The discount rule comes from the cgt package rather than being applied here, so
+            that parcel selection and the reports can never disagree about what a gain is
+            worth. That matters more than it looks: this is the one place a discount is
+            applied to a decision rather than to a figure, and the rule it uses is known to
+            be wrong for a foreign or temporary resident.
+            """
             capital_gain = unit_proceeds - parcel.unit_cost_base
-            if (instance.date - parcel.buy.date).days > CGT_DISCOUNT_THRESHOLD_DAYS:
-                capital_gain *= (1 - CGT_DISCOUNT_RATE) # Normally 0.5, defiend in constants
-            return capital_gain
-
-
-
+            return cgt.apply_discount(
+                capital_gain,
+                purchase_date=parcel.buy.date,
+                sale_date=instance.date,
+                account=instance.account,
+            )
 
 
         available_parcels = sorted(available_parcels, key=get_unit_net_capital_gain)
@@ -159,23 +210,80 @@ def handle_sell_allocation_deletion(sender, instance, **kwargs):
     instance.sell.save()
 
 
+def _fiscal_year_start(adjustment, end):
+    """The first day of the year an adjustment relates to.
+
+    Read from the account's own fiscal year configuration rather than assumed to be twelve
+    months back from the end date, so a non-Australian or non-calendar year works. Computed
+    arithmetically rather than through FiscalYearType.classify_date, which creates a
+    FiscalYear row as a side effect -- not something a routine that only needs a date
+    should be doing.
+
+    Falls back to twelve months back where no fiscal year type is set, guarding the
+    29 February case that has no counterpart in the preceding common year.
+    """
+    fiscal_year_type = getattr(adjustment.account, 'fiscal_year_type', None)
+    if fiscal_year_type is not None:
+        start_this_year = date(end.year, fiscal_year_type.start_month, fiscal_year_type.start_day)
+        if end >= start_this_year:
+            return start_this_year
+        return date(end.year - 1, fiscal_year_type.start_month, fiscal_year_type.start_day)
+
+    try:
+        return date(end.year - 1, end.month, end.day) + timedelta(days=1)
+    except ValueError:
+        return date(end.year - 1, end.month, 28) + timedelta(days=1)
+
+
 @receiver(post_save, sender=CostBaseAdjustment)
 def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
+    """Spread a new adjustment across the parcels that were held during the year.
 
+    Runs once, when the adjustment is first created. Deliberately not on every save: an
+    adjustment that has already been allocated has parcels depending on those allocations,
+    and re-running on an ordinary edit would silently move cost base around underneath
+    figures the user may have lodged.
+
+    The consequence is that a correction to how the weighting works does not reach
+    adjustments that already exist. `manage.py reallocate_cost_base_adjustments` is how that
+    is done, deliberately and with a diff, rather than as a side effect of upgrading.
+    """
     assert isinstance(instance, CostBaseAdjustment)
 
     if not created or instance._creation_handled:
         return
-    
+
+    allocate_cost_base_adjustment_now(instance)
+
+
+def allocate_cost_base_adjustment_now(instance):
+    """The allocation itself, callable without a save.
+
+    Separated from the signal so that re-allocating an existing adjustment is an explicit
+    act with its own entry point, rather than something achieved by poking at
+    `_creation_handled` and hoping the signal fires.
+    """
     logger.debug('Handling cost base allocation for %s', instance)
 
-    if instance.allocation_method != 'QTY_HELD':
+    if instance.allocation_method != AllocationMethod.QTY_HELD:
         instance._creation_handled = True
         instance.save(update_fields=["_creation_handled"])
         return
 
     end = instance.financial_year_end_date
-    cutoff_date = date(end.year - 1, end.month, end.day) + timedelta(days=1)
+    cutoff_date = _fiscal_year_start(instance, end)
+
+    def days_held_in_year(parcel):
+        """Days the parcel was actually held during the year the adjustment relates to.
+
+        Bounded at both ends. Only bounding the sale side gave a parcel bought part way
+        through the year a full year's weight, so a holding of two months took the same
+        share per unit as one held throughout -- overstating its cost base and understating
+        every gain later derived from it.
+        """
+        start = max(cutoff_date, parcel.buy.date)
+        finish = min(end, parcel.sale_date) if parcel.sale_date else end
+        return max((finish - start).days + 1, 0)
 
     with transaction.atomic():
         affected_parcels = list(Parcel.objects.filter(
@@ -185,29 +293,61 @@ def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
             buy__date__lte=end
         ).filter(
             Q(sale_date__isnull=True) | Q(sale_date__gte=cutoff_date)
-        ))
+        ).select_related('buy'))
 
         total_weighted_sum = 0
-        days_in_year = (end - cutoff_date).days + 1
         parcel_set_to_save = set()
 
         for parcel in affected_parcels:
-            days_held = min(days_in_year, (parcel.sale_date - cutoff_date).days + 1) if parcel.sale_date else days_in_year
-            total_weighted_sum += parcel.parcel_quantity * days_held
+            total_weighted_sum += parcel.parcel_quantity * days_held_in_year(parcel)
 
-        for parcel in affected_parcels:
-            days_held = min(days_in_year, (parcel.sale_date - cutoff_date).days + 1) if parcel.sale_date else days_in_year
-            parcel_weight = parcel.parcel_quantity * days_held
-            adjustment_fraction = parcel_weight / total_weighted_sum
+        if not total_weighted_sum:
+            # Nothing was held during the year, so there is nothing to allocate against.
+            instance._creation_handled = True
+            instance.save(update_fields=["_creation_handled"])
+            return
+
+        # Largest weight last, so it can absorb the rounding residual where the fractions
+        # do not divide exactly. Without this the allocations sum to slightly less than the
+        # adjustment -- a few hundredths of a cent each time, but it is cost base going
+        # quietly missing, and it accumulates over every adjustment a holding receives.
+        weighted = sorted(
+            ((parcel, parcel.parcel_quantity * days_held_in_year(parcel))
+             for parcel in affected_parcels),
+            key=lambda pair: pair[1],
+        )
+
+        total_adjustment = instance.cost_base_increase_converted
+        amount_field = CostBaseAdjustmentAllocation._meta.get_field('cost_base_increase')
+        allocated = Money(Decimal('0'), total_adjustment.currency)
+
+        for index, (parcel, parcel_weight) in enumerate(weighted):
+            is_last = index == len(weighted) - 1
+            if is_last:
+                # The residual, so the parts sum to the whole exactly.
+                amount = total_adjustment - allocated
+                adjustment_fraction = None
+            else:
+                adjustment_fraction = parcel_weight / total_weighted_sum
+                amount = Money(
+                    convert_to_decimal_field(
+                        total_adjustment.amount * adjustment_fraction, amount_field),
+                    total_adjustment.currency,
+                )
+                allocated += amount
 
             allocation = CostBaseAdjustmentAllocation.objects.create(
                 account=instance.account,
-                cost_base_increase=instance.cost_base_increase_converted * adjustment_fraction,
+                cost_base_increase=amount,
                 parcel=parcel,
                 cost_base_adjustment=instance,
                 activation_date=cutoff_date
             )
-            allocation.log_event(f'Added fraction {adjustment_fraction} of cost base adjustment {instance}')
+            described = (
+                f'residual of cost base adjustment {instance}' if adjustment_fraction is None
+                else f'Added fraction {adjustment_fraction} of cost base adjustment {instance}'
+            )
+            allocation.log_event(described)
             parcel_set_to_save.add(parcel)
 
         for parcel in parcel_set_to_save:

@@ -19,6 +19,8 @@ from djmoney.money import Money
 import share_dinkum_app
 from share_dinkum_app import excelinterface
 from share_dinkum_app import yfinanceinterface
+from django.db import models
+
 import share_dinkum_app.models as app_models
 from share_dinkum_app.utils import convert_to_decimal_field, save_with_logging, process_filefield
 from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
@@ -32,6 +34,44 @@ def make_tz_naive(df):
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             df[col] = df[col].dt.tz_localize(None)
+    return df
+
+
+def restore_blank_text_defaults(df, model):
+    """Turn a blank cell back into an empty string where the column cannot hold a null.
+
+    Excel has no way to tell an empty string from an absent value: both are an empty cell,
+    and both come back from pandas as a null that the step above turns into None. For most
+    columns that is right. For a text column declared `blank=True, null=False` -- Django's
+    own idiom for optional text, and what `AbstractUser.email` uses -- it is wrong, and the
+    insert fails on a NOT NULL constraint.
+
+    This is what made an export fail to load back into the portfolio it came from: almost
+    nobody sets an email, so almost every export carried a blank one. The backup was not a
+    backup, and there was no sign of it until the day someone needed to restore.
+
+    Deliberately narrow. Only `CharField` and `TextField` columns that are NOT NULL are
+    filled, because those are the ones where blank genuinely means empty. A missing date or
+    quantity stays None and still fails, because a row without one is a broken row and
+    should say so rather than being quietly completed with a default.
+    """
+    for col in df.columns:
+        if col.startswith('lookup_') or '__' in col:
+            continue
+        try:
+            field = model._meta.get_field(col)
+        except Exception:
+            continue
+        if field.is_relation or field.null:
+            continue
+        if not isinstance(field, (models.CharField, models.TextField)):
+            continue
+
+        blank_value = field.get_default() if field.has_default() else ''
+        if blank_value is None:
+            blank_value = ''
+        df[col] = df[col].apply(lambda v: blank_value if v is None else v)
+
     return df
 
 
@@ -99,6 +139,10 @@ class DataLoader():
         # TODO work out the ordering based on the model dependencies
         model_load_order = {
             
+            # Published national data, belonging to no portfolio, and depended on by
+            # nothing else, so it loads first and stands alone.
+            'CPIIndex': share_dinkum_app.models.CPIIndex,
+
             'AppUser': share_dinkum_app.models.AppUser,
             'FiscalYearType': share_dinkum_app.models.FiscalYearType,
             'FiscalYear': share_dinkum_app.models.FiscalYear,
@@ -106,8 +150,10 @@ class DataLoader():
             'LogEntry': share_dinkum_app.models.LogEntry,
             'CurrentExchangeRate': share_dinkum_app.models.CurrentExchangeRate,
             'ExchangeRate': share_dinkum_app.models.ExchangeRate,
+            'ResidencyPeriod': share_dinkum_app.models.ResidencyPeriod,
             'Market': share_dinkum_app.models.Market,
             'Instrument': share_dinkum_app.models.Instrument,
+            'InstrumentValuation': share_dinkum_app.models.InstrumentValuation,
             'InstrumentPriceHistory': share_dinkum_app.models.InstrumentPriceHistory,
             'Buy': share_dinkum_app.models.Buy,
             'Sell': share_dinkum_app.models.Sell,
@@ -116,9 +162,14 @@ class DataLoader():
             'ShareSplit': share_dinkum_app.models.ShareSplit,
             'CostBaseAdjustment': share_dinkum_app.models.CostBaseAdjustment,
             'CostBaseAdjustmentAllocation': share_dinkum_app.models.CostBaseAdjustmentAllocation,
+            'AttributionStatement': share_dinkum_app.models.AttributionStatement,
+            'AttributionComponent': share_dinkum_app.models.AttributionComponent,
             'Dividend': share_dinkum_app.models.Dividend,
             'Distribution': share_dinkum_app.models.Distribution,
-            'DataExport': share_dinkum_app.models.DataExport
+            'DataExport': share_dinkum_app.models.DataExport,
+            'CapitalLossCarryForward': share_dinkum_app.models.CapitalLossCarryForward,
+            'CGTReturnSnapshot': share_dinkum_app.models.CGTReturnSnapshot,
+            'CGTReturnSnapshotRow': share_dinkum_app.models.CGTReturnSnapshotRow,
         }
 
         return model_load_order.values()
@@ -207,6 +258,8 @@ class DataLoader():
         # Change any NaT, NaN etc to None
         df = df.where(pd.notnull(df), None)
 
+        df = restore_blank_text_defaults(df, model)
+
         model_has_account = 'account' in [f.name for f in model._meta.fields]
 
         for index, row in tqdm(df.iterrows(), total=len(df)):
@@ -224,41 +277,40 @@ class DataLoader():
 
             # This is used for loading buy allocations using legacy buy id.
             lookup_legacy_buy = record.pop('lookup_legacy_buy', None)
-            if lookup_legacy_buy:
-                try:
-                    available_parcels = self.get_available_parcels(legacy_id=lookup_legacy_buy)
-                    assert len(available_parcels) == 1
-                    parcel = available_parcels[0]
-                    record['parcel'] = parcel
-                except Exception as e:
-                    logger.error(f"Error looking up legacy buy id {lookup_legacy_buy} for model {model.__name__}: {e}", exc_info=True)
-                    logger.error('Error on row:\n', row)
-                    raise e
 
-
+            existing = None
             if id:
-                # Try to update, otherwise create
-                try:
-                    obj = model.objects.get(id=id)
-                    self.check_belongs_to_account(obj=obj, model=model)
-                    for field, value in record.items():
-                        setattr(obj, field, value)
-                    save_with_logging(obj=obj, context="Updating existing object")
-
-                except ObjectDoesNotExist:
-                    # Object with ID does not exist; create new
-                    record['id'] = id  # Preserve provided ID
-                    obj = model(**record)
-                    save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
+                existing = model.objects.filter(id=id).first()
+                if existing is not None:
+                    self.check_belongs_to_account(obj=existing, model=model)
             else:
-                obj = self.get_existing_by_unique_fields(model=model, record=record)
-                if obj is not None:
-                    for field, value in record.items():
-                        setattr(obj, field, value)
-                    save_with_logging(obj=obj, context="Updating existing object matched on its unique fields")
-                else:
-                    obj = model(**record)
-                    save_with_logging(obj=obj, context="Creating new object without provided ID")
+                existing = self.get_existing_by_unique_fields(model=model, record=record)
+
+            # Resolving the parcel a pinned allocation names is only meaningful when one is
+            # about to be created. Doing it first, for every row, broke loading a file
+            # twice: the parcel the row names has by then been consumed by the allocation
+            # the first load created, so nothing is available and the import dies -- on a
+            # row that only needed updating in place. It survived a partial sale, because
+            # the unsold remnant is still a parcel with quantity available, and failed only
+            # once a holding was completely sold.
+            if lookup_legacy_buy and existing is None:
+                record['parcel'] = self.resolve_pinned_parcel(
+                    legacy_id=lookup_legacy_buy, model=model, row=row)
+
+            if existing is not None:
+                for field, value in record.items():
+                    setattr(existing, field, value)
+                context = ('Updating existing object' if id
+                           else 'Updating existing object matched on its unique fields')
+                save_with_logging(obj=existing, context=context)
+                obj = existing
+            elif id:
+                record['id'] = id  # Preserve provided ID
+                obj = model(**record)
+                save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
+            else:
+                obj = model(**record)
+                save_with_logging(obj=obj, context="Creating new object without provided ID")
 
 
     def check_belongs_to_account(self, obj, model):
@@ -350,6 +402,39 @@ class DataLoader():
         available_parcels = app_models.Parcel.objects.filter(account=self.account, buy__legacy_id=legacy_id, deactivation_date__isnull=True)
         available_parcels = [parcel for parcel in available_parcels if parcel.remaining_quantity > 0]
         return available_parcels
+
+    def resolve_pinned_parcel(self, legacy_id, model, row):
+        """The parcel a manually allocated row names, or an error saying why there isn't one.
+
+        This used to be a bare `assert`, which raised an AssertionError carrying no message:
+        the import stopped, and the log said only that something had gone wrong looking up a
+        legacy id. Neither the row nor the reason was recoverable from it.
+        """
+        parcels = self.get_available_parcels(legacy_id=legacy_id)
+
+        if len(parcels) == 1:
+            return parcels[0]
+
+        if not parcels:
+            if not app_models.Buy.objects.filter(
+                    account=self.account, legacy_id=legacy_id).exists():
+                raise ValueError(
+                    f'{model.__name__} names buy "{legacy_id}", but there is no buy with '
+                    f'that legacy id in "{self.account}". Check the spelling, and that the '
+                    f'Buy sheet is in the same file.'
+                )
+            raise ValueError(
+                f'{model.__name__} names buy "{legacy_id}", but no parcel from it has any '
+                f'quantity left to allocate. Everything bought under that id has already '
+                f'been sold, so the allocations in this file would sell it twice.'
+            )
+
+        raise ValueError(
+            f'{model.__name__} names buy "{legacy_id}", but it has {len(parcels)} parcels '
+            f'with quantity available, so which one this row means is ambiguous. A buy '
+            f'normally has one; several usually means it was split and the parts were '
+            f'partly sold.'
+        )
 
 
     def get_related_obj_by_name(self, related_model, account, filters):

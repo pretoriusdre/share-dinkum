@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django import forms
 
 
 #import share_dinkum_app.models
@@ -13,19 +14,24 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm
 
 from django.db import models
-from django.db.models import Model, ForeignKey, Min
+from django.db.models import Model, ForeignKey, Max, Min
 
 from django.db.models.fields.reverse_related import ManyToManyRel
 from django.db.models import ManyToManyRel, ManyToManyField
 from django.template.response import TemplateResponse
-from django.urls import path
+from django.contrib import messages
+from django.http import FileResponse
+from django.shortcuts import redirect
+from django.urls import path, reverse
+from django.views.decorators.http import require_POST
 
 import share_dinkum_app
 
 import share_dinkum_app.admin
 import share_dinkum_app.models
 
-from share_dinkum_app import version
+from share_dinkum_app import cgt, version
+from share_dinkum_app.choices import LegalForm, LegalFormSource, TaxpayerType
 
 from share_dinkum_app.models import (
     AppUser,
@@ -38,12 +44,17 @@ from share_dinkum_app.models import (
     InstrumentPriceHistory,
     ExchangeRate,
     CurrentExchangeRate,
+    CGTReturnSnapshot,
+    DataExport,
+    FiscalYear,
+    ResidencyPeriod,
     Sell,
 )
 
 
 
 from collections import defaultdict
+from pathlib import Path
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -244,6 +255,85 @@ def _format_money(money):
     if currency_text:
         return f"{currency_text} {formatted_amount:,.2f}"
     return f"{formatted_amount:,.2f}"
+
+
+def _export_last_taken(account):
+    """When this portfolio was last exported, so the page can say whether it is due."""
+    if account is None:
+        return None
+    latest = (
+        DataExport.objects
+        .filter(account=account, is_active=True)
+        .order_by('-created_at')
+        .first()
+    )
+    return latest.created_at.date() if latest else None
+
+
+def _snapshot_last_taken(account):
+    """When capital gains figures were last recorded for this portfolio.
+
+    Shown beside the button for the same reason as the price date: whether it is worth
+    pressing is a question the page can answer.
+    """
+    if account is None:
+        return None
+    return (
+        CGTReturnSnapshot.objects
+        .filter(account=account, is_active=True)
+        .aggregate(latest=Max('taken_at'))['latest']
+    )
+
+
+def _prices_last_updated(account):
+    """The most recent day this portfolio has a closing price for.
+
+    Shown next to the refresh button so the answer to "do I need to press this?" is on the
+    page rather than in the user's head.
+    """
+    if account is None:
+        return None
+    return (
+        InstrumentPriceHistory.objects
+        .filter(account=account)
+        .aggregate(latest=Max('date'))['latest']
+    )
+
+
+def _tax_settings_warning(account):
+    """Whether this account's capital gains rest on an assumption nobody has confirmed.
+
+    Only raised once there is something at stake -- an account with no sales has no capital
+    gain to get wrong -- and it goes quiet permanently once the user has been to the tax
+    settings, whatever they chose there. A banner that cannot be dismissed by answering it
+    trains people to ignore banners.
+    """
+    if account is None or account.tax_settings_reviewed_at is not None:
+        return None
+    if not Sell.objects.filter(account=account, is_active=True).exists():
+        return None
+
+    missing = []
+    if account.taxpayer_type == TaxpayerType.UNDECLARED:
+        missing.append('who the portfolio belongs to')
+    if not ResidencyPeriod.objects.filter(account=account, is_active=True).exists():
+        missing.append('where you were tax resident')
+
+    if not missing:
+        problems = cgt.residency.coverage_problems(account)
+        if not problems:
+            return None
+        return (
+            f'Residency history for {account.description} has holes, so some gains cannot '
+            f'be characterised: ' + ' '.join(problems)
+        )
+    return (
+        f'Capital gains for {account.description} assume an Australian resident individual '
+        f'holding throughout, and a flat 50% discount. You have not told it '
+        f'{" or ".join(missing)}. If that assumption is right, saying so changes no figure; '
+        f'if it is wrong, every discounted gain is wrong. Set it on the account, and add '
+        f'your residency periods.'
+    )
 
 
 def _prepare_dashboard_context(request, context):
@@ -604,6 +694,10 @@ def _prepare_dashboard_context(request, context):
         {
             'dashboard_account': account,
             'dashboard_currency': dashboard_currency,
+            'tax_settings_warning': _tax_settings_warning(account),
+            'prices_last_updated': _prices_last_updated(account),
+            'snapshot_last_taken': _snapshot_last_taken(account),
+            'export_last_taken': _export_last_taken(account),
             'dashboard_message': dashboard_message,
             'dashboard_message_level': dashboard_message_level,
             'dashboard_portfolio_value_display': total_portfolio_value_display,
@@ -648,6 +742,169 @@ def dashboard_view(request):
 
 
 
+@require_POST
+def export_data_view(request):
+    """Build a full Excel export of the portfolio and hand it straight back.
+
+    Exporting meant opening Data exports, adding a record, saving it, and then finding the
+    file on the record that the save had generated. The record is worth keeping -- it is the
+    history of what was exported and when -- but it should not be the interface.
+
+    The file is streamed as the response rather than being linked to. A link would depend on
+    media being served, which differs between a local run and anything behind a real web
+    server, and would hand out a URL to a file containing the whole portfolio.
+
+    Price history is excluded unless asked for. It is by far the largest table and it is
+    reconstructible from the market, which the rest of the file is not.
+    """
+    account = _select_account_for_user(request.user)
+    dashboard_url = reverse('admin:dashboard')
+
+    if account is None:
+        messages.error(
+            request, 'No portfolio is associated with your user, so there is nothing to export.')
+        return redirect(dashboard_url)
+
+    include_price_history = bool(request.POST.get('include_price_history'))
+
+    try:
+        export = DataExport.objects.create(
+            account=account, include_price_history=include_price_history)
+        export.refresh_from_db()
+    except Exception as exc:
+        logger.warning('Export failed for %s: %s', account, exc, exc_info=True)
+        messages.error(request, f'Could not build the export: {exc}')
+        return redirect(dashboard_url)
+
+    if not export.file:
+        messages.error(
+            request,
+            'The export completed but produced no file. Nothing has been changed; the '
+            'attempt is recorded under Data exports.')
+        return redirect(dashboard_url)
+
+    return FileResponse(
+        export.file.open('rb'),
+        as_attachment=True,
+        filename=Path(export.file.name).name,
+    )
+
+
+@require_POST
+def capture_snapshot_view(request):
+    """Record the capital gains figures for every year that has a sale.
+
+    Capital gains are worked out on demand and never stored, so improving a calculation
+    changes what the application says about a year that may already have been filed. This is
+    the record of what it said beforehand, and the only way to create one: the figures come
+    from the report rather than from anything typed, and the model will not let them be
+    edited afterwards.
+
+    Snapshots are deliberately **not** marked as lodged here. Whether a set of figures was
+    actually filed with the ATO is a claim about the outside world that the application has
+    no way to verify, so it stays a box the user ticks themselves.
+    """
+    account = _select_account_for_user(request.user)
+    dashboard_url = reverse('admin:dashboard')
+
+    if account is None:
+        messages.error(
+            request,
+            'No portfolio is associated with your user, so there is nothing to record.')
+        return redirect(dashboard_url)
+
+    year_ids = (
+        Sell.objects.filter(account=account, is_active=True)
+        .values_list('calculated_fiscal_year', flat=True)
+        .distinct()
+    )
+    fiscal_years = list(
+        FiscalYear.objects.filter(id__in=[y for y in year_ids if y]).order_by('start_year')
+    )
+
+    if not fiscal_years:
+        messages.info(
+            request,
+            f'{account.description} has no sales yet, so there are no capital gains figures '
+            f'to record.')
+        return redirect(dashboard_url)
+
+    basis = cgt.residency_basis(account)
+    try:
+        for fiscal_year in fiscal_years:
+            CGTReturnSnapshot.capture(
+                account=account, fiscal_year=fiscal_year, basis=basis)
+    except Exception as exc:
+        logger.warning(
+            'Snapshot capture failed for %s: %s', account, exc, exc_info=True)
+        messages.error(request, f'Could not record the figures: {exc}')
+        return redirect(dashboard_url)
+
+    names = ', '.join(fiscal_year.name for fiscal_year in fiscal_years)
+    note = (
+        ' These assume an Australian resident throughout and a flat 50% discount, because '
+        'residency has not been declared.'
+        if basis == cgt.BASIS_LEGACY else ''
+    )
+    messages.success(
+        request,
+        f'Recorded the capital gains figures for {names}. Tick "is lodged" on any of them '
+        f'that you have already filed, under CGT return snapshots.{note}')
+
+    return redirect(dashboard_url)
+
+
+@require_POST
+def refresh_prices_view(request):
+    """Refresh prices and exchange rates for the portfolio the user is looking at.
+
+    This exists because the only way to do it was to open the account, tick a checkbox
+    called "update price history", and save -- at which point a signal did the work and
+    unticked it again. That is a button wearing a field's clothing, and nobody found it.
+
+    POST only, because it reaches out to a market data provider and writes. A GET would let
+    a link, a prefetch or a refresh trigger it, and the request is slow enough that firing it
+    twice is worse than merely wasteful.
+
+    The work itself is unchanged: this sets the same flag and saves, so there is one
+    implementation of "refresh this portfolio" rather than two that can drift.
+    """
+    account = _select_account_for_user(request.user)
+    dashboard_url = reverse('admin:dashboard')
+
+    if account is None:
+        messages.error(
+            request,
+            'No portfolio is associated with your user, so there is nothing to refresh.')
+        return redirect(dashboard_url)
+
+    try:
+        account.update_price_history = True
+        account.save()
+    except Exception as exc:  # pragma: no cover - depends on an external provider
+        logger.warning(
+            'Price refresh failed for %s: %s', account, exc, exc_info=True)
+        messages.error(
+            request,
+            f'Could not refresh prices for {account.description}: {exc}. Your existing '
+            f'figures are unchanged.')
+        return redirect(dashboard_url)
+
+    latest = _prices_last_updated(account)
+    if latest:
+        messages.success(
+            request,
+            f'Prices and exchange rates refreshed for {account.description}. The most '
+            f'recent close is {latest.isoformat()}.')
+    else:
+        messages.warning(
+            request,
+            f'Refresh finished, but no prices were found for {account.description}. Check '
+            f'that its instruments have a market and a ticker that the data provider knows.')
+
+    return redirect(dashboard_url)
+
+
 if not getattr(admin.site, '_dashboard_url_included', False):
     original_get_urls = admin.site.get_urls
 
@@ -655,6 +912,21 @@ if not getattr(admin.site, '_dashboard_url_included', False):
         urls = original_get_urls()
         custom_urls = [
             path('dashboard/', admin.site.admin_view(dashboard_view), name='dashboard'),
+            path(
+                'dashboard/refresh-prices/',
+                admin.site.admin_view(refresh_prices_view),
+                name='dashboard_refresh_prices',
+            ),
+            path(
+                'dashboard/capture-snapshot/',
+                admin.site.admin_view(capture_snapshot_view),
+                name='dashboard_capture_snapshot',
+            ),
+            path(
+                'dashboard/export/',
+                admin.site.admin_view(export_data_view),
+                name='dashboard_export',
+            ),
         ]
         return custom_urls + urls
 
@@ -684,11 +956,142 @@ if not getattr(admin.site, '_dashboard_index_overridden', False):
     admin.site._dashboard_index_overridden = True
 
 
+CONFIRM_LEGAL_FORM_FIELD = 'confirm_legal_form'
+
+
+class UnsetNullBooleanSelect(forms.NullBooleanSelect):
+    """A nullable boolean labelled by what each state does, not by what it asserts.
+
+    Django's labels are Unknown / Yes / No. Both halves of that mislead here.
+
+    "Unknown" describes a fact nobody has established yet, so it asks to be resolved. For
+    an override the empty state is not an open question -- it is the working setting, and
+    the one that lets the answer be derived per parcel.
+
+    "No" is worse, because it is true. An ordinary listed share is not taxable Australian
+    property in its own right, so answering honestly is exactly what a careful person does
+    -- and it silently overrides the s104-165(3) departure deeming, which is the main route
+    by which such a share becomes taxable Australian property. Set across a portfolio it
+    reads every capital gain as disregarded. Saying what the option does, rather than what
+    it asserts, is the difference between a true answer and an informed one.
+
+    Only the labels change. The submitted values stay unknown/true/false, so
+    `NullBooleanSelect.value_from_datadict` still round-trips None correctly.
+    """
+
+    def __init__(self, attrs=None):
+        super().__init__(attrs)
+        self.choices = [
+            ('unknown', 'Unset - derive it per parcel'),
+            ('true', 'Yes - always taxable Australian property'),
+            ('false', 'No - never, overriding the departure deeming'),
+        ]
+
+
+class InstrumentAdminForm(forms.ModelForm):
+    """Adds the one thing `Instrument.save()` cannot express: agreeing with a suggestion.
+
+    `Instrument.save()` promotes `legal_form_source` to USER only when the legal form
+    *changes*, which covers correcting a suggestion and creating an instrument that already
+    carries one. It cannot cover the commonest case of all -- the suggestion is right, and
+    you want to say so -- because nothing changes, so nothing is recorded and the schedule
+    goes on calling itself a draft with no indication why.
+
+    Making it a tick rather than inferring it from a save is deliberate. The alternative was
+    to treat any save as confirmation, which would mean editing an unrelated field on the
+    same form silently answers a tax question on the user's behalf.
+    """
+
+    confirm_legal_form = forms.BooleanField(
+        required=False,
+        label='Confirm legal form',
+        help_text='Tick to record this legal form as your answer rather than a suggestion. '
+                  'A capital gains schedule stays a draft while any instrument on it rests '
+                  'on a suggestion.',
+    )
+
+    class Meta:
+        model = Instrument
+        fields = '__all__'
+        widgets = {
+            'is_taxable_australian_property_override': UnsetNullBooleanSelect(),
+        }
+
+
+class InstrumentAdmin(GenericModelAdmin):
+    """Instruments, plus an explicit way to confirm what one legally is."""
+
+    form = InstrumentAdminForm
+    actions = ['confirm_legal_form_action']
+
+    def get_fields(self, request, obj=None):
+        """Offer the tick only where there is something to confirm.
+
+        Once the form is confirmed the readonly `legal_form_source` says so, and a tick that
+        could be un-ticked would raise a question this deliberately does not answer: whether
+        clearing it should demote a confirmed answer back to a suggestion.
+        """
+        fields = list(super().get_fields(request, obj))
+        if obj is None or obj.is_classified or obj.legal_form == LegalForm.UNKNOWN:
+            return [name for name in fields if name != CONFIRM_LEGAL_FORM_FIELD]
+        if CONFIRM_LEGAL_FORM_FIELD not in fields:
+            position = (fields.index('legal_form_source') + 1
+                        if 'legal_form_source' in fields else len(fields))
+            fields.insert(position, CONFIRM_LEGAL_FORM_FIELD)
+        return fields
+
+    def save_model(self, request, obj, form, change):
+        """Apply the tick before saving, so `Instrument.save()` sees it as caller-set."""
+        if form.cleaned_data.get(CONFIRM_LEGAL_FORM_FIELD):
+            if obj.legal_form == LegalForm.UNKNOWN:
+                messages.warning(
+                    request,
+                    'Nothing to confirm: set a legal form other than '
+                    f'"{LegalForm.UNKNOWN.label}" first.',
+                )
+            else:
+                obj.legal_form_source = LegalFormSource.USER
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description='Confirm legal form as your answer')
+    def confirm_legal_form_action(self, request, queryset):
+        """Confirm in bulk, which is how a back catalogue of closed positions gets done.
+
+        Anything still unclassified is named rather than skipped quietly: it is the one
+        outcome where the user's selection did not do what they asked.
+        """
+        confirmed = 0
+        already = 0
+        unclassified = []
+
+        for instrument in queryset:
+            if instrument.legal_form == LegalForm.UNKNOWN:
+                unclassified.append(instrument.name)
+            elif instrument.legal_form_source == LegalFormSource.USER:
+                already += 1
+            else:
+                instrument.legal_form_source = LegalFormSource.USER
+                instrument.save(user=request.user)
+                confirmed += 1
+
+        if confirmed:
+            messages.success(request, f'Confirmed the legal form of {confirmed} instrument(s).')
+        if already:
+            messages.info(request, f'{already} instrument(s) were already confirmed.')
+        if unclassified:
+            messages.warning(
+                request,
+                f'{len(unclassified)} instrument(s) have no legal form set, so there was '
+                f'nothing to confirm: {", ".join(sorted(unclassified))}.',
+            )
+
+
 # Map specific models to custom admin if required, or hide them.
 
 model_admin_map = {
 
     Account : AccountAdmin,
+    Instrument : InstrumentAdmin,
     AppUser : AppUserAdmin,
     Group : HiddenModelAdmin,
     ContentType : HiddenModelAdmin,

@@ -1,3 +1,49 @@
+from datetime import date
+
 DEFAULT_CURRENCY = 'AUD'
 CGT_DISCOUNT_RATE = 0.5 # 50% discount
 CGT_DISCOUNT_THRESHOLD_DAYS = 365 # 365 days
+# Treasury Laws Amendment (Tax Reform No. 1) Act 2026, Act No. 49 of 2026. For CGT events
+# on or after this date the 50% discount is replaced for individuals by cost base
+# indexation. The date is the legal boundary and never changes; whether the app implements
+# the post-cutover regime is a separate question.
+CGT_CUTOVER_DATE = date(2027, 7, 1)
+
+
+
+# --- The 2027 regime -------------------------------------------------------------------
+
+# The rollout gate, distinct from the legal gate above. What is still genuinely unsettled is
+# the s112-185 legislative instrument: the method for apportioning a gain across the cutover
+# is delegated to the Minister and has not been made. Until it is, any figure this
+# application produces for a holding that straddles 1 July 2027 is a projection, so it is
+# off by default and every projected figure is labelled as one.
+CGT_2027_REGIME_ENABLED = False
+
+# CPI, per Subdivision 960-M. A flat rate backend exists for projecting forward past the
+# last published quarter, but it is a modelling aid and never the production default: a
+# guessed inflation rate silently changes a cost base.
+CGT_INDEXATION_METHOD = 'CPI_TABLE'
+CGT_INDEXATION_FLAT_RATE = 0.025
+
+# s960-275(1B). Indexation runs only from the quarter starting on the cutover, so nothing
+# earned before then is indexed even for an asset bought decades earlier.
+CGT_INDEXATION_FIRST_QUARTER = date(2027, 7, 1)
+
+# The four categories of s102-6. Every gain has to be tagged with exactly one, and the
+# s102-5 method statement absorbs losses in this order.
+CGT_GAIN_DEFERRED_NON_RESIDENTIAL = 'deferred non-residential capital gain'
+CGT_GAIN_DEFERRED_RESIDENTIAL = 'deferred residential capital gain'
+CGT_GAIN_NON_RESIDENTIAL = 'non-residential capital gain'
+CGT_GAIN_RESIDENTIAL = 'residential capital gain'
+
+# s102-5 Step 1 (a) to (d), verbatim in order. It runs against the taxpayer: the deferred
+# gains, which are the ones that kept the 50% discount, absorb losses first, which is the
+# least valuable thing a loss can be spent on. Step 2 applies prior year losses in the same
+# order. This is not a policy choice the application gets to make.
+CGT_LOSS_ABSORPTION_ORDER = [
+    CGT_GAIN_DEFERRED_NON_RESIDENTIAL,
+    CGT_GAIN_DEFERRED_RESIDENTIAL,
+    CGT_GAIN_NON_RESIDENTIAL,
+    CGT_GAIN_RESIDENTIAL,
+]

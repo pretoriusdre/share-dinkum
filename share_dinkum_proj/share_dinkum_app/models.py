@@ -2,6 +2,7 @@
 from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import copy
+import json
 
 # Django imports
 from django.db import models, transaction
@@ -26,6 +27,20 @@ from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.choices import (
+    AllocationMethod,
+    AttributionComponent as AttributionComponentType,
+    CGTAssetCategory,
+    CGTBasis,
+    DividendType,
+    LegalForm,
+    LegalFormSource,
+    ResidencyStatus,
+    SellStrategy,
+    TaxpayerType,
+    ValuationPurpose,
+    ValuationSource,
+)
 from share_dinkum_app.constants import DEFAULT_CURRENCY
 
 
@@ -166,6 +181,20 @@ class Account(models.Model):
     owner = models.ForeignKey(AppUser, on_delete=models.PROTECT)
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT)
     update_price_history = models.BooleanField(default=False)
+
+
+    #: Decides what discount is available at all: an individual halves a capital gain, a
+    #: complying superannuation fund takes a third off, a company gets nothing. Left
+    #: undeclared rather than defaulted to an individual, because guessing wrong here is a
+    #: 50 to 100 per cent error on every gain the portfolio makes.
+    taxpayer_type = models.CharField(
+        max_length=11, choices=TaxpayerType.choices, default=TaxpayerType.UNDECLARED,
+        help_text='Who owns this portfolio for tax purposes.')
+
+    #: Set once the holder has been through the tax settings, whatever they chose there.
+    #: It is what stops the dashboard nagging, so answering the question is enough --
+    #: a warning that cannot be dismissed by answering it just teaches people to ignore it.
+    tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     def __str__(self):
         return f'{self.description} | {self.currency}'
@@ -587,6 +616,20 @@ class Market(BaseModel):
 
     suffix = models.CharField(max_length=16, null=True, blank=True)
 
+    # Where the market is, which decides whether the assets listed on it count as
+    # "Australian listed" on the CGT schedule. Left blank rather than assumed; the country
+    # is suggested from the suffix or the code when a market is created.
+    country = models.CharField(
+        max_length=2, null=True, blank=True,
+        help_text='ISO country code, e.g. AU. Decides whether instruments here are treated '
+                  'as Australian listed for capital gains reporting.',
+    )
+    is_exchange_listed = models.BooleanField(
+        default=True,
+        help_text='Uncheck for unlisted holdings. Unlisted assets fall into the "other" '
+                  'categories on the CGT schedule regardless of country.',
+    )
+
 
 class Instrument(BaseModel):
     MODEL_DESCRIPTION = 'Share codes, eg BHP, VGS, VAS, etc'
@@ -596,11 +639,107 @@ class Instrument(BaseModel):
             models.UniqueConstraint(fields=['name', 'account'], name='instrument_keys')
         ]
 
+    # What the thing legally *is*, which the CGT schedule cares about and the ticker does
+    # not reveal. AFI and VAS are both ASX listed and AUD quoted; one is a company and the
+    # other a unit trust, and they belong in different boxes on the form.
+
+    #: How the legal form came to be set. A suggestion is never treated as settled: a
+    #: capital gains schedule built on unconfirmed classifications is reported as a draft.
+
     name = models.CharField(max_length=16)
     description = models.CharField(max_length=255, blank=True)
     currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     market = models.ForeignKey(Market, on_delete=models.PROTECT)
     current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True)
+
+    legal_form = models.CharField(
+        max_length=13, choices=LegalForm.choices, default=LegalForm.UNKNOWN,
+        help_text='Shown on the product disclosure statement or annual tax statement.',
+    )
+    #: Where the legal form came from, not something to be filled in. It is set for you:
+    #: change the legal form yourself and it becomes USER, which is what marks the answer
+    #: as confirmed. Nothing else does, and until it happens every schedule built on the
+    #: instrument is a draft.
+    legal_form_source = models.CharField(
+        max_length=9, choices=LegalFormSource.choices, default=LegalFormSource.DEFAULT,
+        editable=False,
+    )
+    #: One of the eight boxes on the schedule, or nothing. Free text here would put
+    #: whatever was typed straight onto a tax return as a category, which is the one thing
+    #: these labels exist to prevent -- they are the form's vocabulary, not a description.
+    cgt_asset_category_override = models.CharField(
+        max_length=48, null=True, blank=True,
+        choices=CGTAssetCategory.reportable_choices(),
+        help_text='Leave empty. Only set this if the category worked out from the legal '
+                  'form and the market is wrong for this holding.',
+    )
+    #: Suppresses the derivation, rather than recording a fact. Named for what it does,
+    #: because the previous name -- `is_taxable_australian_property` -- read as a question
+    #: about the instrument, and a blank field phrased as a question invites an answer.
+    #: Answering "no" is the trap: it is the truthful answer about an ordinary listed share
+    #: on its own account, and it also switches off the s104-165(3) deeming that is the main
+    #: way such a share becomes taxable Australian property. Leaving it empty is what lets
+    #: that question be asked per parcel, which is where it belongs.
+    is_taxable_australian_property_override = models.BooleanField(
+        null=True, blank=True,
+        help_text='Leave empty. Only set this if the instrument is taxable Australian '
+                  'property in its own right -- real property, or a non-portfolio interest '
+                  'in a land rich entity. Setting it to "no" is not the same as leaving it '
+                  'empty: it overrides the departure deeming for every parcel, including '
+                  'ones you held when you ceased Australian residency.',
+    )
+
+    @safe_property
+    def cgt_asset_category(self):
+        """Which box on the CGT schedule a gain on this instrument belongs in."""
+        from share_dinkum_app.cgt import classification
+        return classification.asset_category(self)
+
+    @safe_property
+    def is_classified(self):
+        """Whether the user has confirmed what this instrument legally is.
+
+        A suggestion is not a confirmation. The application can infer a legal form from a
+        ticker or from what a holding has paid, and it is usually right, but a capital gains
+        schedule reports where a gain goes on a tax return and that should rest on someone
+        having said so rather than on a guess that happened to be good.
+        """
+        return (self.legal_form != LegalForm.UNKNOWN
+                and self.legal_form_source == LegalFormSource.USER)
+
+    def save(self, *args, **kwargs):
+        """Record who decided the legal form, so nobody has to maintain that by hand.
+
+        `legal_form_source` is not editable, and until this existed nothing ever set it to
+        USER -- so `is_classified` could never be true and the schedule report could never
+        stop calling itself a draft. The gate was there with no way through it.
+
+        Setting the legal form yourself is the confirmation. Anything that means it
+        differently, which is the suggester, says so by setting the source in the same save.
+        """
+        if self.legal_form != LegalForm.UNKNOWN:
+            previous = (
+                Instrument.objects.filter(pk=self.pk)
+                .values('legal_form', 'legal_form_source').first()
+                if self.pk else None
+            )
+            if previous is None:
+                # Created already carrying a legal form, so it came from a person or a file
+                # rather than from the default.
+                if self.legal_form_source == LegalFormSource.DEFAULT:
+                    self.legal_form_source = LegalFormSource.USER
+            else:
+                changed = previous['legal_form'] != self.legal_form
+                source_set_by_caller = (
+                    previous['legal_form_source'] != self.legal_form_source)
+                if changed and not source_set_by_caller:
+                    self.legal_form_source = LegalFormSource.USER
+
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'legal_form' in set(update_fields):
+                kwargs['update_fields'] = set(update_fields) | {'legal_form_source'}
+
+        super().save(*args, **kwargs)
 
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
     
@@ -889,17 +1028,11 @@ class Sell(Trade):
     MODEL_DESCRIPTION = 'Sales of shares.'
     _creation_handled = models.BooleanField(default=False, editable=False)
 
-    STRATEGY_CHOICES = [
-        ('FIFO', 'First-in, First-out'),
-        ('LIFO', 'Last-in, First out'),
-        ('MIN_CGT', 'Minimise net capital gain'),
-        ('MANUAL', 'Manually create allocations')
-    ]
     
     strategy = models.CharField(
         max_length=7,
-        choices=STRATEGY_CHOICES,
-        default='MIN_CGT',
+        choices=SellStrategy.choices,
+        default=SellStrategy.MIN_CGT,
     )
 
     calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
@@ -1027,6 +1160,31 @@ class Parcel(BaseModel):
             return Money(Decimal('0'), self.buy.account.currency)
 
         return self.total_cost_base / self.parcel_quantity
+
+    def market_value_at(self, day, purpose='CUTOVER_2027'):
+        """What this parcel was worth on a day, for a deemed disposal.
+
+        Computed from a per-unit valuation rather than stored against the parcel, which is
+        what keeps it correct across a later split or partial sale. A parcel is replaced,
+        not mutated, by `bifurcate()` and `split_or_consolidate()`, so a stored per-parcel
+        value would detach from its parcel the first time either ran, exactly as the cost
+        base adjustment allocations needed hand-written code to avoid.
+
+        Returns `(value, source)`, or `(None, None)` where no valuation is available. The
+        caller decides what to do about that; nothing here substitutes a guess.
+        """
+        from share_dinkum_app.cgt import cutover
+
+        unit_value, source = cutover.unit_value_at(
+            self.buy.instrument, day, purpose=purpose)
+        if unit_value is None:
+            return None, None
+
+        # A valuation is per unit as units stood on the valuation date. Any split since has
+        # multiplied the unit count and divided the value, so the recorded figure has to be
+        # brought forward to today's units before it is multiplied out.
+        multiplier = cutover.scale_for_splits(self, day)
+        return (unit_value / multiplier) * self.parcel_quantity, source
 
     def split_or_consolidate(self, multiplier, date):
         assert multiplier > 0
@@ -1229,14 +1387,10 @@ class CostBaseAdjustment(BaseModel):
             cost_base_increase_converted = self.exchange_rate.apply(cost_base_increase_converted)
         return cost_base_increase_converted
     
-    ALLOCATION_CHOICES = [
-        ('QTY_HELD', 'Alllocate to parcels, weighting by (qty * days_held) in the F.Y.'),
-        ('MANUAL', 'Manually create allocations')
-    ]
     allocation_method = models.CharField(
         max_length=8,
-        choices=ALLOCATION_CHOICES,
-        default='QTY_HELD',
+        choices=AllocationMethod.choices,
+        default=AllocationMethod.QTY_HELD,
     )
 
     def get_description(self):
@@ -1270,21 +1424,36 @@ class CostBaseAdjustmentAllocation(BaseModel):
 
         new_parcel_message = f'This CostBaseAdjustmentAllocation was created by splitting {self.pk} into two separate allocations.'
 
+        original_amount = self.cost_base_increase
+
+        # Rounded to the precision the column actually stores, so the two halves are
+        # computed at the precision they will be saved at and still sum to the original.
+        # SQLite keeps whatever it is given, but a numeric(19,4) column would round on the
+        # way in, and the halves would then no longer reconcile.
+        amount_field = self._meta.get_field('cost_base_increase')
+        target_amount = Money(
+            convert_to_decimal_field(original_amount.amount * target_fraction, amount_field),
+            original_amount.currency,
+        )
+
         with transaction.atomic():
             # Create target allocation
             allocation_target = copy.copy(self) # create a shallow copy
             allocation_target.pk = None
             allocation_target.activation_date = date
             allocation_target.parcel = target_parcel
-            allocation_target.cost_base_increase *= target_fraction
+            allocation_target.cost_base_increase = target_amount
             allocation_target.save()
             allocation_target.log_event(new_parcel_message)
-            # Create remainder parcel
+            # Create remainder parcel. Its share is what is left rather than the
+            # complementary fraction: the field stores four decimal places, so halving an
+            # odd amount and rounding both halves loses a hundredth of a cent every time,
+            # and a parcel split repeatedly would bleed cost base with nothing to show why.
             allocation_remainder = copy.copy(self) # create a shallow copy
             allocation_remainder.pk = None
             allocation_remainder.activation_date = date
             allocation_remainder.parcel = remainder_parcel
-            allocation_remainder.cost_base_increase *= (1 - target_fraction)
+            allocation_remainder.cost_base_increase = original_amount - target_amount
             allocation_remainder.save()
             allocation_remainder.log_event(new_parcel_message)
             # Update old parcel
@@ -1339,12 +1508,8 @@ class Income(BaseModel):
 class Dividend(Income):
     MODEL_DESCRIPTION = 'Dividends, including local dividends and foreign dividends.'
 
-    DIVIDEND_TYPE_CHOICES = (
-        ('LOCAL', 'Local dividend'),
-        ('FOREIGN', 'Foreign dividend')
-    )
-
-    dividend_type = models.CharField(max_length=7, choices=DIVIDEND_TYPE_CHOICES, default='LOCAL')
+    dividend_type = models.CharField(
+        max_length=7, choices=DividendType.choices, default=DividendType.LOCAL)
 
     unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
     franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
@@ -1403,6 +1568,13 @@ class Dividend(Income):
 class Distribution(Income):
     MODEL_DESCRIPTION = 'Distributions, such as the income received from ETFs'
     distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+
+    # Optional link to the annual statement that explains what this cash was made up of.
+    # A payment carries no tax character of its own -- the attribution does, and it is
+    # annual, so it is deliberately not broken out onto this row.
+    attribution_statement = models.ForeignKey(
+        'AttributionStatement', related_name='distributions',
+        null=True, blank=True, on_delete=models.SET_NULL)
     total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
 
     calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
@@ -1430,4 +1602,555 @@ class DataExport(BaseModel):
 
     def __str__(self):
         return f'{self.created_at.date().isoformat()} | Data Export - {self.account.description}'
+
+
+class ResidencyPeriod(BaseModel):
+    """A period over which the account holder had one Australian tax residency status.
+
+    The CGT discount is not a flat 50% for everyone. s115-105 and s115-115 reduce it in
+    proportion to the days the holder was a foreign or temporary resident, so the
+    application cannot work out a discount at all without knowing who was where and when.
+
+    Nothing is assumed. An account with no residency periods is treated as undeclared and
+    keeps the flat 50% the application has always applied, with every report saying so.
+    Declaring a single period of Australian residency covering the whole holding produces
+    exactly 50% again -- resident days equal total days -- so for a taxpayer who has always
+    lived in Australia this changes no figure at all. It is only ever the periods abroad
+    that move a number.
+    """
+
+    MODEL_DESCRIPTION = 'Periods of Australian tax residency, used to apportion the CGT discount.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'start_date'], name='residency_period_keys')
+        ]
+        ordering = ['start_date']
+
+    status = models.CharField(max_length=9, choices=ResidencyStatus.choices)
+    start_date = models.DateField(help_text='First day of this period.')
+    end_date = models.DateField(
+        null=True, blank=True, help_text='Last day of this period. Leave blank if ongoing.')
+
+    i1_election_made = models.BooleanField(
+        null=True, blank=True,
+        help_text='Where this period begins a departure from Australia: did you choose '
+                  'under s104-165(2) to disregard the deemed disposal on ceasing '
+                  'residency? If so, the assets you held then stay within the Australian '
+                  'CGT net until you sell them.',
+    )
+
+    def __str__(self):
+        ending = self.end_date.isoformat() if self.end_date else 'ongoing'
+        return f'{self.get_status_display()} | {self.start_date.isoformat()} to {ending}'
+
+    def covers(self, day):
+        if day < self.start_date:
+            return False
+        return self.end_date is None or day <= self.end_date
+
+    def validate_intrinsic(self):
+        """Checks that do not depend on what else has been loaded yet.
+
+        These run on every save, including an Excel import, which does not go through a
+        form and so never calls `clean()`. They are limited to what is true regardless of
+        the order rows arrive in: an import that happens to load a later period first would
+        otherwise be rejected for a gap that the next row fills.
+        """
+        if self.start_date is None:
+            return
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValidationError({'end_date': 'The end date is before the start date.'})
+
+        others = ResidencyPeriod.objects.filter(account=self.account, is_active=True)
+        if self.pk:
+            others = others.exclude(pk=self.pk)
+        for other in others.order_by('start_date'):
+            overlap_start = max(self.start_date, other.start_date)
+            overlap_end = min(self.end_date or date.max, other.end_date or date.max)
+            if overlap_start <= overlap_end:
+                raise ValidationError(
+                    f'This overlaps an existing period ({other}). Residency history has to '
+                    f'describe one status at a time.')
+
+    def clean(self):
+        """Everything `validate_intrinsic` checks, plus that the history hangs together.
+
+        A gap is not a neutral absence: a parcel bought inside one has no residency status,
+        and any status invented for it would silently decide a tax outcome. The same goes
+        for a history that starts after the earliest purchase.
+
+        These two live here rather than in `save()` because they are properties of the
+        whole set rather than of one row, so they can be transiently false part way through
+        a bulk load. Where a saved history does end up incomplete,
+        `cgt.residency.coverage_problems()` reports it and the affected gains are marked
+        rather than discounted on a guess.
+        """
+        super().clean()
+        self.validate_intrinsic()
+        if self.start_date is None:
+            return
+
+        others = list(
+            ResidencyPeriod.objects.filter(account=self.account, is_active=True)
+            .exclude(pk=self.pk).order_by('start_date')
+        )
+        periods = sorted(others + [self], key=lambda period: period.start_date)
+        for earlier, later in zip(periods, periods[1:]):
+            if earlier.end_date is None:
+                raise ValidationError(
+                    f'{earlier} is open ended, but another period starts afterwards. Give '
+                    f'the earlier period an end date.')
+            if (later.start_date - earlier.end_date).days != 1:
+                raise ValidationError(
+                    f'There is a gap between {earlier} and {later}. Residency history has '
+                    f'to be continuous, or a holding bought in the gap has no status.')
+
+        earliest_buy = Buy.objects.filter(
+            account=self.account, is_active=True).order_by('date').first()
+        if earliest_buy and periods[0].start_date > earliest_buy.date:
+            raise ValidationError(
+                f'Your residency history starts on {periods[0].start_date.isoformat()}, '
+                f'after your earliest purchase on {earliest_buy.date.isoformat()}. Extend '
+                f'it back, or the discount on that holding cannot be apportioned.')
+
+    def save(self, *args, **kwargs):
+        self.validate_intrinsic()
+        super().save(*args, **kwargs)
+
+
+class AttributionStatement(BaseModel):
+    """An annual tax statement from a managed investment trust.
+
+    A trust does not only pay cash: it *attributes* its own income to members, including
+    capital gains it made selling assets the member never held. Those gains are the
+    member's for tax purposes, and for a portfolio of ETFs they are frequently larger than
+    anything the member realised themselves. The application had no way to record them.
+
+    Modelled on the statement rather than on the payment, because that is how the
+    information arrives. A trust distributes quarterly but reports once a year, and there
+    is no defensible way to split an annual attribution across four cash payments -- so
+    this sits alongside CostBaseAdjustment, which is annual for the same reason and is
+    usually read off the very same document.
+    """
+
+    MODEL_DESCRIPTION = 'Annual tax statements from managed investment trusts (AMMA statements).'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'instrument', 'financial_year_end_date'],
+                name='attribution_statement_keys',
+            )
+        ]
+        ordering = ['financial_year_end_date', 'id']
+
+    instrument = models.ForeignKey(
+        Instrument, related_name='attribution_statement', on_delete=models.PROTECT)
+    financial_year_end_date = models.DateField()
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
+
+    #: The cost base adjustment read off the same statement, where one was recorded.
+    cost_base_adjustment = models.OneToOneField(
+        'CostBaseAdjustment', related_name='attribution_statement',
+        null=True, blank=True, on_delete=models.SET_NULL,
+    )
+
+    calculated_fiscal_year = models.ForeignKey(
+        FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+
+    @safe_property
+    def fiscal_year(self):
+        fiscal_year, _created = self.account.fiscal_year_type.classify_date(
+            self.financial_year_end_date)
+        return fiscal_year
+
+    def __str__(self):
+        return f'{self.financial_year_end_date.isoformat()} | {self.instrument.name} attribution'
+
+    def component_total(self, *components):
+        """Sum of the named components, zero where none are present."""
+        total = Decimal('0')
+        for row in self.components.filter(component__in=components, is_active=True):
+            total += row.amount.amount
+        return total
+
+    @safe_property
+    def discounted_capital_gain(self):
+        """The trust's discounted capital gains attributed to this member.
+
+        Halved already, as the trust reports them. The member grosses them up, applies
+        their own capital losses, then applies their own discount percentage -- which is
+        why the schedule wants the grossed up figure rather than this one.
+        """
+        return self.component_total('DISCOUNTED_TAP', 'DISCOUNTED_NTAP')
+
+    @safe_property
+    def other_method_capital_gain(self):
+        """Gains the trust worked out without a discount, so not grossed up."""
+        return self.component_total('OTHER_TAP', 'OTHER_NTAP')
+
+    @safe_property
+    def total_current_year_capital_gain(self):
+        """The grossed up figure: twice the discounted gains, plus the other method ones."""
+        return self.discounted_capital_gain * 2 + self.other_method_capital_gain
+
+    @safe_property
+    def reconciles(self):
+        """Whether the components agree with the total the statement itself states.
+
+        Twice the discounted gains plus the other method gains must equal the stated total.
+        Where it does not, the statement was misread or the layout was not understood, and
+        the figures should not be relied on. Returns None where the statement does not
+        state a total to check against.
+        """
+        stated = self.components.filter(component='TOTAL_CY_CG', is_active=True).first()
+        if stated is None:
+            return None
+        return abs(self.total_current_year_capital_gain - stated.amount.amount) < Decimal('0.02')
+
+
+class AttributionComponent(BaseModel):
+    """One line from an annual tax statement.
+
+    Long and narrow rather than a column per line: statements differ between issuers and
+    gain new categories over time, so a new component is a new row rather than a migration.
+    """
+
+    MODEL_DESCRIPTION = 'Individual components of a managed investment trust annual statement.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['statement', 'component'], name='attribution_component_keys')
+        ]
+        ordering = ['statement', 'component']
+
+    statement = models.ForeignKey(
+        AttributionStatement, related_name='components', on_delete=models.CASCADE)
+    component = models.CharField(
+        max_length=26, choices=AttributionComponentType.choices)
+    amount = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+
+    def __str__(self):
+        return f'{self.statement.instrument.name} | {self.get_component_display()} | {self.amount}'
+
+
+class CGTReturnSnapshot(BaseModel):
+    """What the capital gains figures were for a fiscal year, at a point in time.
+
+    Capital gains figures are derived, never stored, so improving a calculation silently
+    changes what the app reports for years the user may already have lodged. A snapshot
+    records the figures as they stood, so a later change can be detected and explained
+    rather than quietly replacing a number someone filed a return on.
+
+    Take one before lodging. CGTBasisChangeReport compares it against a fresh calculation.
+    """
+
+    MODEL_DESCRIPTION = 'A record of the capital gains figures for a fiscal year as they stood at a point in time.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'fiscal_year', 'taken_at'],
+                name='cgt_return_snapshot_keys',
+            )
+        ]
+        ordering = ['fiscal_year', 'taken_at']
+
+    fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot')
+    taken_at = models.DateField(default=date.today, help_text='The day these figures were captured.')
+    basis = models.CharField(
+        max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY)
+    engine_version = models.CharField(max_length=32, blank=True, help_text='Application version that produced the figures.')
+
+    is_lodged = models.BooleanField(default=False, help_text='Were these the figures actually lodged?')
+    lodged_at = models.DateField(null=True, blank=True)
+
+    def __str__(self):
+        lodged = ' (lodged)' if self.is_lodged else ''
+        return f'{self.fiscal_year.name} snapshot {self.taken_at.isoformat()}{lodged}'
+
+    #: Only the fields worth comparing are captured. Identifiers locate a row; the rest are
+    #: the figures that can move.
+    CAPTURED_FIELDS = [
+        'sell_allocation_id', 'sell_date', 'instrument', 'quantity_sold',
+        'days_held', 'proceeds', 'cost_base', 'capital_gain',
+    ]
+
+    @property
+    def rows(self):
+        """The captured figures, as a list of plain dicts."""
+        return [row.as_dict() for row in self.captured_rows.all()]
+
+    @property
+    def totals(self):
+        if not self.pk:
+            return {}
+        captured = list(self.captured_rows.all())
+        total = sum(
+            (row.capital_gain.amount for row in captured if row.capital_gain is not None),
+            Decimal('0'),
+        )
+        return {
+            'row_count': len(captured),
+            'total_capital_gain': str(total),
+        }
+
+    @classmethod
+    def capture(cls, account, fiscal_year, taken_at=None, basis='LEGACY', is_lodged=False):
+        """Record the realised capital gain figures for one fiscal year.
+
+        Re-capturing on the same day replaces that day's snapshot rather than accumulating
+        near-duplicates; capturing on a later day adds to the history.
+        """
+        from share_dinkum_app.reports import RealisedCapitalGainReport
+        from share_dinkum_app import version as version_module
+
+        df = RealisedCapitalGainReport(account=account).generate()
+        if not df.empty:
+            df = df[df['fiscal_year'] == fiscal_year.name]
+
+        with transaction.atomic():
+            snapshot, _created = cls.objects.update_or_create(
+                account=account,
+                fiscal_year=fiscal_year,
+                taken_at=taken_at or date.today(),
+                defaults={
+                    'basis': basis,
+                    'engine_version': getattr(version_module, '__version__', ''),
+                    'is_lodged': is_lodged,
+                },
+            )
+            snapshot.captured_rows.all().delete()
+
+            CGTReturnSnapshotRow.objects.bulk_create([
+                CGTReturnSnapshotRow(
+                    account=account,
+                    snapshot=snapshot,
+                    sell_allocation_id=row['sell_allocation_id'],
+                    sell_date=row['sell_date'],
+                    instrument=row['instrument'],
+                    quantity_sold=row['quantity_sold'],
+                    days_held=row['days_held'],
+                    proceeds=row['proceeds'],
+                    cost_base=row['cost_base'],
+                    capital_gain=row['capital_gain'],
+                )
+                for _, row in df.iterrows()
+            ])
+
+        return snapshot
     
+
+
+class CGTReturnSnapshotRow(BaseModel):
+    """One disposal, as it stood when a snapshot was taken.
+
+    These were a single JSON blob on the snapshot, held as text so it would survive the
+    Excel export and import round trip through one cell. A cell holds 32,767 characters,
+    which worked out at about three hundred rows -- and rows are *sell allocations*, not
+    sales, so one sale spanning twelve parcels is twelve of them. Anyone trading actively
+    reached the cap, and `capture()` refused rather than truncating, so the feature simply
+    stopped working for them.
+
+    As ordinary rows there is no cap, the figures are queryable, and a snapshot exports as
+    its own sheet instead of an unreadable wall of JSON in one cell.
+
+    **`sell_allocation_id` is a plain UUID, not a foreign key**, and that is the whole point
+    of the model. A snapshot exists to record what the figures were *before* something
+    changed, and what changed is often the allocation itself: a later sale bifurcates a
+    parcel and its allocations are replaced. A foreign key would either block that with
+    PROTECT, or destroy the evidence with CASCADE. The identifier is kept as a value so the
+    record outlives what it points at.
+    """
+
+    MODEL_DESCRIPTION = 'One disposal within a capital gains snapshot, as it stood when taken.'
+
+    class Meta:
+        ordering = ['sell_date', 'id']
+
+    snapshot = models.ForeignKey(
+        CGTReturnSnapshot, on_delete=models.CASCADE, related_name='captured_rows')
+
+    sell_allocation_id = models.UUIDField(
+        null=True, blank=True,
+        help_text='The allocation these figures came from. Deliberately not a foreign key: '
+                  'the allocation may since have been replaced, which is exactly what a '
+                  'snapshot is for.')
+    sell_date = models.DateField(null=True, blank=True)
+    instrument = models.CharField(max_length=255, blank=True)
+    quantity_sold = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True)
+    days_held = models.IntegerField(null=True, blank=True)
+
+    proceeds = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+    cost_base = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+    capital_gain = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+
+    def __str__(self):
+        return f'{self.instrument} | {self.sell_date} | {self.capital_gain}'
+
+    def as_dict(self):
+        """The shape the basis change report compares against.
+
+        Values stay as Decimal, Money and date rather than being flattened to text. The
+        report converts what it needs; nothing else has to parse anything.
+        """
+        return {
+            'sell_allocation_id': self.sell_allocation_id,
+            'sell_date': self.sell_date,
+            'instrument': self.instrument,
+            'quantity_sold': self.quantity_sold,
+            'days_held': self.days_held,
+            'proceeds': self.proceeds,
+            'cost_base': self.cost_base,
+            'capital_gain': self.capital_gain,
+        }
+
+class CPIIndex(models.Model):
+    """The Consumer Price Index, one row per quarter.
+
+    Not a `BaseModel`, and deliberately not tied to an account. CPI is a published national
+    statistic, the same number for every user of this application, so hanging it off a
+    portfolio would mean each portfolio carrying its own copy of a public fact and being
+    able to disagree with the others about it.
+
+    Loaded by `manage.py load_cpi`. Where a quarter is missing, indexation raises rather
+    than guessing -- see `cgt.indexation`.
+    """
+
+    MODEL_DESCRIPTION = 'Consumer Price Index by quarter, used for cost base indexation.'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['quarter_start_date'], name='cpi_index_keys')
+        ]
+        ordering = ['quarter_start_date']
+        verbose_name_plural = 'CPI index'
+
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    quarter_start_date = models.DateField(
+        help_text='First day of the quarter: 1 January, 1 April, 1 July or 1 October.')
+    index_number = models.DecimalField(max_digits=12, decimal_places=4)
+    source = models.CharField(
+        max_length=255, blank=True,
+        help_text='Where the figure came from, so a disputed cost base can be traced.')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.quarter_start_date.isoformat()} | {self.index_number}'
+
+    def clean(self):
+        super().clean()
+        if self.quarter_start_date is None:
+            return
+        if (self.quarter_start_date.month, self.quarter_start_date.day) not in (
+                (1, 1), (4, 1), (7, 1), (10, 1)):
+            raise ValidationError({
+                'quarter_start_date':
+                    'A CPI quarter starts on 1 January, 1 April, 1 July or 1 October.'})
+
+
+class InstrumentValuation(BaseModel):
+    """What one unit of an instrument was worth on a given day.
+
+    **Per unit, never per parcel**, and that is the important part. A parcel is not a stable
+    thing: `Parcel.bifurcate()` and `split_or_consolidate()` replace parcel rows rather than
+    mutating them, so anything hung off a parcel needs hand-written code to follow it across
+    a partial sale, which `CostBaseAdjustmentAllocation.bifurcate()` had to grow. A unit
+    value needs none of that. `Parcel.market_value_at()` multiplies it out on demand and
+    scales for any split that happened afterwards.
+
+    One mechanism serves four different deemed disposals, which is why it is worth having a
+    model rather than a special case for 2027: s112-155 (everyone, on 1 July 2027), s112-175
+    (pre-CGT assets on the same date), s104-165 (leaving Australia) and s855-45 (arriving).
+    Each needs the same thing -- what was this worth on that day -- and differs only in what
+    is then done with the answer.
+    """
+
+    MODEL_DESCRIPTION = 'The value of one unit of an instrument on a date, for a deemed disposal.'
+
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'instrument', 'valuation_date', 'purpose'],
+                name='instrument_valuation_keys')
+        ]
+        ordering = ['valuation_date']
+
+    instrument = models.ForeignKey(
+        Instrument, on_delete=models.CASCADE, related_name='valuations')
+    valuation_date = models.DateField()
+    unit_value = MoneyField(
+        max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+    purpose = models.CharField(
+        max_length=12, choices=ValuationPurpose.choices,
+        default=ValuationPurpose.CUTOVER_2027)
+    source = models.CharField(
+        max_length=13, choices=ValuationSource.choices, default=ValuationSource.USER)
+
+    def __str__(self):
+        return f'{self.instrument} | {self.valuation_date.isoformat()} | {self.unit_value}'
+
+
+class CapitalLossCarryForward(BaseModel):
+    """A capital loss available to be applied against a later year's gains.
+
+    Two quite different things share this model, distinguished by `is_opening_balance`.
+
+    An **opening balance** is a loss from a return lodged before this portfolio existed in
+    the application. Without somewhere to put it, every new user with any history gets a
+    wrong figure on their first schedule, and there is nothing in their transactions from
+    which it could be inferred. It is a number they read off their last notice of
+    assessment.
+
+    Anything else is a loss this application worked out itself for a year that has been
+    closed off. It is stored rather than recomputed so that a later correction to an old
+    year does not silently rewrite the losses a lodged return already relied on.
+    """
+
+    MODEL_DESCRIPTION = 'Capital losses carried forward into a later income year.'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'fiscal_year'], name='capital_loss_carry_forward_keys')
+        ]
+        ordering = ['fiscal_year']
+
+    fiscal_year = models.ForeignKey(
+        FiscalYear, on_delete=models.PROTECT,
+        help_text='The year the loss was made, not the year it is used in.')
+    amount = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='A positive number. This is a loss; its sign is implied.')
+    is_opening_balance = models.BooleanField(
+        default=False,
+        help_text='Tick where this came from a return lodged before you started using this '
+                  'application, rather than from transactions it holds.')
+
+    def __str__(self):
+        origin = 'opening balance' if self.is_opening_balance else 'calculated'
+        return f'{self.fiscal_year} | {self.amount} | {origin}'
+
+    def clean(self):
+        super().clean()
+        amount = getattr(self.amount, 'amount', None)
+        if amount is not None and amount < 0:
+            raise ValidationError({
+                'amount': 'Record a loss as a positive number. A negative one here would be '
+                          'applied as a gain.'})

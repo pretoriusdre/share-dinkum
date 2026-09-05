@@ -116,6 +116,32 @@
             font-size: 0.9rem;
         }
 
+        .dashboard-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin: 0.75rem 0 0;
+        }
+
+        .dashboard-actions form {
+            margin: 0;
+        }
+
+        .dashboard-actions .refresh-meta {
+            color: var(--body-quiet-color, #6b7280);
+            font-size: 0.9rem;
+        }
+
+        .dashboard-actions .export-option {
+            margin-left: 0.5rem;
+        }
+
+        .dashboard-actions button[disabled] {
+            opacity: 0.6;
+            cursor: progress;
+        }
+
         canvas {
             width: 100% !important;
             height: auto !important;
@@ -140,7 +166,73 @@
                         {% blocktrans with value=dashboard_portfolio_value_display %}Total portfolio value: {{ value }}{% endblocktrans %}
                     </p>
                 {% endif %}
+
+                {% if dashboard_account %}
+                    <div class="dashboard-actions">
+                        <form method="post" action="{% url 'admin:dashboard_refresh_prices' %}"
+                              data-refresh-form>
+                            {% csrf_token %}
+                            <button type="submit" class="button default" data-refresh-button>
+                                {% trans "Refresh prices" %}
+                            </button>
+                        </form>
+                        <span class="refresh-meta">
+                            {% if prices_last_updated %}
+                                {% blocktrans with day=prices_last_updated %}Latest close held: {{ day }}.{% endblocktrans %}
+                            {% else %}
+                                {% trans "No prices held yet." %}
+                            {% endif %}
+                            {% trans "Fetches prices and exchange rates; can take a minute for a large portfolio." %}
+                        </span>
+                    </div>
+
+                    <div class="dashboard-actions">
+                        <form method="post" action="{% url 'admin:dashboard_capture_snapshot' %}">
+                            {% csrf_token %}
+                            <button type="submit" class="button" data-snapshot-button>
+                                {% trans "Record capital gains figures" %}
+                            </button>
+                        </form>
+                        <span class="refresh-meta">
+                            {% if snapshot_last_taken %}
+                                {% blocktrans with day=snapshot_last_taken %}Figures last recorded {{ day }}.{% endblocktrans %}
+                            {% else %}
+                                {% trans "Figures have never been recorded." %}
+                            {% endif %}
+                            {% trans "Take one before changing your tax settings, so any figure that moves can be explained." %}
+                        </span>
+                    </div>
+
+                    <div class="dashboard-actions">
+                        <form method="post" action="{% url 'admin:dashboard_export' %}"
+                              data-export-form>
+                            {% csrf_token %}
+                            <button type="submit" class="button" data-export-button>
+                                {% trans "Export portfolio" %}
+                            </button>
+                            <label class="refresh-meta export-option">
+                                <input type="checkbox" name="include_price_history">
+                                {% trans "include price history" %}
+                            </label>
+                        </form>
+                        <span class="refresh-meta">
+                            {% if export_last_taken %}
+                                {% blocktrans with day=export_last_taken %}Last exported {{ day }}.{% endblocktrans %}
+                            {% else %}
+                                {% trans "Never exported." %}
+                            {% endif %}
+                            {% trans "An Excel file of everything, which loads back into an empty portfolio. This is your backup." %}
+                        </span>
+                    </div>
+                {% endif %}
             </div>
+
+
+            {% if tax_settings_warning %}
+                <ul class="messagelist">
+                    <li class="warning">{{ tax_settings_warning }}</li>
+                </ul>
+            {% endif %}
 
             {% if dashboard_message %}
                 <ul class="messagelist">
@@ -244,14 +336,14 @@
             const formatted = numericValue.toLocaleString(undefined, {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
-            });
+        });
             return currency ? `${currency} ${formatted}` : formatted;
         };
         const formatUnits = (value) => {
             const numericValue = Number(value || 0);
             return numericValue.toLocaleString(undefined, {
                 maximumFractionDigits: 4,
-            });
+        });
         };
 
         const parcelLabelsNode = document.getElementById('parcel-labels-data');
@@ -319,7 +411,7 @@
                         animateScale: true,
                     },
                 },
-            });
+        });
         }
 
         const incomeCanvas = document.getElementById('incomeStacked');
@@ -377,7 +469,7 @@
                         },
                     },
                 },
-            });
+        });
         }
 
         const areaCanvas = document.getElementById('portfolioArea');
@@ -395,7 +487,7 @@
                     pointRadius: 0,
                     stepped: 'before',
                 };
-            });
+        });
 
             new window.Chart(areaCanvas, {
                 type: 'line',
@@ -443,7 +535,7 @@
                         },
                     },
                 },
-            });
+        });
         }
 
         const valueCanvas = document.getElementById('portfolioValue');
@@ -460,7 +552,7 @@
                     borderWidth: 2,
                     pointRadius: 0,
                 };
-            });
+        });
 
             new window.Chart(valueCanvas, {
                 type: 'line',
@@ -506,8 +598,43 @@
                         },
                     },
                 },
+        });
+        }
+    })();
+</script>
+<script>
+    // The refresh runs synchronously and can take a while, so the button stays put and
+    // looks clickable long after it has been clicked. Without this, an impatient second
+    // press queues a second full fetch from the data provider.
+    (function () {
+        var form = document.querySelector('[data-refresh-form]');
+        if (form) {
+            form.addEventListener('submit', function () {
+                var button = form.querySelector('[data-refresh-button]');
+                if (!button) { return; }
+                button.disabled = true;
+                button.textContent = '{% trans "Refreshing..." %}';
+            });
+        }
+
+        // The export answers with a file rather than a page, so this form never navigates
+        // and the button would otherwise stay disabled for good. Put it back once the
+        // download has had time to start.
+        var exportForm = document.querySelector('[data-export-form]');
+        if (exportForm) {
+            exportForm.addEventListener('submit', function () {
+                var button = exportForm.querySelector('[data-export-button]');
+                if (!button) { return; }
+                var label = button.textContent;
+                button.disabled = true;
+                button.textContent = '{% trans "Building..." %}';
+                window.setTimeout(function () {
+                    button.disabled = false;
+                    button.textContent = label;
+                }, 8000);
             });
         }
     })();
 </script>
+
 {% endblock %}

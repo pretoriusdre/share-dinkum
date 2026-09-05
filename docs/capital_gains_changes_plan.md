@@ -81,8 +81,21 @@ with helpers `Account.was_foreign_or_temporary_between(start, end) -> bool` and
 `Account.is_indexation_eligible(acquisition_date, cgt_event_date) -> bool` implementing
 the s114-25 testing period directly.
 
-Default for existing accounts: a single `RESIDENT` period with `start_date` = account
-creation and no end date, preserving today's behaviour for the overwhelming majority.
+~~Default for existing accounts: a single `RESIDENT` period with `start_date` = account
+creation and no end date, preserving today's behaviour for the overwhelming majority.~~
+
+**Superseded — this default was not implemented, and should not be.** `created_at` is a
+software timestamp later than most users' earliest `Buy`, so it leaves every earlier parcel
+in a fabricated gap; it writes a legal assertion the user never made, which then flows into
+the Excel export and back in with the appearance of provenance; it changes historical figures
+for precisely the people it is wrong about; and it cannot represent the s115-105(2)(e)
+reach-back to 8 May 2012 at all.
+
+**The migration writes nothing.** Absence of data means *undeclared*, not *resident*: an
+account with no `ResidencyPeriod` rows keeps the flat 50% it has always had, and every report
+built on it says so. Declaring one unbroken period of Australian residency reproduces every
+existing figure exactly, because resident days equal total days. That is asserted by
+`ResidencyInertForResidentsTests`, which is the load-bearing test for the whole feature.
 
 > **Note on s115-105.** share-dinkum does not currently implement the existing
 > foreign-resident discount apportionment (s115-105/115-115) at all — the app applies a
@@ -154,6 +167,47 @@ because gains within a category are taxed alike.
 This removes the plan's single biggest correctness risk and its "validate with an
 accountant before shipping" caveat.
 
+### 4a. Indexation and the discount are mutually exclusive, with no election to model
+
+**s110-36(1A)** is mandatory — "the cost base *also includes* indexation … if" the Division
+114 conditions are satisfied. **s115-20(1)(a)** then denies discount treatment to any gain
+"worked out using a cost base that has been calculated with reference to indexation". The
+two are separated by their own conditions and there is no user choice between them. Any UI
+offering one is modelling something the Act does not contain.
+
+### 4b. s112-155(1)(d) is far broader than "foreign residents"
+
+It denies the 2027 deemed sale wherever s115-105 *would* apply, and **s115-105(2)(e)**
+catches anyone who was a foreign **or temporary** resident during any part of the ownership
+period after 8 May 2012. Returned expatriates and former 482 visa holders are caught
+permanently, on assets they held at the time — including people who are Australian residents
+today and have been for years.
+
+### 4c. The returned-expat trap — a harsh edge the plan does not identify
+
+Resident before 1 July 2027, foreign or temporary at some point after 8 May 2012:
+
+* no deemed sale (s112-155(1)(d)), so **no 50% is banked** on pre-2027 growth;
+* resident from the cutover, so s114-25 is satisfied and indexation applies from 1 July 2027;
+* and therefore **no discount at all**, because s115-20 denies it on an indexed cost base.
+
+They lose the discount with nothing replacing it but relief running from 2027 on growth that
+mostly happened before then. Implemented, and explained on the row: `ReturnedExpatIndexationTests`
+asserts it, including a comparison against the same portfolio held by someone who never left,
+because the figure alone does not show what it cost.
+
+### 4d. A capital loss is never indexed — found in implementation, in neither plan
+
+**s110-55** excludes indexation from the reduced cost base, and **s100-45** and **s104-10(4)**
+work a capital loss out against that. Indexing the cost base on the loss side manufactures a
+deductible loss out of an asset that merely failed to keep pace with inflation.
+
+This also produces a **third outcome** that a gain-or-loss model has nowhere to put: where
+the proceeds fall between the plain and the indexed cost base there is no gain *and* no loss.
+`cgt/events.py: _outcome()` returns all three. It was found by an unrelated test reporting a
+loss of $2,450 on a holding that fell $2,000 — which is the shape this class of bug takes: not
+an obviously wrong number, just a slightly larger one, in the taxpayer's favour.
+
 ### 5. Indexation source is settled — CPI, not a flat rate
 
 The previous plan shipped two backends and defaulted to a flat 2.5% because that was the
@@ -163,6 +217,15 @@ rate in the Budget cameos. The Act uses actual CPI through Subdivision 960-M, wi
 **Action:** default `CGT_INDEXATION_METHOD = 'CPI_TABLE'`. Keep the flat-rate backend, but
 demote it to a testing and projection aid rather than the production default. The `CPIIndex`
 model as previously specified is still correct.
+
+### 5a. `CGT_DISCOUNT_THRESHOLD_DAYS = 365` is wrong, independently of the reform
+
+**s115-25** requires the asset to have been acquired "at least 12 months before" the CGT
+event. That is a calendar comparison, not a day count, and counting 365 days made the answer
+depend on whether a leap day happened to fall inside the holding period: an asset bought on
+1 March and sold the following 1 March qualified in one year and not in another. It was also
+compared with `>` at `signals.py:93`. Replaced by a calendar test in `cgt/discount.py`, which
+changes which parcels the MIN_CGT strategy selects.
 
 ### 6. Pre-CGT assets are now representable
 
@@ -232,14 +295,21 @@ Let `D = date(2027, 7, 1)` (`CGT_CUTOVER_DATE` in `constants.py`).
 `MV_D` sources are unchanged from the previous plan — snapshot, then price history close,
 then the s112-185 apportioning method once it exists.
 
-> **Open legal question, flag in code.** For Case C′ — a taxpayer who was a foreign or
-> temporary resident and therefore gets no deemed sale — the Act does not clearly state
-> what discount percentage applies to a post-`D` disposal. New s115-100(f) would give 0%,
-> but **s115-105 and s115-115 are not amended by this Act** and s115-105 directs that the
-> percentage "is worked out under section 115-115", which would displace s115-100. The EM
-> does not address it. Implement both behind a constant
-> `CGT_FOREIGN_RESIDENT_DISCOUNT_SURVIVES_CUTOVER` and surface the ambiguity in the report
-> notes rather than picking one silently.
+> **Resolved — was an open question, and is not one.** For Case C′ the Act was read as
+> silent on what discount percentage applies to a post-`D` disposal, and the plan proposed
+> implementing both readings behind `CGT_FOREIGN_RESIDENT_DISCOUNT_SURVIVES_CUTOVER`.
+>
+> That constant is not needed and was never written. **s115-100(c)** — unamended, and
+> therefore invisible in the amending Act, which is why it was missed — reads:
+>
+> > (c) the percentage resulting from section 115-115 if section 115-105 or 115-110 applies to the gain; or
+>
+> Paragraph (f)'s 0% applies only "if none of the above paragraphs applies". Where s115-105
+> applies, paragraph (c) applies, so (f) is never reached. **The apportioned discount
+> survives 1 July 2027.** One behaviour, implemented in `cgt/discount.py`.
+>
+> The general lesson, which cost this plan four of its errors: an amending Act shows only
+> what it changes. Anything load-bearing has to be read from the consolidated compilation.
 
 ---
 
@@ -322,14 +392,47 @@ Retain tests 1–9 from the previous plan, with these changes and additions:
 1. **s112-185 legislative instrument not yet made.** The apportioning method is delegated
    to the Minister. Until registered, the straight-line formula is a placeholder. This is
    now the single largest unknown and the gate on flipping the default ON.
-2. **Case C′ discount percentage** — see the boxed question above. Worth resolving with a
-   tax practitioner rather than from the text alone.
+2. ~~**Case C′ discount percentage**~~ — **closed.** s115-100(c) resolves it from the text;
+   see the box above. The apportioned discount survives the cutover.
 3. **Treasury has signalled further amendments.** EM (s114-25 discussion): "there is an
    intention to further consider how these amendments apply to entities that are Australian
    residents for only part of the period in which they hold a CGT asset." Expect the
    part-year residency rules to move.
-4. **SMSF 1/3 discount** — still not modelled, still wrong today. Out of scope for v1.
+4. ~~**SMSF 1/3 discount**~~ — **closed.** `Account.taxpayer_type` now carries it, along with
+   nil for a company. The default is `UNDECLARED`, which keeps the flat 50% and says so,
+   because a wrong guess here is a 50 to 100 per cent error on every gain.
 5. **Foreign-currency parcels** — Australian CPI applies regardless of instrument currency.
    Should work; warrants a test.
 6. **New residential dwellings / affordable housing** (s115-102, s115-125) — irrelevant to a
    share tracker. Document as out of scope with a guard.
+
+---
+
+## Implementation status
+
+Phases 0 to 5 of the revised plan are implemented and under test (275 tests). What is built:
+
+| Area | Where |
+|---|---|
+| Fact table, discount, classification, TAP, residency, indexation, cutover, schedule | `share_dinkum_app/cgt/` |
+| `ResidencyPeriod`, `Account.taxpayer_type`, `InstrumentValuation`, `CPIIndex`, `CapitalLossCarryForward`, `AttributionStatement`/`AttributionComponent`, `CGTReturnSnapshot` | `models.py`, migrations 0015–0020 |
+| `CGTEventReport`, `CGTScheduleReport`, `CGTBasisChangeReport`, `BaseReport` | `reports.py` |
+| `load_cpi`, `capture_cutover_valuations`, `suggest_instrument_classification` | `management/commands/` |
+
+Still open, and each flagged at the point of use rather than silently defaulted:
+
+1. **s112-185 apportioning instrument** — not made. A straddling disposal needs a market
+   valuation; without one the row is reported unsplit and says why. `CGT_2027_REGIME_ENABLED`
+   stays `False` until the instrument is registered.
+2. **s115-115(4) market value election** — needs a valuation as at 8 May 2012 the application
+   cannot hold. The no-election outcome under s115-115(6) is what is returned.
+3. **Residential categories and Subdivision 26-155 quarantining** — steps 3 and 4 of the
+   s102-5 method statement. A share tracker never produces them; a guard warns if one appears.
+4. **`minimum tax gap amount`** (s119-10(2)) — needs total taxable income. The s119-5 base is
+   output; the gap is not.
+5. **Attributed gains are not residency-apportioned** — s115-105 apportions over the days the
+   *asset* was owned, and for an attributed gain the trust owned it. An annual statement does
+   not disclose when the trust bought what it sold. Narrow in effect: a foreign resident's
+   attributed gains on non-TAP assets are disregarded outright under s855-40(2), so what
+   remains is TAP attributions to a foreign resident, where the full rate is applied and the
+   schedule flags it.
