@@ -205,40 +205,71 @@ class Account(models.Model):
     def portfolio_value_converted(self):
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
 
+    #: How long to keep looking for a price that should have appeared after a disposal.
+    #:
+    #: The condition this bounds -- "keep fetching until a price exists at or after the last
+    #: sell" -- is one a delisted security can never satisfy. A company taken over, or a
+    #: rights entitlement that expired, stops being quoted *before* the disposal is recorded,
+    #: so the price being waited for will never exist and the instrument is re-fetched on
+    #: every refresh forever. One holding here was still being asked about ten years on.
+    #:
+    #: A week rather than a day because the window only governs retries after a failure: for
+    #: a security still trading, the first successful fetch satisfies the condition outright
+    #: and it is never asked again. Nothing depends on the answer either way -- a capital
+    #: gain is worked out from the sale proceeds, and a holding that is fully sold contributes
+    #: nothing to portfolio value -- so giving up costs a display and no figure.
+    POST_SALE_PRICE_GRACE_DAYS = 7
+
     def update_all_price_history(self):
         """
         Update price history for instruments held in this account.
 
         Instruments with an open position are always refreshed. Instruments that have been fully
-        sold continue to refresh until at least one data point exists after their final sell date.
+        sold are refreshed until a data point exists after their final sell date, or until the
+        grace period above has run out.
         """
         instruments = Instrument.objects.filter(account=self, is_active=True)
+        today = date.today()
 
         for instrument in instruments:
             if instrument.quantity_held > 0:
                 instrument.update_price_history()
                 continue
 
-            last_sell_date = (
+            last_sell = (
                 Sell.objects.filter(account=self, instrument=instrument)
                 .order_by('-date')
-                .values_list('date', flat=True)
                 .first()
             )
 
-            if not last_sell_date:
+            if last_sell is None:
                 continue
 
             has_history_after_sell = InstrumentPriceHistory.objects.filter(
                 account=self,
                 instrument=instrument,
-                date__gte=last_sell_date,
+                date__gte=last_sell.date,
             ).exists()
 
             if has_history_after_sell:
                 continue
 
-            instrument.update_price_history(end_date=date.today())
+            # Counted from whichever is later: the sale, or the day the sale was recorded.
+            # The date alone would be wrong for a disposal entered months after the fact --
+            # its window would have closed before the application ever heard of it, and the
+            # price that *is* available would never be fetched. What the grace period is
+            # really measuring is how long we have had the chance to look.
+            recorded_on = last_sell.created_at.date() if last_sell.created_at else last_sell.date
+            give_up_after = max(last_sell.date, recorded_on) + timedelta(
+                days=self.POST_SALE_PRICE_GRACE_DAYS)
+            if today > give_up_after:
+                logger.debug(
+                    'Not looking for a post-sale price for %s: sold %s, recorded %s, and '
+                    'none has appeared. It is most likely no longer quoted.',
+                    instrument, last_sell.date, recorded_on)
+                continue
+
+            instrument.update_price_history(end_date=today)
 
 
     def update_all_exchange_rate_history(self):

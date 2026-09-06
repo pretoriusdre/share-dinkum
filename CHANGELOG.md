@@ -122,6 +122,12 @@ a cost base adjustment is spread across parcels once, when it is created.
 
 ### Fixed
 
+- **Refreshing prices no longer chases a delisted holding forever.** It kept fetching a sold
+  instrument until a price appeared after the sale, which never happens once a security stops being
+  quoted, so a takeover or an expired rights entitlement was re-requested on every refresh. It now
+  gives up a week after the sale is recorded — counted from when you enter it, so a disposal typed
+  in months late is still looked up.
+
 - **Proceeds and capital gain were computed by two different routes**, one dividing before
   multiplying and the other after, so the same quantity had two answers differing in the last digit.
   They now use one formula, and proceeds less cost base equals the reported gain exactly.

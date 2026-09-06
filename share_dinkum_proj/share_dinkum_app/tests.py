@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from django.utils import timezone
 
 import pandas as pd
 
@@ -4994,6 +4995,75 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertEqual(instrument.legal_form, 'UNIT_TRUST')
         self.assertEqual(instrument.legal_form_source, 'SUGGESTED')
         self.assertFalse(instrument.is_classified)
+
+
+class PostSalePriceChaseTests(TransactionTestCase):
+    """When to stop looking for a price that is never going to arrive.
+
+    A fully sold instrument was refreshed until a price appeared at or after its last sell.
+    A security that stopped being quoted before the disposal -- a company taken over, a
+    rights entitlement that expired -- can never satisfy that, so it was re-fetched on every
+    refresh forever. Two holdings here were in that state, one of them for ten years.
+    """
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        self.buy = Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2020, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(50, 'AUD'),
+            total_brokerage=Money(10, 'AUD'))
+
+    def _sell_everything(self, sell_date, recorded_on=None):
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=sell_date,
+            quantity=Decimal('100'), unit_price=Money(60, 'AUD'),
+            total_brokerage=Money(10, 'AUD'))
+        if recorded_on is not None:
+            # created_at is auto_now_add, so it has to be written past the model to
+            # stand in for a disposal that was entered long after it happened.
+            Sell.objects.filter(pk=sell.pk).update(created_at=recorded_on)
+            sell.refresh_from_db()
+        return sell
+
+    def _refreshed(self):
+        """The instruments a refresh would actually go to the network for."""
+        with patch.object(Instrument, 'update_price_history') as fetch:
+            self.account.update_all_price_history()
+        return fetch.call_count
+
+    def test_a_recent_sale_is_still_chased(self):
+        self._sell_everything(date.today() - timedelta(days=2))
+        self.assertEqual(self._refreshed(), 1)
+
+    def test_an_old_sale_with_no_price_since_is_given_up_on(self):
+        """The delisted case: the price being waited for does not exist."""
+        long_ago = timezone.now() - timedelta(days=400)
+        self._sell_everything(date.today() - timedelta(days=400), recorded_on=long_ago)
+        self.assertEqual(self._refreshed(), 0)
+
+    def test_a_sale_entered_months_late_is_still_chased(self):
+        """The clock runs from when the disposal was recorded, not when it happened.
+
+        Sold four months ago, typed in today. Counting from the sale date alone would have
+        closed the window before the application ever heard of the sale, so the price that
+        is genuinely available would never be fetched.
+        """
+        self._sell_everything(date.today() - timedelta(days=120))
+        self.assertEqual(self._refreshed(), 1)
+
+    def test_a_price_after_the_sale_ends_the_chase(self):
+        """One successful fetch settles it permanently, whatever the grace period says."""
+        sell_date = date.today() - timedelta(days=2)
+        self._sell_everything(sell_date)
+        InstrumentPriceHistory.objects.create(
+            account=self.account, instrument=self.instrument, date=sell_date,
+            open=Decimal('60'), high=Decimal('60'), low=Decimal('60'),
+            close=Decimal('60'), volume=0, stock_splits=Decimal('0'))
+        self.assertEqual(self._refreshed(), 0)
+
+    def test_a_holding_still_open_is_always_chased(self):
+        self.assertEqual(self._refreshed(), 1)
 
 
 class InlineFieldBudgetTests(TransactionTestCase):
