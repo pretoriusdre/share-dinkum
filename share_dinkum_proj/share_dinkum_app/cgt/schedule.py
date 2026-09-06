@@ -29,6 +29,7 @@ wash sales, rollovers, deceased estates and the small business concessions.
 """
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 
 from djmoney.money import Money
@@ -249,6 +250,37 @@ def build(account, fiscal_year, prior_year_losses=None):
     )
 
 
+def _year_still_running(fiscal_year):
+    """The end of a fiscal year that has not reached it yet, or None.
+
+    Every other reason a schedule is a draft is about data nobody has confirmed. This one is
+    about time, and it was missing: a year in progress had nothing unconfirmed in it and so
+    reported itself final, three weeks in. "Final" is then read as "these are the year's
+    figures" when the year has ten months left to run and every one of them can change the
+    answer -- a sale, a distribution, a cost base adjustment, or simply the discount on a
+    parcel ticking over another day.
+
+    Returns the end date so the warning can name it, because "not finished" invites the
+    question "finished when?".
+    """
+    from share_dinkum_app.models import FiscalYear
+
+    if fiscal_year is None:
+        # The all-years view, which is a position rather than a return, and is provisional
+        # for the same reason if it reaches into the current year. Callers that mean a
+        # return always name a year, so there is nothing useful to say here.
+        return None
+
+    year = fiscal_year
+    if not hasattr(year, 'start_year'):
+        year = FiscalYear.objects.filter(name=str(year)).first()
+    if year is None:
+        return None
+
+    end_date = year.end_date
+    return end_date if end_date and date.today() <= end_date else None
+
+
 def _statements_disagreeing_on_cost_base(account, year_name):
     """Statements whose cost base line contradicts the adjustment linked to them.
 
@@ -289,6 +321,44 @@ def _warnings(account, live_events, all_events, year_name=None):
     schedule stops carrying.
     """
     warnings = []
+
+    # First, because it qualifies everything below it. The other warnings say a figure may
+    # be wrong; this one says the year is not over, so the figure is not yet the answer to
+    # anything.
+    still_running = _year_still_running(year_name)
+    if still_running:
+        warnings.append(
+            f'The {year_name} fiscal year has not ended -- it runs to '
+            f'{still_running:%d %B %Y}. These are the figures so far, not the year\'s '
+            'figures: anything bought, sold or distributed before then changes them, and '
+            'so does the discount on every parcel still being held.')
+
+    # Only where the year actually holds one. A schedule for 2011 is unaffected by this
+    # setting either way: `regime` comes from the event date, and no event before
+    # 1 July 2027 can be post-cutover.
+    after_cutover = sorted({
+        event.instrument for event in all_events
+        if event.regime == events_module.REGIME_POST_CUTOVER})
+
+    if after_cutover and events_module.models_2027_regime(account):
+        warnings.append(
+            'This year is modelled under the 2027 capital gains regime, so its figures are '
+            'projections rather than settled amounts: CPI has not been published for any '
+            'quarter after the cutover, and the method for splitting a straddling gain '
+            'without a market valuation has not been made. Untick "Model 2027 regime" on '
+            'the portfolio (Accounts in the admin) to go back to the law as it stands. '
+            f'Affected: {", ".join(after_cutover)}.')
+    elif after_cutover:
+        # The direction that loses money quietly. A disposal on or after 1 July 2027 is
+        # governed by the new regime whether or not this application models it, so leaving
+        # the setting off does not make these figures cautious -- it makes them the old law
+        # applied to a year the old law does not reach.
+        warnings.append(
+            'This year has disposals on or after 1 July 2027, which the new capital gains '
+            'regime governs, but they are being worked out under the rules that applied '
+            'before it. Tick "Model 2027 regime" on the portfolio (Accounts in the admin) '
+            'to model the new law instead; the figures it gives are projections while CPI '
+            f'for those quarters is unpublished. Affected: {", ".join(after_cutover)}.')
 
     if residency.basis(account) == residency.BASIS_LEGACY:
         warnings.append(

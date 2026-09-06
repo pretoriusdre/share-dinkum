@@ -13,12 +13,10 @@ CGT_CUTOVER_DATE = date(2027, 7, 1)
 
 # --- The 2027 regime -------------------------------------------------------------------
 
-# The rollout gate, distinct from the legal gate above. What is still genuinely unsettled is
-# the s112-185 legislative instrument: the method for apportioning a gain across the cutover
-# is delegated to the Minister and has not been made. Until it is, any figure this
-# application produces for a holding that straddles 1 July 2027 is a projection, so it is
-# off by default and every projected figure is labelled as one.
-CGT_2027_REGIME_ENABLED = False
+# The rollout gate is `Account.model_2027_regime`, not a constant here. It was one, and
+# that meant editing tracked source to change a setting -- which `uv run update` then
+# refuses to pull over, so turning modelling on quietly broke updates. The legal gate,
+# CGT_CUTOVER_DATE above, stays a constant: that date is the law and is not a setting.
 
 # CPI, per Subdivision 960-M. A flat rate backend exists for projecting forward past the
 # last published quarter, but it is a modelling aid and never the production default: a

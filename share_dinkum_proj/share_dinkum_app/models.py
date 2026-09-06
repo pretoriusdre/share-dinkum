@@ -196,6 +196,26 @@ class Account(models.Model):
     #: a warning that cannot be dismissed by answering it just teaches people to ignore it.
     tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
 
+    #: Whether to model the 2027 capital gains regime for this portfolio.
+    #:
+    #: A field rather than the module constant it replaces. The constant meant editing
+    #: tracked source to change a setting, which `uv run update` then refuses to pull over
+    #: ("the new version changes files you have edited"), so turning modelling on quietly
+    #: broke updates. Putting it in `.env` fixes that and is no better for the person: this
+    #: application signs you in automatically and expects a browser, not a hidden dotfile
+    #: and a restart. It belongs beside the other tax settings, where the dashboard already
+    #: sends people.
+    #:
+    #: Nothing before 1 July 2027 is affected either way -- that date is the law, not a
+    #: setting. What this changes is whether disposals after it are modelled under the new
+    #: regime, and those figures are projections: see `CGTScheduleReport`, which marks any
+    #: year containing them as a draft.
+    model_2027_regime = models.BooleanField(
+        default=False,
+        help_text='Model the 2027 capital gains changes for disposals from 1 July 2027. '
+                  'Figures for those years are projections, and the schedule says so. '
+                  'Nothing before that date changes.')
+
     def __str__(self):
         return f'{self.description} | {self.currency}'
 

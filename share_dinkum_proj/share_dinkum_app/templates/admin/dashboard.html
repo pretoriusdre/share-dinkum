@@ -124,6 +124,28 @@
             font-size: 0.9rem;
         }
 
+        /* Bounds the actions so five of them read as a panel rather than as a page of
+           buttons pushing the charts below the fold. */
+        .dashboard-panel {
+            border: 1px solid var(--hairline-color, #e5e7eb);
+            border-radius: 6px;
+            padding: 0.75rem 1rem 1rem;
+            margin: 1rem 0 0;
+        }
+
+        .action-group-heading {
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--body-quiet-color, #6b7280);
+            margin: 1rem 0 0;
+        }
+
+        .action-group-heading:first-child {
+            margin-top: 0;
+        }
+
         .dashboard-actions {
             display: flex;
             align-items: center;
@@ -175,62 +197,35 @@
                     </p>
                 {% endif %}
 
-                {% if dashboard_account %}
-                    <div class="dashboard-actions">
-                        <form method="post" action="{% url 'admin:dashboard_refresh_prices' %}"
-                              data-refresh-form>
-                            {% csrf_token %}
-                            <button type="submit" class="button default" data-refresh-button>
-                                {% trans "Refresh prices" %}
-                            </button>
-                        </form>
-                        <span class="refresh-meta">
-                            {% if prices_last_updated %}
-                                {% blocktrans with day=prices_last_updated %}Latest close held: {{ day }}.{% endblocktrans %}
-                            {% else %}
-                                {% trans "No prices held yet." %}
-                            {% endif %}
-                            {% trans "Fetches prices and exchange rates; can take a minute for a large portfolio." %}
-                        </span>
-                    </div>
-
-                    <div class="dashboard-actions">
-                        <form method="post" action="{% url 'admin:dashboard_capture_snapshot' %}">
-                            {% csrf_token %}
-                            <button type="submit" class="button" data-snapshot-button>
-                                {% trans "Record capital gains figures" %}
-                            </button>
-                        </form>
-                        <span class="refresh-meta">
-                            {% if snapshot_last_taken %}
-                                {% blocktrans with day=snapshot_last_taken %}Figures last recorded {{ day }}.{% endblocktrans %}
-                            {% else %}
-                                {% trans "Figures have never been recorded." %}
-                            {% endif %}
-                            {% trans "Take one before changing your tax settings, so any figure that moves can be explained." %}
-                        </span>
-                    </div>
-
-                    <div class="dashboard-actions">
-                        <form method="post" action="{% url 'admin:dashboard_export' %}"
-                              data-export-form>
-                            {% csrf_token %}
-                            <button type="submit" class="button" data-export-button>
-                                {% trans "Export portfolio" %}
-                            </button>
-                            <label class="refresh-meta export-option">
-                                <input type="checkbox" name="include_price_history">
-                                {% trans "include price history" %}
-                            </label>
-                        </form>
-                        <span class="refresh-meta">
-                            {% if export_last_taken %}
-                                {% blocktrans with day=export_last_taken %}Last exported {{ day }}.{% endblocktrans %}
-                            {% else %}
-                                {% trans "Never exported." %}
-                            {% endif %}
-                            {% trans "An Excel file of everything, which loads back into an empty portfolio. This is your backup." %}
-                        </span>
+                {% if dashboard_action_groups %}
+                    <div class="dashboard-panel">
+                        {% for group in dashboard_action_groups %}
+                            <h2 class="action-group-heading">{{ group.label }}</h2>
+                            {% for action in group.actions %}
+                                <div class="dashboard-actions">
+                                    <form method="post" action="{{ action.url }}"
+                                          data-action-form data-action="{{ action.name }}"
+                                          data-busy-label="{{ action.busy_label }}"
+                                          {% if action.returns_file %}data-returns-file{% endif %}>
+                                        {% csrf_token %}
+                                        <button type="submit" data-action-button
+                                                class="button{% if action.primary %} default{% endif %}">
+                                            {{ action.label }}
+                                        </button>
+                                        {% for option in action.options %}
+                                            <label class="refresh-meta export-option">
+                                                <input type="checkbox" name="{{ option.name }}">
+                                                {{ option.label }}
+                                            </label>
+                                        {% endfor %}
+                                    </form>
+                                    <span class="refresh-meta">
+                                        {% if action.status_text %}{{ action.status_text }}{% endif %}
+                                        {{ action.description }}
+                                    </span>
+                                </div>
+                            {% endfor %}
+                        {% endfor %}
                     </div>
                 {% endif %}
             </div>
@@ -616,37 +611,31 @@
     })();
 </script>
 <script>
-    // The refresh runs synchronously and can take a while, so the button stays put and
-    // looks clickable long after it has been clicked. Without this, an impatient second
-    // press queues a second full fetch from the data provider.
+    // These actions run synchronously and can take a while, so a button that still looks
+    // clickable invites an impatient second press and a second full run. One handler for
+    // every action rather than one per button: what differs between them -- the busy text,
+    // and whether the response is a file -- is declared on the action and read off the
+    // markup, so adding an action needs no JavaScript at all.
     (function () {
-        var form = document.querySelector('[data-refresh-form]');
-        if (form) {
+        var forms = document.querySelectorAll('[data-action-form]');
+        Array.prototype.forEach.call(forms, function (form) {
             form.addEventListener('submit', function () {
-                var button = form.querySelector('[data-refresh-button]');
-                if (!button) { return; }
-                button.disabled = true;
-                button.textContent = '{% trans "Refreshing..." %}';
-            });
-        }
-
-        // The export answers with a file rather than a page, so this form never navigates
-        // and the button would otherwise stay disabled for good. Put it back once the
-        // download has had time to start.
-        var exportForm = document.querySelector('[data-export-form]');
-        if (exportForm) {
-            exportForm.addEventListener('submit', function () {
-                var button = exportForm.querySelector('[data-export-button]');
+                var button = form.querySelector('[data-action-button]');
                 if (!button) { return; }
                 var label = button.textContent;
                 button.disabled = true;
-                button.textContent = '{% trans "Building..." %}';
-                window.setTimeout(function () {
-                    button.disabled = false;
-                    button.textContent = label;
-                }, 8000);
+                button.textContent = form.getAttribute('data-busy-label') || label;
+
+                // A response that is a file never navigates, so nothing would ever put this
+                // button back. Restore it once the download has had time to start.
+                if (form.hasAttribute('data-returns-file')) {
+                    window.setTimeout(function () {
+                        button.disabled = false;
+                        button.textContent = label;
+                    }, 8000);
+                }
             });
-        }
+        });
     })();
 </script>
 

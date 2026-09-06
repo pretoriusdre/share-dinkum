@@ -12,9 +12,19 @@ To upgrade, stop the server and run `uv run update`.
   complex feature. From 1 July 2027 an individual no longer receives a 50% gain discount. The cost
   base grows with inflation instead, so only the real gain is taxed, and a holding you have had
   since before that date is split in two: the growth up to the cutover keeps the old 50% discount,
-  and the growth after it is indexed. It ships turned off behind the `CGT_2027_REGIME_ENABLED`
-  feature flag, because the method for splitting a straddling gain without a market valuation is
-  delegated to the Minister and has not been made yet.
+  and the growth after it is indexed. It ships off: tick **Model 2027 regime** on the portfolio to
+  turn it on, because the CPI figures the indexation needs do not exist yet for any quarter after
+  the cutover. A year holding a disposal after that date says which of the two it was worked out
+  under, and how to change it.
+
+  Splitting a straddling gain is not the obstacle for a portfolio of listed holdings. The split uses
+  market value at 1 July 2027, which for anything listed is the closing price, and
+  `capture_cutover_valuations` already takes it. The apportioning method the Minister has yet to
+  make is the alternative for real property and assets with no readily ascertainable market value —
+  it was released in draft on 4 August 2026 as the *Income Tax Assessment (Method for Apportioning
+  Capital Gains and Capital Losses) Determination 2026* and had not been registered as at
+  6 September 2026. If you hold something that is delisted before the cutover, that is the case it
+  matters for, and `capture_cutover_valuations` lists what it cannot value.
 
   Two things to do before that date, neither of which happens by itself: `uv run dev
   capture_cutover_valuations` records what your holdings were worth on 30 June 2027, which cannot be

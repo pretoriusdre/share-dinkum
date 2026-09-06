@@ -114,7 +114,7 @@ application says about a year you may already have filed. A snapshot is the reco
 used to say, so the change can be shown to you rather than quietly replacing a number on a
 lodged return.
 
-There is a **Record capital gains figures** button on the dashboard, or from a terminal:
+There is a **Take capital gains snapshot** button on the dashboard, or from a terminal:
 
     uv run dev capture_cgt_snapshot --account "Your portfolio" --lodged
 
@@ -181,7 +181,7 @@ what happens to the gain: leaving Australia (s104-165), arriving (s855-45), and 
 
 ## The order to do it in
 
-1. Press **Record capital gains figures** on the dashboard — record where you stand
+1. Press **Take capital gains snapshot** on the dashboard — record where you stand
 2. Set `Account.taxpayer_type`
 3. Add your `ResidencyPeriod` rows
 4. `uv run dev suggest_instrument_classification --account "..."`, then fill in what it could

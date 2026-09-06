@@ -6,7 +6,7 @@ from djmoney.money import Money
 from share_dinkum_app.models import Sell, Account, Parcel, CurrentExchangeRate, CGTReturnSnapshot
 import pandas as pd
 
-from share_dinkum_app import cgt
+from share_dinkum_app import cgt, excelinterface
 from share_dinkum_app.choices import CGTAssetCategory, CGTBasis
 
 def _key(value):
@@ -370,3 +370,220 @@ class CGTScheduleReport(BaseReport):
             'is_draft': schedule.is_draft,
             'warnings': list(schedule.warnings),
         }
+
+
+def _plain(value):
+    """A Money as a plain number, so a spreadsheet can add it up.
+
+    Excel has no money type. Writing the Money object through would render it as text and
+    every column of figures would arrive unsummable, which for a schedule someone is about
+    to transcribe onto a tax return is worse than useless.
+    """
+    if value is None:
+        return None
+    amount = getattr(value, 'amount', value)
+    return float(amount)
+
+
+def cgt_schedule_workbook(account, output_path, fiscal_years=None):
+    """Write the capital gains schedule for every year with a sale into one workbook.
+
+    Every year rather than one, because the years are not independent: losses carried
+    forward tie them together, and a schedule that shows one year alone cannot show where
+    its opening losses came from.
+
+    **A draft year is exported, not withheld.** The report refuses to call itself final
+    while anything is unconfirmed, and the temptation is to block the export on that. But a
+    draft is exactly what someone needs to send an accountant to ask about, and blocking it
+    only teaches them to copy the figures out by hand, losing the warnings entirely. Instead
+    every row carries `is_draft`, and the reasons get a sheet of their own -- so the file
+    says what it is wherever it ends up.
+    """
+    if fiscal_years is None:
+        fiscal_years = sorted({
+            sell.fiscal_year.name
+            for sell in Sell.objects.filter(account=account, is_active=True)
+            if sell.fiscal_year
+        })
+
+    summaries, lines, warnings = [], [], []
+    for year in fiscal_years:
+        report = CGTScheduleReport(account=account, fiscal_year=year)
+        summary = report.summary()
+
+        summaries.append({
+            'fiscal_year': year,
+            'is_draft': summary['is_draft'],
+            'basis': summary['basis'],
+            'total_current_year_capital_gains': _plain(summary['total_current_year_capital_gains']),
+            'total_current_year_capital_losses': _plain(summary['total_current_year_capital_losses']),
+            'disregarded_capital_gains': _plain(summary['disregarded_capital_gains']),
+            'losses_applied': _plain(summary['losses_applied']),
+            'prior_year_losses_applied': _plain(summary['prior_year_losses_applied']),
+            'cgt_discount_applied': _plain(summary['cgt_discount_applied']),
+            'net_capital_gain': _plain(summary['net_capital_gain']),
+            'losses_carried_forward': _plain(summary['losses_carried_forward']),
+            'minimum_tax_capital_gain_base': _plain(summary['minimum_tax_capital_gain_base']),
+        })
+
+        for _, row in report.generate().iterrows():
+            line = {'fiscal_year': year, 'is_draft': summary['is_draft']}
+            line.update({
+                name: value if name == 'category' else _plain(value)
+                for name, value in row.items()
+            })
+            lines.append(line)
+
+        for warning in summary['warnings']:
+            warnings.append({'fiscal_year': year, 'warning': warning})
+
+    events = CGTEventReport(account=account).generate()
+    for column in events.columns:
+        events[column] = events[column].map(
+            lambda value: _plain(value) if hasattr(value, 'amount') else value)
+
+    generator = excelinterface.ExcelGen(title='Capital Gains Tax Schedule')
+    generator.add_table(
+        cgt_return_schedule_frame(account, fiscal_years),
+        table_name='ReturnSchedule', add_hyperlinks=False,
+        description=('The ATO capital gains schedule as the form lays it out: one row per '
+                     'label, one column per year, to be read across rather than assembled.'))
+    generator.add_table(
+        pd.DataFrame(summaries), table_name='Summary', add_hyperlinks=False,
+        description='The s102-5 figures a return asks for, one row per fiscal year.')
+    generator.add_table(
+        pd.DataFrame(lines), table_name='ScheduleLines', add_hyperlinks=False,
+        description='Each s102-6 category, per year: gains, losses applied, discount, net.')
+    generator.add_table(
+        events, table_name='Events', add_hyperlinks=False,
+        description='Every capital gains event, with how it was characterised and why.')
+    generator.add_table(
+        pd.DataFrame(warnings, columns=['fiscal_year', 'warning']),
+        table_name='Warnings', add_hyperlinks=False,
+        description='Why a year is still a draft. Empty means every year is final.')
+    generator.save(output_path)
+    return output_path
+
+
+#: The schedule's own labels, in form order: what each row is called, which figure fills it,
+#: and how it is emphasised. Rows are the form's lines and columns are years, which is the
+#: shape the form is actually in -- the long-form category-per-row table is easier to compute
+#: and much harder to transcribe from.
+#:
+#: A label with no key is a heading. `flag` marks a figure that ought to be looked at rather
+#: than copied straight across.
+CGT_RETURN_LAYOUT = [
+    ('heading', 'Current year capital gains and losses', None),
+    *[entry for category in CGTAssetCategory.reportable() for entry in (
+        ('subheading', category.label, None),
+        ('row', '    Capital gain', f'gain::{category.value}'),
+        ('row', '    Capital loss', f'loss::{category.value}'),
+    )],
+    ('row', 'Capital gains from trusts (including managed funds)', 'trust_gains'),
+    # Not a box on the form, and here for exactly that reason. An unclassified gain belongs
+    # to none of the eight, so without a line of its own it would drop out of this sheet
+    # while still counting towards the total below -- a schedule that does not foot, with
+    # nothing on it saying why. It reads zero once everything is classified.
+    ('flag', 'Unclassified (not reportable until the holding is classified)', 'unclassified'),
+    ('total', 'Total current year capital gains', 'total_gains'),
+    ('total', 'Total current year capital losses', 'total_losses'),
+
+    ('heading', 'Capital losses applied', None),
+    ('row', '    Total current year capital losses applied', 'applied_current'),
+    ('row', '    Total prior year net capital losses applied', 'applied_prior'),
+    ('total', 'Total capital losses applied', 'applied_total'),
+
+    ('heading', 'Unapplied net capital losses carried forward', None),
+    ('total', 'Net capital losses carried forward', 'carried_forward'),
+
+    ('heading', 'CGT discount', None),
+    ('total', 'Total CGT discount applied', 'discount_applied'),
+
+    ('heading', 'Other CGT information', None),
+    ('flag', 'Capital gains disregarded by a foreign resident', 'disregarded'),
+
+    ('heading', 'Other fields', None),
+    ('total', 'Net capital gain', 'net_capital_gain'),
+    ('row', 'Net capital loss carried forward to later income years', 'carried_forward'),
+]
+
+
+def _cgt_return_figures(account, fiscal_year):
+    """One year's figures, keyed to match CGT_RETURN_LAYOUT.
+
+    The per-category gains and losses are taken from the events rather than from
+    `Schedule.lines`, and that is not a shortcut. The schedule groups by s102-6 category,
+    which is the order losses are spent in; the form's top section groups by the eight asset
+    categories, which is where a gain is reported. They are different questions and the
+    answers do not line up.
+
+    Attributed trust gains are kept out of the eight and put on their own line, which is
+    what the form asks for: a distribution is reported as a capital gain from a trust, not
+    as a gain on the units.
+    """
+    report = CGTScheduleReport(account=account, fiscal_year=fiscal_year)
+    schedule = report.schedule
+
+    gains, losses = {}, {}
+    trust_gains = Decimal('0')
+    for event in cgt.all_events(account, fiscal_year=fiscal_year):
+        if event.is_disregarded:
+            continue
+        gain = Decimal(str(getattr(event.gross_gain, 'amount', 0) or 0))
+        loss = Decimal(str(getattr(event.gross_loss, 'amount', 0) or 0))
+        if event.source == cgt.events.SOURCE_ATTRIBUTION:
+            trust_gains += gain
+            continue
+        category = event.asset_category
+        gains[category] = gains.get(category, Decimal('0')) + gain
+        losses[category] = losses.get(category, Decimal('0')) + loss
+
+    figures = {
+        'trust_gains': float(trust_gains),
+        'total_gains': _plain(schedule.gross_gains),
+        'total_losses': _plain(schedule.gross_losses),
+        'applied_current': _plain(schedule.current_year_losses_applied),
+        'applied_prior': _plain(schedule.prior_year_losses_applied),
+        'applied_total': (_plain(schedule.current_year_losses_applied) or 0)
+                         + (_plain(schedule.prior_year_losses_applied) or 0),
+        'carried_forward': _plain(schedule.losses_carried_forward),
+        'discount_applied': _plain(schedule.total_discount),
+        'disregarded': _plain(schedule.disregarded_gains),
+        'net_capital_gain': _plain(schedule.net_capital_gain),
+    }
+    for category in CGTAssetCategory.reportable():
+        # Keyed by the stored code, because that is what a CGTEvent carries. Only
+        # CGTEventReport swaps the code for the ATO's wording, and it does that on its way
+        # out to a spreadsheet -- reading these off the events means reading codes.
+        figures[f'gain::{category.value}'] = float(gains.get(category.value, Decimal('0')))
+        figures[f'loss::{category.value}'] = float(losses.get(category.value, Decimal('0')))
+
+    # Whatever the eight boxes do not account for. Summed as a remainder rather than read
+    # off the UNCLASSIFIED key alone, so that a category added to the enum and forgotten
+    # here still shows up somewhere instead of quietly leaving the sheet short.
+    reportable = {c.value for c in CGTAssetCategory.reportable()}
+    figures['unclassified'] = float(
+        sum(amount for key, amount in gains.items() if key not in reportable))
+    return figures, schedule.is_draft
+
+
+def cgt_return_schedule_frame(account, fiscal_years):
+    """The schedule as the form lays it out: one row per label, one column per year."""
+    per_year = {}
+    drafts = {}
+    for year in fiscal_years:
+        per_year[year], drafts[year] = _cgt_return_figures(account, year)
+
+    rows = []
+    for kind, label, key in CGT_RETURN_LAYOUT:
+        row = {'line': label, 'kind': kind}
+        for year in fiscal_years:
+            row[year] = None if key is None else per_year[year].get(key)
+        rows.append(row)
+
+    # So the reader knows which columns are still moving without leaving the sheet.
+    status = {'line': 'Draft (year not final)', 'kind': 'flag'}
+    status.update({year: 'yes' if drafts[year] else 'no' for year in fiscal_years})
+    rows.append(status)
+
+    return pd.DataFrame(rows, columns=['line', 'kind', *fiscal_years])

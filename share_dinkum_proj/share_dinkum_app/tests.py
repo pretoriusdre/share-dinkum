@@ -67,7 +67,9 @@ from share_dinkum_app.reports import (
 from django.apps import apps
 from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
-from share_dinkum_app import cgt, constants, excelinterface, loading, version, yfinanceinterface
+from django.contrib import admin
+from share_dinkum_app import (
+    cgt, constants, dashboard, excelinterface, loading, reports, version, yfinanceinterface)
 from share_dinkum_app.management.commands import make_import_template
 
 
@@ -3015,7 +3017,7 @@ class TaxSettingsBannerTests(TransactionTestCase):
     """The dashboard has to say when a figure rests on an assumption."""
 
     def setUp(self):
-        from share_dinkum_app.admin import _tax_settings_warning
+        from share_dinkum_app.dashboard import _tax_settings_warning
         self._warning = _tax_settings_warning
 
     def test_an_account_with_no_sales_is_left_alone(self):
@@ -3066,15 +3068,19 @@ def load_test_cpi(quarters=None):
             defaults={'index_number': Decimal(index_number), 'source': 'test'})
 
 
-def enable_2027_regime(test_case):
+def enable_2027_regime(test_case, account=None):
     """Turn the rollout gate on for one test.
 
-    It ships off, because the s112-185 apportioning instrument has not been made, so any
-    figure for a straddling holding is a projection.
+    A field on the account rather than a patched constant, because that is what it is now:
+    a setting someone ticks, not source they edit. It ships off, because no CPI has been
+    published for a quarter after the cutover, so any figure it produces is a projection.
     """
-    patcher = patch.object(constants, 'CGT_2027_REGIME_ENABLED', True)
-    patcher.start()
-    test_case.addCleanup(patcher.stop)
+    account = account or getattr(test_case, 'account', None)
+    if account is None:
+        raise AssertionError('enable_2027_regime needs an account to turn the setting on')
+    account.model_2027_regime = True
+    account.save()
+    return account
 
 
 class IndexationFactorTests(TestCase):
@@ -3292,8 +3298,9 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(post.cost_base, Money(Decimal('15000.00'), 'AUD'))
 
     def test_the_rollout_gate_reverts_to_a_single_unsplit_row(self):
-        with patch.object(constants, 'CGT_2027_REGIME_ENABLED', False):
-            events = self._events()
+        self.account.model_2027_regime = False
+        self.account.save()
+        events = self._events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].slice, cgt.events.SLICE_WHOLE)
         self.assertEqual(events[0].capital_gain, Money(Decimal('9970.10'), 'AUD'))
@@ -3349,6 +3356,9 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
 
         never_left = create_cutover_portfolio(suffix='b')
         declare(never_left['account'], 'RESIDENT', date(2010, 1, 1))
+        # The setting is per portfolio now, so a second one built here needs it too. The
+        # module constant it replaced covered every account at once.
+        enable_2027_regime(self, never_left['account'])
         deferred, post = cgt.disposal_events(never_left['account'])
 
         taxed_if_caught = caught.capital_gain.amount
@@ -4479,9 +4489,9 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
 
     def test_the_button_is_on_the_dashboard(self):
         response = self.client.get(reverse('admin:dashboard'))
-        self.assertContains(response, 'Record capital gains figures')
+        self.assertContains(response, 'Take capital gains snapshot')
         self.assertContains(response, self.url)
-        self.assertContains(response, 'Figures have never been recorded')
+        self.assertContains(response, 'No snapshot taken yet')
 
     def test_it_records_every_year_that_has_a_sale(self):
         response = self.client.post(self.url)
@@ -4525,7 +4535,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
     def test_the_dashboard_then_says_when_they_were_recorded(self):
         self.client.post(self.url)
         response = self.client.get(reverse('admin:dashboard'))
-        self.assertContains(response, 'Figures last recorded')
+        self.assertContains(response, 'Last snapshot')
 
     def test_a_portfolio_with_no_sales_says_so_rather_than_recording_nothing(self):
         empty = create_account(
@@ -4995,6 +5005,348 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertEqual(instrument.legal_form, 'UNIT_TRUST')
         self.assertEqual(instrument.legal_form_source, 'SUGGESTED')
         self.assertFalse(instrument.is_classified)
+
+
+class Modelling2027RegimeSettingTests(TransactionTestCase):
+    """Turning the 2027 regime on is a setting, not a source edit.
+
+    It used to be `constants.CGT_2027_REGIME_ENABLED`, which meant editing a tracked file --
+    and `uv run update` refuses to pull over a file you have edited, so turning modelling on
+    quietly broke updates. It lives on the account now, beside the other tax settings.
+    """
+
+    def setUp(self):
+        self.data = create_cutover_portfolio()
+        self.account = self.data['account']
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+
+    def test_it_is_off_by_default(self):
+        self.assertFalse(self.account.model_2027_regime)
+        events = cgt.disposal_events(self.account)
+        self.assertEqual(len(events), 1, 'the old regime produces one unsplit row')
+
+    def test_ticking_it_models_the_new_regime(self):
+        enable_2027_regime(self, self.account)
+        events = cgt.disposal_events(self.account)
+        self.assertEqual(len(events), 2, 'a straddling disposal splits at the cutover')
+
+    def test_it_is_editable_in_the_admin(self):
+        """The whole point: a person can reach it without editing a file."""
+        from django.contrib.admin.sites import AdminSite
+        from share_dinkum_app.admin import AccountAdmin
+
+        admin_instance = AccountAdmin(Account, AdminSite())
+        form = admin_instance.get_form(None)
+        self.assertIn('model_2027_regime', form.base_fields)
+
+    def test_one_portfolio_can_model_ahead_while_another_does_not(self):
+        """Per account, which a module constant could not express at all."""
+        other = create_cutover_portfolio(suffix='b')
+        declare(other['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, other['account'])
+
+        self.assertEqual(len(cgt.disposal_events(self.account)), 1)
+        self.assertEqual(len(cgt.disposal_events(other['account'])), 2)
+
+
+class PostCutoverWarningTests(TransactionTestCase):
+    """What the schedule says about a year that reaches past 1 July 2027.
+
+    Two directions, and the quiet one matters more. With the setting off, a post-cutover
+    disposal is not being treated cautiously -- it is being worked out under rules that no
+    longer reach that year, and nothing said so.
+    """
+
+    def setUp(self):
+        self.data = create_cutover_portfolio()
+        self.account = self.data['account']
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        # Taken from the disposal itself rather than written out, so the test follows the
+        # fixture if its sell date ever moves.
+        self.year = cgt.disposal_events(self.account)[0].fiscal_year
+
+    def _warnings(self):
+        return ' '.join(cgt.build_schedule(self.account, self.year).warnings)
+
+    def test_with_the_setting_off_it_says_how_to_turn_it_on(self):
+        joined = self._warnings()
+        self.assertIn('being worked out under the rules that applied before it', joined)
+        self.assertIn('Tick "Model 2027 regime" on the portfolio', joined)
+        self.assertIn('Accounts in the admin', joined)
+
+    def test_with_the_setting_on_it_says_the_figures_are_projections(self):
+        enable_2027_regime(self, self.account)
+        joined = self._warnings()
+        self.assertIn('projections rather than settled amounts', joined)
+        self.assertIn('Untick "Model 2027 regime"', joined)
+
+    def test_a_year_before_the_cutover_says_nothing_either_way(self):
+        """A 2011 schedule is not provisional because a setting is on."""
+        enable_2027_regime(self, self.account)
+        earlier = cgt.build_schedule(self.account, 'FY2023/24')
+        joined = ' '.join(earlier.warnings)
+        self.assertNotIn('Model 2027 regime', joined)
+        self.assertNotIn('projections rather than settled amounts', joined)
+
+
+class YearInProgressIsADraftTests(TransactionTestCase):
+    """A year that has not ended cannot be final, however confirmed its data is.
+
+    Every other draft reason is about data nobody has confirmed, so a fiscal year three
+    weeks old with nothing outstanding reported itself final -- and "final" reads as "these
+    are the year's figures" when ten months of it are still to come. It matters more since
+    the schedule became a file: `is_draft` is stamped into a workbook that travels.
+    """
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        declare(self.account, 'RESIDENT', date(2000, 1, 1))
+        instrument = self.data['instrument']
+        instrument.legal_form = 'COMPANY'
+        instrument.legal_form_source = 'USER'
+        instrument.save()
+        instrument.market.country = 'AU'
+        instrument.market.save()
+
+    def _year_covering(self, when):
+        fiscal_year, _ = self.account.fiscal_year_type.classify_date(when)
+        return fiscal_year
+
+    def test_a_finished_year_with_nothing_outstanding_is_final(self):
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        self.assertEqual(schedule.warnings, [])
+        self.assertFalse(schedule.is_draft)
+
+    def test_the_current_year_is_a_draft(self):
+        current = self._year_covering(date.today())
+        schedule = cgt.build_schedule(self.account, current.name)
+
+        self.assertTrue(schedule.is_draft)
+        joined = ' '.join(schedule.warnings)
+        self.assertIn('has not ended', joined)
+        # Naming the end date, because "not finished" invites "finished when?".
+        self.assertIn(f'{current.end_date:%d %B %Y}', joined)
+
+    def test_the_last_day_of_a_year_is_still_open(self):
+        """Inclusive: a disposal made on 30 June is in the year, so it is not done yet."""
+        from share_dinkum_app.cgt.schedule import _year_still_running
+
+        current = self._year_covering(date.today())
+        with patch('share_dinkum_app.cgt.schedule.date') as fake:
+            fake.today.return_value = current.end_date
+            self.assertEqual(_year_still_running(current.name), current.end_date)
+
+    def test_the_day_after_a_year_ends_it_is_closed(self):
+        from share_dinkum_app.cgt.schedule import _year_still_running
+
+        current = self._year_covering(date.today())
+        with patch('share_dinkum_app.cgt.schedule.date') as fake:
+            fake.today.return_value = current.end_date + timedelta(days=1)
+            self.assertIsNone(_year_still_running(current.name))
+
+    def test_the_all_years_view_says_nothing_about_time(self):
+        """Passing no year is a position rather than a return, so there is no year to end."""
+        from share_dinkum_app.cgt.schedule import _year_still_running
+
+        self.assertIsNone(_year_still_running(None))
+
+
+class CGTScheduleExportTests(TransactionTestCase):
+    """The capital gains schedule as a file you can hand to someone.
+
+    Both reports existed and neither could leave the application: the portfolio export
+    carries only the realised gains report, and there is no command. The schedule was
+    reachable only as a DataFrame in a shell, which is not an export.
+    """
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.user = self.account.owner
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        self.url = reverse('admin:dashboard_export_cgt_schedule')
+        declare(self.account, 'RESIDENT', date(2000, 1, 1))
+
+    def _workbook(self):
+        path = Path(tempfile.mkdtemp()) / 'schedule.xlsx'
+        reports.cgt_schedule_workbook(self.account, path)
+        return path
+
+    def test_the_workbook_has_a_sheet_for_each_part_of_the_answer(self):
+        tables = set(pd.read_excel(self._workbook(), sheet_name='Index')['table_name'])
+        self.assertEqual(
+            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'Warnings'})
+
+    def test_money_is_written_as_numbers_a_spreadsheet_can_add_up(self):
+        """A Money object writes as text, and a column of text does not sum."""
+        path = self._workbook()
+        index = pd.read_excel(path, sheet_name='Index')
+        sheet = index.set_index('table_name').loc['Summary', 'sheet_name']
+        summary = pd.read_excel(path, sheet_name=f'{int(sheet):02d}')
+        self.assertTrue(
+            pd.api.types.is_numeric_dtype(summary['net_capital_gain']),
+            'net_capital_gain must be numeric, not text')
+
+    def test_a_draft_year_is_exported_and_says_so(self):
+        """Withholding a draft would only push someone to copy the figures out by hand.
+
+        The reasons travel with the file instead, so it still says what it is once it is
+        somewhere this application cannot reach.
+        """
+        # Undo the setUp declaration, so the schedule is a draft again.
+        ResidencyPeriod.objects.filter(account=self.account).delete()
+        self.account.taxpayer_type = 'UNDECLARED'
+        self.account.save()
+
+        path = self._workbook()
+        index = pd.read_excel(path, sheet_name='Index').set_index('table_name')
+        summary = pd.read_excel(path, sheet_name=f"{int(index.loc['Summary', 'sheet_name']):02d}")
+        warnings = pd.read_excel(path, sheet_name=f"{int(index.loc['Warnings', 'sheet_name']):02d}")
+
+        self.assertTrue(summary['is_draft'].any(), 'the draft years should be marked')
+        self.assertGreater(len(warnings), 0, 'and the reasons should be in the file')
+
+    def test_the_return_schedule_is_laid_out_as_the_form_is(self):
+        """Rows are the form's labels and columns are years, so it is read across."""
+        frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
+        self.assertEqual(list(frame.columns), ['line', 'kind', 'FY2023/24'])
+
+        lines = list(frame['line'])
+        self.assertIn('Total current year capital gains', lines)
+        self.assertIn('Net capital gain', lines)
+        self.assertIn('Capital gains from trusts (including managed funds)', lines)
+        for category in choices.CGTAssetCategory.reportable():
+            self.assertIn(category.label, lines)
+
+    def test_the_categories_add_up_to_the_stated_total(self):
+        """The check that matters, and the one a wrong key silently breaks.
+
+        Keying the per-category figures on the ATO's wording rather than the stored code
+        left every box zero while the totals stayed right -- a schedule that looks filled in
+        and foots to nothing.
+        """
+        frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
+        indexed = frame.set_index(frame['line'].str.strip())
+
+        gains = indexed[indexed.index == 'Capital gain']['FY2023/24'].fillna(0).sum()
+        trust = indexed.loc['Capital gains from trusts (including managed funds)', 'FY2023/24']
+        unclassified = indexed.loc[
+            'Unclassified (not reportable until the holding is classified)', 'FY2023/24']
+        total = indexed.loc['Total current year capital gains', 'FY2023/24']
+
+        self.assertGreater(total, 0, 'this fixture should have gains to check')
+        self.assertAlmostEqual(
+            gains + (trust or 0) + (unclassified or 0), total, places=4)
+
+    def test_a_draft_year_is_marked_in_its_own_column(self):
+        """So the reader can see which columns are still moving without leaving the sheet."""
+        expected = reports.CGTScheduleReport(
+            account=self.account, fiscal_year='FY2023/24').is_draft
+        frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
+        row = frame[frame['line'] == 'Draft (year not final)'].iloc[0]
+        self.assertEqual(row['FY2023/24'], 'yes' if expected else 'no')
+
+    def test_the_workbook_carries_the_return_schedule(self):
+        tables = set(pd.read_excel(self._workbook(), sheet_name='Index')['table_name'])
+        self.assertIn('ReturnSchedule', tables)
+
+    def test_the_button_returns_a_workbook(self):
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('spreadsheetml', response['Content-Type'])
+        self.assertIn('attachment;', response['Content-Disposition'])
+        self.assertIn('CGT_Schedule', response['Content-Disposition'])
+        self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
+
+    def test_the_button_is_on_the_dashboard_under_tax(self):
+        body = self.client.get(reverse('admin:dashboard')).content.decode()
+        self.assertIn('Export capital gains schedule', body)
+        self.assertIn(self.url, body)
+
+    def test_no_temporary_file_is_left_behind(self):
+        """The response is bytes, so nothing should be holding a temp file open."""
+        before = set(Path(tempfile.gettempdir()).glob('*.xlsx'))
+        self.client.post(self.url)
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob('*.xlsx')) - before, set())
+
+
+class DashboardActionRegistryTests(TransactionTestCase):
+    """Every dashboard button comes from one declaration.
+
+    Each action used to cost three edits in three places -- a view, a line in a patched
+    `admin.site.get_urls`, and a hand-written block in the template -- so a fourth button
+    meant a fourth copy of the same shape. These assert the single declaration really is
+    what drives the URL, the page and the ordering, because a registry nothing reads is just
+    a list.
+    """
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.user = self.account.owner
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def test_every_declared_action_has_a_live_url(self):
+        for action in dashboard.DASHBOARD_ACTIONS:
+            url = reverse(f'admin:{action.url_name}')
+            # POST, because every action changes something and is registered @require_POST.
+            response = self.client.post(url)
+            self.assertNotEqual(
+                response.status_code, 404,
+                f'{action.name} is declared but its URL is not wired up')
+
+    def test_the_dashboard_renders_every_action(self):
+        response = self.client.get(reverse('admin:dashboard'))
+        body = response.content.decode()
+        for action in dashboard.DASHBOARD_ACTIONS:
+            self.assertIn(action.label, body)
+            self.assertIn(reverse(f'admin:{action.url_name}'), body)
+            self.assertIn(action.description, body)
+
+    def test_groups_appear_in_declaration_order(self):
+        """The order of the tuple is the order on the page, and nothing else decides it."""
+        groups = dashboard.action_groups(self.account)
+        self.assertEqual([g['label'] for g in groups], ['Prices', 'Tax', 'Data'])
+
+        # Matched on the heading element, not the bare word: "Data" also appears in the app
+        # list and in the data-* attributes, well before the panel.
+        body = self.client.get(reverse('admin:dashboard')).content.decode()
+        positions = [body.index(f'action-group-heading">{g["label"]}') for g in groups]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_an_action_status_is_rendered(self):
+        """The status line is the reason these are worth more than a row of buttons."""
+        groups = dashboard.action_groups(self.account)
+        export = next(a for g in groups for a in g['actions'] if a['name'] == 'export')
+        self.assertEqual(export['status_text'], 'Never exported.')
+        self.assertContains(self.client.get(reverse('admin:dashboard')), 'Never exported.')
+
+    def test_an_action_option_is_rendered_as_a_checkbox(self):
+        body = self.client.get(reverse('admin:dashboard')).content.decode()
+        self.assertIn('name="include_price_history"', body)
+
+    def test_the_admin_site_is_ours(self):
+        """If the AdminConfig swap silently fell back, everything else here still passes."""
+        from share_dinkum_app.admin_site import ShareDinkumAdminSite
+
+        site = admin.site._wrapped if hasattr(admin.site, '_wrapped') else admin.site
+        self.assertIsInstance(site, ShareDinkumAdminSite)
+
+    def test_model_registration_survived_the_swap(self):
+        """The risk of replacing the admin site is losing every registered model."""
+        response = self.client.get(reverse('admin:share_dinkum_app_instrument_changelist'))
+        self.assertEqual(response.status_code, 200)
 
 
 class PostSalePriceChaseTests(TransactionTestCase):

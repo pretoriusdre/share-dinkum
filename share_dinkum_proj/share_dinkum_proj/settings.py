@@ -57,7 +57,9 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
+    # Not 'django.contrib.admin': this config names ShareDinkumAdminSite as the default
+    # site, which is what puts the dashboard on the admin index and registers its actions.
+    'share_dinkum_app.admin_apps.ShareDinkumAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',

@@ -25,12 +25,8 @@ from django.conf.urls.static import static
 from django.templatetags.static import static as static_url
 from django.views.generic import RedirectView
 
-# Adds site header, site title, index title to the admin side.
-admin.site.site_header = 'Share Dinkum'
-admin.site.site_title = 'Share Dinkum'
-admin.site.index_title = 'Share Dinkum. An open-source share tracker.'
-
-
+# The site header, title and index title are attributes of ShareDinkumAdminSite, which is
+# installed as the default admin site by ShareDinkumAdminConfig.
 
 urlpatterns = [
     path('', RedirectView.as_view(url='/admin/', permanent=True)),  # Redirect root URL to admin

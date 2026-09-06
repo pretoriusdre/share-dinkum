@@ -222,6 +222,16 @@ def _gain_category(instrument, deferred=False):
     return CGT_GAIN_DEFERRED_NON_RESIDENTIAL if deferred else CGT_GAIN_NON_RESIDENTIAL
 
 
+def models_2027_regime(account):
+    """Whether this portfolio models the 2027 regime.
+
+    Defaults to False for anything that is not an account, so a caller passing None gets
+    the old regime rather than an AttributeError. Off is also the safe direction: it is the
+    law as it stands today, and the figures it produces are not projections.
+    """
+    return bool(getattr(account, 'model_2027_regime', False))
+
+
 def _regime_for(event_date):
     if event_date is None:
         return REGIME_PRE_CUTOVER
@@ -313,9 +323,9 @@ def _events_from_allocation(allocation, account=None, declared=None):
             account, sell.instrument, buy.date, sell.date, declared=declared),
     )
 
-    # Read from the module rather than bound at import: the second of these is a switch,
-    # and a switch nothing can flip is not a switch.
-    if sell.date < CGT_CUTOVER_DATE or not constants.CGT_2027_REGIME_ENABLED:
+    # Two gates, and only one of them is a setting. The account's is read here rather than
+    # from a module constant, which is what makes it something a person can actually change.
+    if sell.date < CGT_CUTOVER_DATE or not models_2027_regime(account):
         # The legal gate and the rollout gate. The first is permanent: a CGT event before
         # 1 July 2027 is governed by the old regime whatever this application later learns.
         # The second is a safety switch, and it is inert in practice for as long as no
