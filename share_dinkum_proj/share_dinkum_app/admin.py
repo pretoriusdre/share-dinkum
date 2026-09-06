@@ -14,6 +14,7 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm
 
 from django.core.exceptions import ObjectDoesNotExist
+from djmoney.money import Money
 from django.db import models
 from django.db.models import Model, ForeignKey, Max, Min
 
@@ -379,6 +380,13 @@ def _prepare_dashboard_context(request, context):
     total_portfolio_value_display = None
     parcel_labels = []
     parcel_values = []
+    #: Summed from the slices actually drawn rather than read off the account, so the
+    #: caption can never disagree with the chart above it. The two are normally the same
+    #: figure, but an instrument whose conversion fails is skipped for the chart and would
+    #: still count towards the account total -- and a total that does not add up to its own
+    #: parts is worse than no total at all.
+    parcel_total = Decimal('0')
+    parcel_total_display = None
     income_labels = []
     dividend_series = []
     distribution_series = []
@@ -424,6 +432,10 @@ def _prepare_dashboard_context(request, context):
 
             parcel_labels.append(instrument.name)
             parcel_values.append(_decimal_to_float(amount))
+            parcel_total += amount
+
+        if parcel_labels:
+            parcel_total_display = _format_money(Money(parcel_total, account.currency))
 
         income_by_year = {}
 
@@ -736,6 +748,7 @@ def _prepare_dashboard_context(request, context):
             'dashboard_message': dashboard_message,
             'dashboard_message_level': dashboard_message_level,
             'dashboard_portfolio_value_display': total_portfolio_value_display,
+            'parcel_total_display': parcel_total_display,
             'parcel_chart_labels': parcel_labels,
             'parcel_chart_values': parcel_values,
             'income_chart_labels': income_labels,

@@ -55,6 +55,14 @@
             margin-bottom: 1rem;
         }
 
+        /* Sits under the card heading, so the chart's own total is readable without
+           hovering a slice or adding them up by eye. */
+        .chart-total {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin: -0.5rem 0 1rem;
+        }
+
         .dashboard-subtitle {
             color: var(--body-quiet-color, #6b7280);
             font-size: 0.95rem;
@@ -243,6 +251,11 @@
             <div class="chart-grid">
                 <section class="chart-card chart-card--full">
                     <h2>{% trans "Remaining parcel value" %}</h2>
+                    {% if parcel_total_display %}
+                        <p class="chart-total">
+                            {% blocktrans with value=parcel_total_display %}Total: {{ value }}{% endblocktrans %}
+                        </p>
+                    {% endif %}
                     {% if parcel_chart_labels %}
                         <canvas id="parcelDonut" aria-label="{% trans "Remaining parcel value by instrument" %}"></canvas>
                     {% else %}

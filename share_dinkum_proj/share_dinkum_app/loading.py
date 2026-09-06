@@ -9,7 +9,7 @@ from pathlib import Path
 from django.apps import apps
 from django.db.models import DecimalField, FileField
 from django.db import connections, transaction
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.conf import settings
 from django.core.management import call_command
 
@@ -124,14 +124,46 @@ def queryset_to_df(queryset):
 
 class DataLoader():
 
-    def __init__(self, account, input_file=None):
+    def __init__(self, account=None, input_file=None):
+        """Load a file into `account`, or into the portfolio the file itself names.
 
+        Passing an account is the ordinary case: you are adding to a portfolio you already
+        have. Passing None is a restore -- the database has nothing in it, and the file has
+        to supply the portfolio as well as its contents.
+
+        A restore could not be done at all before this. The notebook creates the user and
+        the portfolio first, which gives them new ids, and then the file arrives carrying
+        the originals: the user collides on username, and every row that names the old
+        account is refused as belonging to a different portfolio. Since a DataExport is the
+        backup and the only way off this application, that made the backup one you could
+        not restore, discoverable on the one day it mattered.
+        """
         self.input_file = input_file
         self.account = account
 
         if self.input_file:
             self.mapping = excelinterface.get_all_tables_in_excel(self.input_file)
+            if self.account is None:
+                self.account = self.account_named_by_file()
             self.load_all_tables()
+
+    def account_named_by_file(self):
+        """The portfolio this file came from, where it already exists here.
+
+        Returns None where it does not, which is the restore proper: the Account row is
+        loaded from the file like any other and adopted once it exists, so the portfolio
+        keeps the id every other row in the file refers to.
+        """
+        df = self.mapping.get('Account')
+        if df is None or df.empty or 'id' not in df.columns:
+            raise ValueError(
+                'This file does not name a portfolio, so there is nothing to load it into. '
+                'Pass account= to say which portfolio it belongs to.')
+        if len(df) > 1:
+            raise ValueError(
+                'This file names more than one portfolio, so it cannot be restored on its '
+                'own. Pass account= to say which one is meant.')
+        return app_models.Account.objects.filter(id=df.iloc[0]['id']).first()
 
     @classmethod
     def get_model_load_order(cls):
@@ -197,6 +229,18 @@ class DataLoader():
                     logger.info(f"Loading {table_name}")
                     self.load_table_to_model(model=model, df=df)
 
+                # On a restore the portfolio does not exist until its own row is loaded.
+                # Adopt it the moment it does, so every table after this one is checked
+                # against the account the file actually refers to rather than a new one
+                # created alongside it.
+                if self.account is None and model is app_models.Account:
+                    self.account = self.account_named_by_file()
+                    if self.account is None:
+                        raise ValueError(
+                            'The Account row in this file did not load, so there is no '
+                            'portfolio to attach the rest of it to.')
+                    logger.info('Restoring into portfolio %s', self.account)
+
 
     def load_table_to_model(self, model, df):
 
@@ -205,11 +249,25 @@ class DataLoader():
         # Legacy data import template has a column 'copy_from_path' which is used to load files.
         # Now, can just use 'file' as the column name, so the export template can be used for importing data also.
         df = df.rename(columns={'copy_from_path': 'file'}, errors='ignore')
-        cols_to_drop = ['created_at', 'updated_at', '_creation_handled']
+        # `_creation_handled` is kept, unlike the audit timestamps beside it. It is not
+        # bookkeeping: it is the flag every creation signal checks before deriving anything,
+        # so dropping it made a restore derive a second time on top of what the file already
+        # held. A file with 271 buys and 291 parcels produced 562 parcels -- one set from
+        # the file and one conjured by the signals -- and the cost base adjustments were
+        # then allocated across both, which is a wrong cost base rather than a duplicate row.
+        #
+        # An import template has no such column, so its rows still default to False and the
+        # signals still do the deriving. Only a file that already carries the derived rows
+        # says so, which is exactly what an export is.
+        cols_to_drop = ['created_at', 'updated_at']
         cols_to_drop += [col for col in df.columns if col.startswith('calculated_')]
         df = df.drop(columns=cols_to_drop, errors='ignore')
 
         if 'account' in [f.name for f in model._meta.fields]:
+            if self.account is None:
+                raise ValueError(
+                    f'{model.__name__} belongs to a portfolio, but none is known yet. The '
+                    'file must contain an Account row, and it must load before this table.')
             df['account_id'] = self.account.id
 
         if 'is_active' in df.columns:
@@ -246,7 +304,21 @@ class DataLoader():
                 df = df.drop(columns=[col])
                 continue
 
-            field_instance = model._meta.get_field(col)
+            # A column the model no longer has. Renaming or removing a field retires every
+            # export taken before it, and since a DataExport is the backup, that turns a
+            # backup into a file that cannot be restored -- discovered on the day it is
+            # needed. The column is dropped with a warning instead, so an old export still
+            # loads and the operator is told which figures it carried that no longer have
+            # anywhere to go.
+            try:
+                field_instance = model._meta.get_field(col)
+            except FieldDoesNotExist:
+                logger.warning(
+                    '%s has no field %r, so that column was ignored. It is probably from an '
+                    'export taken before the field was renamed or removed.',
+                    model.__name__, col)
+                df = df.drop(columns=[col])
+                continue
 
             if isinstance(field_instance, DecimalField):
                 df[col] = df[col].apply(lambda v: convert_to_decimal_field(v, field_instance))
@@ -255,8 +327,15 @@ class DataLoader():
             elif isinstance(field_instance, FileField):
                 df[col] = df[col].apply(process_filefield)
 
-        # Change any NaT, NaN etc to None
-        df = df.where(pd.notnull(df), None)
+        # Change any NaT, NaN etc to None.
+        #
+        # `astype(object)` first, exactly as the earlier pass does, and it is not
+        # decoration: `DataFrame.where(cond, None)` fills a column that is not already of
+        # object dtype with NaN rather than with None, so this line reintroduced the very
+        # sentinel it exists to remove. That is what put a float NaN back into a FileField
+        # after `process_filefield` had correctly turned it into None, and the save then
+        # died asking a float for its `.name`.
+        df = df.astype(object).where(pd.notna(df), None)
 
         df = restore_blank_text_defaults(df, model)
 

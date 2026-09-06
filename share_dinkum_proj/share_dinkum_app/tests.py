@@ -5,6 +5,7 @@ Run with: python manage.py test share_dinkum_app
 """
 import io
 import json
+import shutil
 import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
@@ -62,6 +63,7 @@ from share_dinkum_app.reports import (
     CGTEventReport,
     CGTScheduleReport,
 )
+from django.apps import apps
 from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from share_dinkum_app import cgt, constants, excelinterface, loading, version, yfinanceinterface
@@ -3906,6 +3908,134 @@ class ExportRoundTripTests(TransactionTestCase):
         export.refresh_from_db()
         self.assertTrue(export.file, 'the export produced no file')
         return Path(export.file.path)
+
+    def _detached_export(self, account):
+        """An export copied out of the media folder, the way a backup is kept.
+
+        Deleting the DataExport row takes its file with it, so an export left where the
+        application put it disappears along with the database it was meant to survive. A
+        backup that only exists inside the thing being backed up is not one, which is worth
+        the test making explicit rather than working around.
+        """
+        source = self._export(account)
+        destination = Path(tempfile.mkdtemp()) / source.name
+        shutil.copy2(source, destination)
+        return destination
+
+    def _wipe(self):
+        """Empty every table, as losing the database would.
+
+        Deleted in the reverse of the order the loader fills them, which is the only
+        ordering that is guaranteed to respect the protected foreign keys -- and it stays
+        right as models are added, since it is the same list the loader maintains.
+        """
+        for model in reversed(list(loading.DataLoader.get_model_load_order())):
+            model.objects.all().delete()
+        DataExport.objects.all().delete()
+        AppUser.objects.all().delete()
+        self.assertEqual(Account.objects.count(), 0)
+
+    def test_an_export_restores_into_an_empty_database(self):
+        """The case the backup exists for, and the one that could not be done at all.
+
+        Restoring is not re-importing. There is no portfolio to load into, and creating one
+        first is what broke it: the new user and account get new ids, then the file arrives
+        carrying the originals, the user collides on username, and every row naming the old
+        account is refused as belonging elsewhere. The file has to supply the portfolio.
+        """
+        data = create_golden_master_portfolio()
+        account = data['account']
+        declare(account, 'RESIDENT', date(2000, 1, 1))
+        account_id, username = account.id, account.owner.username
+        path = self._detached_export(account)
+
+        before = {model.__name__: model.objects.count()
+                  for model in (Buy, Sell, Parcel, SellAllocation, Instrument, Market,
+                                ResidencyPeriod, AppUser, Account)}
+
+        # Everything goes, exactly as it would in the disaster this is for. The export file
+        # lives outside the tables, which is the whole point of it.
+        self._wipe()
+
+        loader = loading.DataLoader(input_file=path)
+
+        self.assertEqual(loader.account.id, account_id,
+                         'the portfolio must keep the id every other row refers to')
+        self.assertEqual(AppUser.objects.get().username, username)
+        for name, count in before.items():
+            self.assertEqual(
+                apps.get_model('share_dinkum_app', name).objects.count(), count,
+                f'{name} did not come back with the same number of rows')
+
+    def test_restoring_does_not_derive_what_the_file_already_holds(self):
+        """`_creation_handled` has to survive the trip, or the signals derive a second set.
+
+        A buy creates a parcel by signal. On a restore the file already carries the parcels,
+        including the ones bifurcated by a partial sale, which no signal could reconstruct.
+        Dropping the flag meant both appeared: one set from the file and one conjured, with
+        the cost base adjustments then spread across twice as many parcels as exist.
+        """
+        data = create_golden_master_portfolio()
+        account = data['account']
+        declare(account, 'RESIDENT', date(2000, 1, 1))
+        path = self._detached_export(account)
+        parcels_before = Parcel.objects.count()
+        self.assertGreater(parcels_before, 0)
+
+        self._wipe()
+
+        loading.DataLoader(input_file=path)
+
+        self.assertEqual(Parcel.objects.count(), parcels_before)
+        self.assertEqual(
+            Parcel.objects.filter(buy__isnull=False).count(), parcels_before,
+            'every parcel should be one the file supplied, not one a signal invented')
+
+    def test_a_column_the_model_no_longer_has_is_ignored(self):
+        """Renaming a field must not retire every export taken before it.
+
+        The loader looked up each column and raised on one it could not find, so a single
+        renamed field turned every older export into a file that would not load -- and an
+        export is the backup.
+        """
+        account = create_account()
+        instrument = create_instrument(account=account)
+        df = pd.DataFrame([{
+            'id': instrument.id,
+            'name': instrument.name,
+            'is_taxable_australian_property': True,   # renamed away
+            'a_field_that_never_existed': 'x',
+        }])
+
+        loader = loading.DataLoader(account=account)
+        loader.load_table_to_model(model=Instrument, df=df)
+
+        instrument.refresh_from_db()
+        self.assertEqual(instrument.name, instrument.name)
+
+    def test_a_blank_file_cell_loads_as_no_file(self):
+        """A blank in a file column is NaN, and NaN is truthy.
+
+        It walked past the `if not value` guard, reached the model, and FileField.pre_save
+        asked a float for its `.name`. Nothing in that error mentions a spreadsheet.
+        """
+        account = create_account()
+        instrument = create_instrument(account=account)
+        df = pd.DataFrame([{
+            'legacy_id': 'B-NAN',
+            'instrument__name': instrument.name,
+            'date': date(2024, 1, 10),
+            'quantity': Decimal('10'),
+            'unit_price': Decimal('50'),
+            'total_brokerage': Decimal('10'),
+            'file': float('nan'),
+        }])
+
+        loader = loading.DataLoader(account=account)
+        loader.load_table_to_model(model=Buy, df=df)
+
+        buy = Buy.objects.get(legacy_id='B-NAN')
+        self.assertFalse(buy.file)
 
     def test_an_export_reloads_into_its_own_portfolio(self):
         data = create_golden_master_portfolio()
