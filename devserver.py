@@ -7,8 +7,6 @@
 `update` backs up your data, pulls the latest code, syncs dependencies and applies any migrations.
 """
 
-import shutil
-import sqlite3
 import subprocess
 import sys
 from datetime import datetime
@@ -20,17 +18,19 @@ MANAGE = PROJECT / "manage.py"
 
 DATABASE = PROJECT / "db.sqlite3"
 MEDIA = PROJECT / "media"
-BACKUP_ROOT = Path.home() / "share-dinkum-backups"
+
+# The backup itself is shared with the application, so the update path and the dashboard
+# button cannot drift apart. It imports nothing from Django, but it lives inside the project
+# directory, which is not on the path when this script is run from the repository root.
+sys.path.insert(0, str(PROJECT))
+from share_dinkum_app import backup  # noqa: E402
 
 
 def _call(command, cwd=None):
-    """Run a command to completion and return its exit code, surviving Ctrl+C.
+    """Run a command and return its exit code, surviving Ctrl+C.
 
-    Ctrl+C in a console is delivered to every process attached to it, so the child gets it too and
-    stops on its own. Waiting through the interrupt lets it print its own shutdown message and set
-    its own exit code, instead of this process dying first and printing a traceback over the top.
-    A second Ctrl+C means the child is not stopping by itself, so it gets stopped here rather than
-    leaving the window stuck with no way out.
+    The child also receives Ctrl+C, so the first one waits for it to exit cleanly. A second
+    stops it.
     """
     process = subprocess.Popen(command, cwd=cwd)
 
@@ -66,10 +66,7 @@ def _git(*args):
 
 
 def _local_changes():
-    """Paths you have changed, including untracked ones.
-
-    An untracked file still blocks a pull that wants to create the same path, so both matter.
-    """
+    """Locally changed paths, including untracked ones (which can also block a pull)."""
     status = _git("status", "--porcelain")
     if status is None:
         return None
@@ -97,49 +94,31 @@ def _incoming_changes():
 
 
 def conflicting_paths(local_changes, incoming_changes):
-    """Files that both you and the update have touched, which are the only ones that can conflict.
+    """Paths changed both locally and by the update.
 
-    Editing your own copy of the import notebook, or merely running it, must not block an update
-    that does not go near it. With no upstream to compare against there is no way to tell, so every
-    local change is treated as a possible conflict.
+    If `incoming_changes` is None (no upstream), every local change counts.
     """
     if incoming_changes is None:
         return sorted(local_changes)
     return sorted(local_changes & incoming_changes)
 
 
-def _copy_database(source, destination):
-    """Copy a SQLite database using its online backup API, which is safe against concurrent writes."""
-    source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        destination_connection = sqlite3.connect(destination)
-        try:
-            with destination_connection:
-                source_connection.backup(destination_connection)
-        finally:
-            destination_connection.close()
-    finally:
-        source_connection.close()
-
-
 def _backup():
-    """Copy the database and media folder to the user's home directory."""
-    if not DATABASE.exists() and not MEDIA.exists():
+    """Back up the database and media to the shared backup folder. Returns its path, or None."""
+    result = backup.make_backup(DATABASE, MEDIA)
+    if result is None:
         print("\n==> No data to back up yet, skipping.")
         return None
 
-    backup_path = BACKUP_ROOT / datetime.now().strftime("%Y-%m-%dT%H%M%S")
-    backup_path.mkdir(parents=True, exist_ok=True)
+    print(f"\n==> Backing up your data to {result['path']}")
+    if result["database_bytes"]:
+        print(f"    database  {result['database_bytes'] / 1024 / 1024:.1f} MB")
+    if result["media_files"]:
+        print(f"    media     {result['media_files']} files")
+    if result["removed"]:
+        print(f"    pruned    {len(result['removed'])} older backup(s)")
 
-    print(f"\n==> Backing up your data to {backup_path}")
-    if DATABASE.exists():
-        _copy_database(DATABASE, backup_path / DATABASE.name)
-        print(f"    database  {DATABASE.stat().st_size / 1024 / 1024:.1f} MB")
-    if MEDIA.exists():
-        shutil.copytree(MEDIA, backup_path / MEDIA.name)
-        print(f"    media     {sum(1 for _ in (MEDIA).rglob('*') if _.is_file())} files")
-
-    return backup_path
+    return result["path"]
 
 
 def update():

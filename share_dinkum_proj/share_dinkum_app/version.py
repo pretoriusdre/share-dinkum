@@ -1,11 +1,7 @@
-"""The installed version, and whether a newer one has been released.
+"""The installed version, and whether GitHub has a newer release.
 
-The version itself comes from the installed package metadata, which `uv sync` writes from
-pyproject.toml, so the version is set in exactly one place.
-
-The update check asks GitHub for the latest release. It is deliberately incapable of breaking the
-page it appears on: every failure path returns "no update known" and logs a warning, so being
-offline, rate limited, or ahead of the first published release all look the same to the caller.
+The version comes from package metadata (set from pyproject.toml by `uv sync`). A failed
+update check logs a warning and reports no update, so it never breaks the page.
 """
 
 import json
@@ -25,7 +21,7 @@ PACKAGE_NAME = 'share-dinkum'
 
 # Used when the project has not been installed, eg a plain `git clone` that never had `uv sync` run.
 # Keep this in step with the version in pyproject.toml.
-FALLBACK_VERSION = '0.2.0'
+FALLBACK_VERSION = '0.3.0'
 
 RELEASES_API_URL = 'https://api.github.com/repos/pretoriusdre/share-dinkum/releases/latest'
 RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
@@ -46,7 +42,7 @@ __version__ = get_version()
 
 
 def get_cache_path():
-    """Where the last check is remembered, so the dashboard is not calling out on every page load."""
+    """Path of the file caching the last update check."""
     return Path(settings.BASE_DIR) / '.update_check.json'
 
 
@@ -62,7 +58,7 @@ def parse_version(text):
 
 
 def read_cache():
-    """The last check, if it is still recent enough to reuse. None means go and look again."""
+    """The cached check if under CHECK_INTERVAL old, else None."""
     try:
         cached = json.loads(get_cache_path().read_text(encoding='utf-8'))
         checked_at = datetime.fromisoformat(cached['checked_at'])
@@ -89,10 +85,9 @@ def write_cache(latest_version, release_url):
 
 
 def fetch_latest_release():
-    """Ask GitHub for the latest release.
+    """Return `(reached_github, tag_name, release_url)` for the latest GitHub release.
 
-    Returns (reached_github, tag_name, release_url). A 404 counts as reaching GitHub: it means no
-    release has been published yet, which is a real answer worth remembering rather than a failure.
+    A 404 (no releases yet) counts as reaching GitHub.
     """
     try:
         response = requests.get(
@@ -112,10 +107,9 @@ def fetch_latest_release():
 
 
 def check_for_update(force=False):
-    """The installed version, and the newer one if there is one.
+    """A dict of current and latest version, release URL, and whether an update is available.
 
-    The result is always safe to render. Where the check could not be made, or no release has been
-    published, the update fields are simply empty.
+    Uses the cache unless `force`. If GitHub cannot be reached, the update fields stay empty.
     """
     result = {
         'current_version': __version__,

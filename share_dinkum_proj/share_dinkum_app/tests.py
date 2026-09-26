@@ -1,11 +1,8 @@
-"""
-Comprehensive test suite for share_dinkum_app.
-
-Run with: python manage.py test share_dinkum_app
-"""
+"""Test suite for share_dinkum_app. Run with: python manage.py test share_dinkum_app"""
 import io
 import json
 import shutil
+import sqlite3
 import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
@@ -1027,17 +1024,11 @@ class RealisedCapitalGainReportTests(TestCase):
 
 
 def create_golden_master_portfolio():
-    """A fixed portfolio exercising every mechanism that feeds a capital gains figure.
+    """A fixed portfolio exercising every input to a capital gains figure.
 
-    Deliberately covers, in one account: buys in two fiscal years, a share split, an AMIT
-    cost base adjustment allocated across parcels, a partial sell that bifurcates a parcel,
-    a later sell spanning two parcels, and both a gain and a loss.
-
-    The amounts asserted against this fixture are a characterisation of what the app
-    computes *today*. They are not independently derived tax answers. Their purpose is to
-    make any change in a capital gains figure visible and deliberate: if a test here fails,
-    a number that feeds a tax return has moved, and the diff must be explained before the
-    expected value is updated.
+    Two buy years, a split, an AMIT adjustment, a partial sell that bifurcates, a sell
+    spanning two parcels, a gain and a loss. Figures asserted against it record current
+    behaviour; if one moves, explain why before updating it.
     """
     account = create_account()
     instrument = create_instrument(account=account, name='GMT')
@@ -1103,11 +1094,9 @@ def create_golden_master_portfolio():
 
 
 class CGTGoldenMasterTests(TransactionTestCase):
-    """Characterisation of every figure the app currently derives for capital gains.
+    """Pins every capital gains figure the app derives for the golden master portfolio.
 
-    These assertions are a record of current behaviour, not independently derived tax
-    answers. If one fails, a number that feeds a tax return has moved. Establish why,
-    decide whether the movement is correct, and only then update the expected value.
+    These record current behaviour, not independently derived tax answers.
     """
 
     def setUp(self):
@@ -1115,12 +1104,7 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.account = self.data['account']
 
     def _parcels(self):
-        """Parcels carrying a cost base, oldest buy first, excluding superseded ones.
-
-        A split or a bifurcation replaces a parcel rather than mutating it, so the table
-        also holds deactivated shells with a zero cost base. Those are an implementation
-        detail and are deliberately not pinned.
-        """
+        """Parcels with a cost base, oldest buy first, excluding deactivated ones."""
         return [
             p for p in Parcel.objects.filter(account=self.account).order_by('buy__date', 'id')
             if p.remaining_quantity or p.sale_date
@@ -1146,17 +1130,7 @@ class CGTGoldenMasterTests(TransactionTestCase):
             self.assertEqual(parcel.sale_date, sale_date)
 
     def test_cost_base_adjustment_allocation(self):
-        """Pins how the $150 AMIT adjustment is spread across parcels.
-
-        Weighted by quantity x days actually held during the year, bounded at both ends.
-        The 2024-05-01 parcel was held for 61 days of a 366 day fiscal year, so it takes
-        61/366 of a full year's weight per unit.
-
-        This previously gave that parcel a full year's weight -- $9.375 rather than $1.648
-        -- because only the sale side was bounded. Correcting it moved cost base off the
-        recently bought parcel and onto the ones held throughout, which is why the two
-        older parcels are now higher.
-        """
+        """The $150 AMIT adjustment is weighted by quantity times days held in the year."""
         allocations = [p.total_adjustments.amount for p in self._parcels()]
         self.assertEqual(
             allocations,
@@ -1170,7 +1144,7 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertEqual(sum(allocations), Decimal('150.00'))
 
     def test_a_parcel_bought_late_in_the_year_gets_a_proportionate_share(self):
-        """The correction, stated as a rule rather than as a set of figures."""
+        """A parcel bought late in the year gets a proportionately smaller share."""
         parcels = {p.buy.date: p for p in self._parcels()}
         held_all_year = parcels[date(2023, 2, 20)]
         held_61_days = parcels[date(2024, 5, 1)]
@@ -1229,7 +1203,7 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22049303956975752, places=12)
 
     def test_quantities_reconcile(self):
-        """Everything bought is either still held or accounted for in an allocation."""
+        """Every unit bought is either held or allocated to a sale."""
         bought = Decimal('1000') * 2 + Decimal('500') * 2 + Decimal('200')   # post-split
         sold = sum(a.quantity for a in SellAllocation.objects.filter(account=self.account))
         held = sum(p.remaining_quantity for p in self._parcels())
@@ -1239,18 +1213,14 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
 
 class CGTEventTests(TransactionTestCase):
-    """The cgt package must re-derive today's figures exactly, not merely approximately."""
+    """The cgt package reproduces the app's existing figures exactly."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
         self.account = self.data['account']
 
     def test_events_match_the_realised_capital_gain_report(self):
-        """Same rows, same figures, as the report the app has always produced.
-
-        This is the load bearing test for the whole package: if it passes, the calculation
-        can be moved without moving a number.
-        """
+        """Disposal events match RealisedCapitalGainReport row for row."""
         events = cgt.disposal_events(self.account)
         df = RealisedCapitalGainReport(account=self.account).generate()
 
@@ -1270,7 +1240,7 @@ class CGTEventTests(TransactionTestCase):
             self.assertEqual(event.capital_gain.amount, row['capital_gain'].amount)
 
     def test_cost_base_components_sum_to_the_cost_base(self):
-        """Purchase, brokerage and adjustments must account for the whole cost base."""
+        """Purchase, brokerage and adjustments sum to the cost base."""
         for event in cgt.disposal_events(self.account):
             components = (
                 event.buy_consideration.amount
@@ -1323,7 +1293,7 @@ class CGTEventTests(TransactionTestCase):
 
 
 class CGTClassificationTests(TransactionTestCase):
-    """Deriving the CGT schedule category from what an instrument legally is."""
+    """Deriving the CGT schedule category from an instrument's legal form and market."""
 
     def setUp(self):
         self.account = create_account()
@@ -1354,12 +1324,7 @@ class CGTClassificationTests(TransactionTestCase):
         self.assertEqual(instrument.cgt_asset_category, CGTAssetCategory.AU_LISTED_UNITS)
 
     def test_currency_and_holdings_do_not_decide_the_category(self):
-        """VGS is AUD quoted on the ASX yet holds only foreign shares.
-
-        The CGT asset is the unit in the Australian trust, not what the trust owns, so this
-        belongs with Australian listed units. Deriving the category from currency or from
-        the fund's holdings would put it in the wrong box.
-        """
+        """VGS is Australian listed units, whatever its currency or holdings."""
         instrument = self._instrument('VGS', 'UNIT_TRUST')
         self.assertEqual(instrument.cgt_asset_category, CGTAssetCategory.AU_LISTED_UNITS)
 
@@ -1418,7 +1383,7 @@ class CGTClassificationTests(TransactionTestCase):
 
 
 class InstrumentClassificationSignalTests(TransactionTestCase):
-    """Suggestions on creation must never overwrite what the user has said."""
+    """Suggestions on creation never overwrite a user's answer."""
 
     def setUp(self):
         self.account = create_account()
@@ -1461,11 +1426,7 @@ class InstrumentClassificationSignalTests(TransactionTestCase):
         self.assertEqual(instrument.legal_form_source, 'USER')
 
     def test_market_data_is_not_trusted_for_equities(self):
-        """Yahoo reports EQUITY for stapled securities and property trusts alike.
-
-        That is precisely the distinction the classification exists to make, so an EQUITY
-        answer is treated as no answer rather than as a suggestion of COMPANY.
-        """
+        """A yfinance EQUITY quoteType gives no suggestion; ETF suggests a unit trust."""
         instrument = Instrument.objects.create(
             account=self.account, market=self.market, name='ZZZZ', currency=DEFAULT_CURRENCY)
         self.assertIsNone(cgt.suggest_legal_form(instrument, {'quoteType': 'EQUITY'}))
@@ -1473,11 +1434,7 @@ class InstrumentClassificationSignalTests(TransactionTestCase):
 
 
 class LegalFormFromActivityTests(TransactionTestCase):
-    """Inferring what an instrument is from what it has actually paid.
-
-    Stronger evidence than any list of codes, because it comes from the user's own records:
-    a company pays dividends, a trust pays distributions, and a stapled security pays both.
-    """
+    """Inferring legal form from dividend and distribution history."""
 
     def setUp(self):
         self.account = create_account()
@@ -1513,20 +1470,18 @@ class LegalFormFromActivityTests(TransactionTestCase):
         self.assertEqual(cgt.suggest_legal_form_from_activity(instrument), 'UNIT_TRUST')
 
     def test_paying_both_implies_a_stapled_security(self):
-        """A share and a unit bound together is the only thing that pays both."""
+        """An instrument paying dividends and distributions is suggested as stapled."""
         instrument = self._instrument('ZZSTAPLE')
         self._dividend(instrument)
         self._distribution(instrument)
         self.assertEqual(cgt.suggest_legal_form_from_activity(instrument), 'STAPLED')
 
     def test_no_income_history_gives_no_answer(self):
-        """The honest result for a holding that has never paid anything."""
+        """No income history gives no suggestion."""
         self.assertIsNone(cgt.suggest_legal_form_from_activity(self._instrument('ZZQUIET')))
 
     def test_trust_and_stapled_reach_the_same_schedule_category(self):
-        """So confusing the two cannot change a reported figure; confusing either with a
-        company can. That asymmetry is why the inference is worth trusting as a suggestion.
-        """
+        """A unit trust and a stapled security share a schedule category; a company does not."""
         trust = self._instrument('ZZT')
         trust.legal_form, trust.legal_form_source = 'UNIT_TRUST', 'USER'
         trust.save()
@@ -1542,7 +1497,7 @@ class LegalFormFromActivityTests(TransactionTestCase):
 
 
 class CGTDiscountTests(TestCase):
-    """The discount rule, isolated from the object graph."""
+    """The discount eligibility and rate rules, in isolation."""
 
     def test_held_more_than_365_days_is_eligible(self):
         self.assertTrue(cgt.is_discount_eligible(date(2023, 1, 1), date(2024, 1, 2)))
@@ -1555,17 +1510,12 @@ class CGTDiscountTests(TestCase):
             cgt.discount_percentage(date(2023, 1, 1), date(2024, 1, 1)), Decimal('0'))
 
     def test_the_anniversary_itself_does_not_qualify(self):
-        """The conservative reading of "at least 12 months before" (s115-25(1)).
-
-        Arguably exactly twelve months satisfies it, but the ATO's guidance requires the
-        event to fall after the anniversary. Erring this way can only deny a discount, not
-        claim one that is unavailable.
-        """
+        """A sale on the 12-month anniversary does not qualify (s115-25(1))."""
         self.assertFalse(cgt.is_discount_eligible(date(2023, 6, 15), date(2024, 6, 15)))
         self.assertTrue(cgt.is_discount_eligible(date(2023, 6, 15), date(2024, 6, 16)))
 
     def test_29_february_falls_back_to_28_february(self):
-        """A leap day has no anniversary in a common year."""
+        """29 February's anniversary is 28 February."""
         from share_dinkum_app.cgt.discount import twelve_month_anniversary
         self.assertEqual(twelve_month_anniversary(date(2024, 2, 29)), date(2025, 2, 28))
         self.assertEqual(twelve_month_anniversary(date(2023, 3, 1)), date(2024, 3, 1))
@@ -1578,7 +1528,7 @@ class CGTDiscountTests(TestCase):
         self.assertFalse(cgt.is_discount_eligible(date(2024, 1, 1), None))
 
     def test_the_rate_is_exact_not_a_float(self):
-        """Guards against rounding noise once the rate multiplies an apportionment."""
+        """The discount rate is an exact Decimal, not a float."""
         from share_dinkum_app.cgt.discount import FULL_DISCOUNT_RATE
         self.assertIsInstance(FULL_DISCOUNT_RATE, Decimal)
         self.assertEqual(FULL_DISCOUNT_RATE, Decimal('0.5'))
@@ -1591,12 +1541,7 @@ class CGTDiscountTests(TestCase):
 
 
 class AttributionStatementTests(TransactionTestCase):
-    """Capital gains a trust attributes to a member, from its annual statement.
-
-    Figures throughout are taken from a real Vanguard AMMA statement for the year ended
-    30 June 2025, so the gross up arithmetic is checked against a document rather than
-    against numbers invented to make it work.
-    """
+    """Trust-attributed capital gains, using figures from a real Vanguard AMMA statement."""
 
     def setUp(self):
         self.account = create_account()
@@ -1616,7 +1561,7 @@ class AttributionStatementTests(TransactionTestCase):
         )
 
     def _real_statement(self):
-        """The FY2025 VGS statement: everything NTAP, nothing on the other method."""
+        """Record the FY2025 VGS statement: all NTAP, no other-method gains."""
         self._component('DISCOUNTED_NTAP', '4845.57')
         self._component('AMIT_GROSS_UP', '4845.57')
         self._component('NET_CAPITAL_GAIN', '4845.57')
@@ -1636,11 +1581,7 @@ class AttributionStatementTests(TransactionTestCase):
         self.assertIs(self.statement.reconciles, True)
 
     def test_a_misread_statement_is_detected(self):
-        """Twice discounted plus other method must equal the stated total.
-
-        This check caught real statements whose layout had been misparsed. Without it the
-        figures look plausible and are wrong.
-        """
+        """A statement whose components do not match its stated total does not reconcile."""
         self._component('DISCOUNTED_NTAP', '4845.57')
         self._component('TOTAL_CY_CG', '5000.00')
         self.assertIs(self.statement.reconciles, False)
@@ -1670,7 +1611,7 @@ class AttributionStatementTests(TransactionTestCase):
         self.assertIsNone(event.cost_base)
 
     def test_discounted_and_other_method_gains_stay_separate(self):
-        """They are taxed differently, so netting them would understate the discount."""
+        """Discounted and other-method gains become separate events."""
         self._component('DISCOUNTED_NTAP', '100.00')
         self._component('OTHER_NTAP', '40.00')
         self._component('TOTAL_CY_CG', '240.00')
@@ -1683,8 +1624,7 @@ class AttributionStatementTests(TransactionTestCase):
         self.assertEqual(events['other'].discount_percentage, Decimal('0'))
 
     def test_the_tap_split_is_preserved(self):
-        """It decides whether a foreign resident can disregard the gain, and cannot be
-        recovered once the two are added together."""
+        """Mixed TAP and NTAP discounted gains keep a mixed TAP status."""
         self._component('DISCOUNTED_TAP', '30.00')
         self._component('DISCOUNTED_NTAP', '70.00')
         event = cgt.attribution_events(self.account)[0]
@@ -1726,15 +1666,7 @@ class AttributionStatementTests(TransactionTestCase):
 
 
 class CostBaseAllocationReconciliationTests(TransactionTestCase):
-    """A cost base adjustment must still add up after being split many times over.
-
-    Each partial sale bifurcates a parcel, and every cost base adjustment held against it
-    is split to follow. Computing each half as its own fraction of the original loses a
-    fraction of a cent per split, and a parcel sold down in slices is split repeatedly, so
-    the loss compounds with nothing in the records to explain where it went.
-
-    The amounts here are chosen not to divide evenly, so any rounding shows up.
-    """
+    """Cost base adjustments still sum exactly after repeated parcel splits."""
 
     def setUp(self):
         self.account = create_account()
@@ -1780,7 +1712,7 @@ class CostBaseAllocationReconciliationTests(TransactionTestCase):
         self.assertEqual(self._live_allocation_total(), self.adjustment_amount)
 
     def test_allocation_survives_being_split_seven_times(self):
-        """Sold down in slices, which is what compounds a per-split rounding loss."""
+        """An allocation split seven times still sums to the original."""
         for index, quantity in enumerate(['500', '250', '125', '62', '31', '15', '7']):
             Sell.objects.create(
                 account=self.account, instrument=self.instrument,
@@ -1796,7 +1728,7 @@ class CostBaseAllocationReconciliationTests(TransactionTestCase):
         self.assertEqual(self._live_parcel_quantity(), Decimal('1000'))
 
     def test_every_unit_carries_a_share_after_splitting(self):
-        """No parcel is left holding units with no share of the adjustment."""
+        """Every parcel carries a share of the adjustment after splitting."""
         Sell.objects.create(
             account=self.account, instrument=self.instrument, date=date(2023, 9, 1),
             quantity=Decimal('333'), unit_price=Money(Decimal('4.11'), 'AUD'),
@@ -1812,16 +1744,10 @@ class CostBaseAllocationReconciliationTests(TransactionTestCase):
 
 
 class MinCGTSelectionTests(TransactionTestCase):
-    """Characterisation of which parcels the MIN_CGT strategy picks, and why.
-
-    MIN_CGT is the only place the app currently applies a CGT discount. It ranks parcels by
-    the net gain per unit, halving that gain where the parcel has been held more than 365
-    days. These tests pin the resulting selection so the rule can be moved into the cgt
-    package, and later corrected, without silently changing which parcels a sale consumes.
-    """
+    """Which parcels the MIN_CGT strategy picks, ranked by discounted gain per unit."""
 
     def _account_with_parcels(self):
-        """Three parcels: two long held at different cost bases, one recently bought."""
+        """Three parcels: two long held at different cost bases, one bought recently."""
         account = create_account()
         instrument = create_instrument(account=account, name='SEL')
         for buy_date, quantity, price, tag in [
@@ -1854,11 +1780,7 @@ class MinCGTSelectionTests(TransactionTestCase):
         self.assertEqual(self._allocated_buy_dates(sell), [date(2020, 6, 15)])
 
     def test_the_discount_changes_the_choice(self):
-        """Without halving, the recent parcel's $3.00 would beat old_cheap's $5.00.
-
-        Pins that the discount is actually load bearing in the ranking rather than
-        incidental: old_cheap is selected second only because its gain is halved.
-        """
+        """The discount changes which parcels MIN_CGT picks."""
         account, instrument = self._account_with_parcels()
         sell = Sell.objects.create(
             account=account, instrument=instrument, date=date(2024, 10, 1),
@@ -1878,12 +1800,7 @@ class MinCGTSelectionTests(TransactionTestCase):
         self.assertEqual(allocations[date(2024, 9, 1)], Decimal('50'))    # remainder
 
     def test_holding_period_no_longer_depends_on_a_leap_day(self):
-        """The correction: identical calendar holdings now get identical answers.
-
-        Under the old day count, a 1 March to 1 March holding was eligible when a leap year
-        intervened and not otherwise, purely because one contained 366 days and the other
-        365. Both are exactly twelve months, and both are now treated the same way.
-        """
+        """A leap day inside the holding no longer changes eligibility."""
         # Spans 29 February 2024: 366 days, and formerly eligible on that basis alone.
         across_leap_day = (date(2023, 3, 1), date(2024, 3, 1))
         self.assertEqual((across_leap_day[1] - across_leap_day[0]).days, 366)
@@ -1905,7 +1822,7 @@ class MinCGTSelectionTests(TransactionTestCase):
 
 
 class CGTReturnSnapshotTests(TransactionTestCase):
-    """Tests for capturing capital gains figures at a point in time."""
+    """Capturing capital gains snapshots."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -1936,13 +1853,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(snapshot.fiscal_year.name, 'FY2023/24')
 
     def test_each_disposal_is_its_own_row(self):
-        """They were a single JSON blob, and that put a ceiling on the whole feature.
-
-        The blob had to fit one Excel cell to survive the export and import round trip,
-        which is 32,767 characters, or about three hundred rows. Rows are sell allocations
-        rather than sales, so one sale spanning twelve parcels is twelve of them, and
-        anyone trading actively hit the cap -- at which point capture refused outright.
-        """
+        """A snapshot stores one row per sell allocation."""
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         self.assertEqual(snapshot.captured_rows.count(), 1)
         self.assertEqual(
@@ -1950,7 +1861,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertFalse(hasattr(snapshot, 'payload'))
 
     def test_a_large_year_is_captured_rather_than_refused(self):
-        """The behaviour the cap used to make impossible."""
+        """A snapshot can hold thousands of rows."""
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         CGTReturnSnapshotRow.objects.bulk_create([
             CGTReturnSnapshotRow(
@@ -1965,12 +1876,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(snapshot.totals['row_count'], 2001)
 
     def test_the_allocation_reference_is_not_a_foreign_key(self):
-        """A snapshot has to outlive what it points at.
-
-        A later sale bifurcates a parcel and replaces its allocations. A foreign key would
-        either block that with PROTECT or destroy the evidence with CASCADE, and the
-        evidence is the entire point.
-        """
+        """A snapshot row survives deletion of its sell allocation."""
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         row = snapshot.captured_rows.first()
         self.assertIsNotNone(row.sell_allocation_id)
@@ -2001,12 +1907,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(snapshot.engine_version, version.__version__)
 
     def test_a_snapshot_exports_as_two_readable_sheets(self):
-        """The constraint that shaped the old format, and no longer binds.
-
-        The figures used to travel as JSON in one cell, which capped a snapshot at what a
-        cell holds. As rows they get their own sheet, with a column per figure, and there is
-        no cap -- so an export is also something a person can read.
-        """
+        """A snapshot exports as two readable sheets."""
         snapshot = CGTReturnSnapshot.capture(
             account=self.account, fiscal_year=self.fy2024, is_lodged=True)
 
@@ -2029,7 +1930,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
 
 
 class CGTBasisChangeReportTests(TransactionTestCase):
-    """Tests that a change in a lodged figure is detected and attributed."""
+    """The basis change report detects and attributes changed figures."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -2116,14 +2017,9 @@ class CGTBasisChangeReportTests(TransactionTestCase):
 
 
 class DataLoaderModelCoverageTests(TestCase):
-    """Guards the asymmetry between the export and import paths.
+    """Every exported model must also be in the import load order.
 
-    generate_export_file iterates apps.get_app_config(...).get_models(), so a new model is
-    exported the moment it is defined. DataLoader.get_model_load_order() is a hand
-    maintained list, so a new model is NOT imported unless someone remembers to add it.
-
-    A user who exports a portfolio and imports it back would silently lose every row of the
-    forgotten model, with no error. This test fails the moment the two sides diverge.
+    Export covers every model automatically; the load order is maintained by hand.
     """
 
     def test_every_model_is_in_the_load_order(self):
@@ -2157,16 +2053,9 @@ class DataLoaderModelCoverageTests(TestCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_required_foreign_keys_are_loaded_before_their_dependants(self):
-        """A model must not be loaded before something it *requires* by foreign key.
+        """No model loads before a model it requires by non-null foreign key.
 
-        get_model_load_order() carries a TODO about deriving the order from dependencies;
-        until it does, this asserts the hand maintained order is at least self consistent.
-
-        Only non-nullable foreign keys are checked. A nullable one can be filled after the
-        row exists, and there is a genuine cycle among them that no ordering can satisfy:
-        Account.owner requires an AppUser, while AppUser.default_account points back at an
-        Account. That cycle is why AppUser loads first and its default_account is populated
-        afterwards by the assign_default_account signal.
+        Nullable keys are skipped: Account.owner and AppUser.default_account form a cycle.
         """
         order = list(loading.DataLoader.get_model_load_order())
         position = {m.__name__: i for i, m in enumerate(order)}
@@ -2195,7 +2084,7 @@ class DataLoaderModelCoverageTests(TestCase):
 
 
 class AssignDefaultAccountSignalTests(TransactionTestCase):
-    """Test that first account becomes user's default_account."""
+    """A user's first account becomes their default_account."""
 
     def test_first_account_set_as_default(self):
         user = create_user()
@@ -2227,7 +2116,7 @@ class ConstantsTests(TestCase):
 
 
 class ImportWorkbookMixin:
-    """Builds the kind of file a person fills in, so the tests go through the real loading path."""
+    """Builds import workbooks, so tests use the real loading path."""
 
     def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None):
         if markets is None:
@@ -2258,7 +2147,7 @@ class ImportWorkbookMixin:
 
 
 class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
-    """A file is loaded into exactly one portfolio, and never at the expense of another."""
+    """A file loads into exactly one portfolio and never changes another."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -2384,7 +2273,7 @@ class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
 
 
 class AccountUniquenessTests(TestCase):
-    """Portfolios are found by name when loading a file, so a duplicate name would be ambiguous."""
+    """Portfolio names are unique per owner."""
 
     def test_one_owner_cannot_have_two_portfolios_of_the_same_name(self):
         owner = create_user(username='duplicate-owner')
@@ -2459,7 +2348,7 @@ class VersionTests(TestCase):
 
 
 class ImportTemplateCommandTests(TestCase):
-    """The generated template has to stay loadable by the loader it is generated for."""
+    """The generated import template loads without error."""
 
     def test_the_template_round_trips_as_an_empty_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2484,7 +2373,7 @@ class ImportTemplateCommandTests(TestCase):
 # --- Phase 4: residency, apportionment and the foreign resident disregard ---
 
 def declare(account, status, start, end=None, i1=None):
-    """Shorthand for a residency period, since these tests build a lot of them."""
+    """Create a residency period for `account`."""
     return ResidencyPeriod.objects.create(
         account=account, status=status, start_date=start, end_date=end,
         i1_election_made=i1,
@@ -2492,7 +2381,7 @@ def declare(account, status, start, end=None, i1=None):
 
 
 class ResidencyPeriodValidationTests(TransactionTestCase):
-    """A residency history that does not hang together must be refused, not interpreted."""
+    """Inconsistent residency histories are refused."""
 
     def setUp(self):
         self.account = create_account()
@@ -2514,12 +2403,7 @@ class ResidencyPeriodValidationTests(TransactionTestCase):
             clash.full_clean()
 
     def test_overlap_is_refused_even_without_a_form(self):
-        """The Excel importer never calls clean(), so save() has to catch this itself.
-
-        Overlap is the check that can be made order independently, which is why it is the
-        one that runs on every write: two statuses on one day is wrong however the rows
-        arrived.
-        """
+        """save() refuses overlapping periods, so imports are checked too."""
         declare(self.account, 'RESIDENT', date(2015, 1, 1), date(2021, 6, 30))
         with self.assertRaises(ValidationError):
             ResidencyPeriod.objects.create(
@@ -2542,12 +2426,7 @@ class ResidencyPeriodValidationTests(TransactionTestCase):
         self.assertEqual(ResidencyPeriod.objects.filter(account=self.account).count(), 2)
 
     def test_history_must_reach_back_to_the_earliest_purchase(self):
-        """The check that replaces defaulting the start to when the account was created.
-
-        A software timestamp is later than most users' earliest buy, so defaulting to it
-        would leave every earlier parcel in a fabricated gap, and would assert a residency
-        status that the user never gave.
-        """
+        """A residency history starting after the earliest purchase is refused."""
         Buy.objects.create(
             account=self.account, instrument=self.instrument, date=date(2010, 5, 1),
             quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
@@ -2558,7 +2437,7 @@ class ResidencyPeriodValidationTests(TransactionTestCase):
             late.full_clean()
 
     def test_coverage_problems_reports_what_clean_would_have_refused(self):
-        """A history written past the form still has to be visibly incomplete."""
+        """coverage_problems reports histories that clean() would refuse."""
         declare(self.account, 'RESIDENT', date(2015, 1, 1), date(2021, 6, 30))
         ResidencyPeriod.objects.create(
             account=self.account, status='FOREIGN', start_date=date(2021, 8, 1))
@@ -2573,7 +2452,7 @@ class ResidencyPeriodValidationTests(TransactionTestCase):
 
 
 class ResidencyDayCountingTests(TransactionTestCase):
-    """Both endpoints count, and days nobody declared are reported rather than assumed."""
+    """Residency day counting: inclusive endpoints, undeclared days counted separately."""
 
     def setUp(self):
         self.account = create_account()
@@ -2593,7 +2472,7 @@ class ResidencyDayCountingTests(TransactionTestCase):
         self.assertEqual(counts, {'RESIDENT': 10, 'FOREIGN': 21})
 
     def test_undeclared_days_are_counted_separately_not_ignored(self):
-        """A silent zero here would hand out a full discount for a period nobody described."""
+        """Days no period covers are counted under None."""
         declare(self.account, 'RESIDENT', date(2020, 1, 11), date(2020, 1, 20))
         counts = cgt.residency.days_by_status(
             self.account, date(2020, 1, 1), date(2020, 1, 31))
@@ -2609,13 +2488,7 @@ class ResidencyDayCountingTests(TransactionTestCase):
 
 
 class ResidencyInertForResidentsTests(TransactionTestCase):
-    """The load-bearing test for the whole phase.
-
-    Every existing user is on the undeclared basis today. If declaring an unbroken period
-    of Australian residency moved any figure, the feature could not ship without changing
-    numbers people have already lodged, and the change would land on exactly the users it
-    was not meant for. Resident days equal total days, so 50% x total/total is 50%.
-    """
+    """Declaring unbroken Australian residency changes no figure."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -2666,7 +2539,7 @@ class ResidencyInertForResidentsTests(TransactionTestCase):
 
 
 class DiscountApportionmentTests(TransactionTestCase):
-    """s115-115, whose three cases give three different answers to the same question."""
+    """s115-115 apportionment in each of its three cases."""
 
     def setUp(self):
         self.account = create_account()
@@ -2678,11 +2551,7 @@ class DiscountApportionmentTests(TransactionTestCase):
             Decimal('0.5'))
 
     def test_acquired_after_8_may_2012_apportions_over_the_whole_holding(self):
-        """s115-115(2): every day of the holding is apportionable.
-
-        Resident 1 Jan 2015 to 30 Jun 2017, foreign thereafter, sold 1 Jan 2020.
-        912 resident days of 1827, so 49.917898% of the discount survives.
-        """
+        """s115-115(2): bought after 8 May 2012, every day of the holding is apportioned."""
         declare(self.account, 'RESIDENT', date(2015, 1, 1), date(2017, 6, 30))
         declare(self.account, 'FOREIGN', date(2017, 7, 1))
         self.assertEqual(
@@ -2694,17 +2563,7 @@ class DiscountApportionmentTests(TransactionTestCase):
             Decimal('0.249589490'))
 
     def test_resident_on_8_may_2012_keeps_the_earlier_years_whatever_happened(self):
-        """s115-115(3): the discount was not withdrawn retrospectively.
-
-        Bought 1 Jun 2005, abroad for the whole of 2008 to 2010, home again from 2011,
-        abroad from 1 Jul 2017, sold 1 Jan 2020. The three years abroad before 8 May 2012
-        do not reduce anything: only the 915 days abroad afterwards do, leaving 4413 of
-        5328 days.
-
-        Counting actual residency across the whole period instead, which is the obvious
-        reading and the wrong one, would count only 3317 days and strip a fifth of the
-        discount off years Parliament deliberately left alone.
-        """
+        """s115-115(3): resident on 8 May 2012, earlier absences do not reduce the discount."""
         declare(self.account, 'RESIDENT', date(2005, 6, 1), date(2007, 12, 31))
         declare(self.account, 'FOREIGN', date(2008, 1, 1), date(2010, 12, 31))
         declare(self.account, 'RESIDENT', date(2011, 1, 1), date(2017, 6, 30))
@@ -2719,15 +2578,7 @@ class DiscountApportionmentTests(TransactionTestCase):
             Decimal('0.414132885'))
 
     def test_already_abroad_on_8_may_2012_counts_only_later_resident_days(self):
-        """s115-115(6): no protection for the earlier years, because none was being enjoyed.
-
-        Bought 1 Jan 2010, resident for the first two years, abroad from 1 Jan 2012, home
-        again from 1 Jan 2015, sold 1 Jan 2020. Only the 1827 Australian resident days
-        after 8 May 2012 count, out of 3653: the 730 resident days of 2010 and 2011 are
-        thrown away, because on 8 May 2012 this holder was not here to be protected.
-
-        Counting resident days across the whole period would give 2557 of 3653 instead.
-        """
+        """s115-115(6): abroad on 8 May 2012, only later resident days count."""
         declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2011, 12, 31))
         declare(self.account, 'FOREIGN', date(2012, 1, 1), date(2014, 12, 31))
         declare(self.account, 'RESIDENT', date(2015, 1, 1))
@@ -2736,11 +2587,7 @@ class DiscountApportionmentTests(TransactionTestCase):
             Decimal('0.50013687'))
 
     def test_absence_entirely_before_8_may_2012_does_not_apportion_at_all(self):
-        """s115-105(2)(e) is the switch, and it only looks after 8 May 2012.
-
-        Someone who lived abroad in 2008 and has been resident ever since keeps the whole
-        50%, and never reaches the apportionment formula.
-        """
+        """Absence wholly before 8 May 2012 leaves the full discount."""
         declare(self.account, 'RESIDENT', date(2005, 1, 1), date(2007, 12, 31))
         declare(self.account, 'FOREIGN', date(2008, 1, 1), date(2010, 12, 31))
         declare(self.account, 'RESIDENT', date(2011, 1, 1))
@@ -2765,7 +2612,7 @@ class DiscountApportionmentTests(TransactionTestCase):
 
 
 class TaxpayerTypeDiscountTests(TransactionTestCase):
-    """s115-10 and s115-100: the rate depends on who is making the gain."""
+    """s115-10 and s115-100: the discount rate by taxpayer type."""
 
     def setUp(self):
         self.account = create_account()
@@ -2788,12 +2635,12 @@ class TaxpayerTypeDiscountTests(TransactionTestCase):
         self.assertEqual(self._rate(), Decimal(1) / Decimal(3))
 
     def test_a_company_gets_no_discount(self):
-        """s115-10 does not list companies. Applying 50% here halves a company's tax."""
+        """A company gets no discount (s115-10)."""
         self.account.taxpayer_type = 'COMPANY'
         self.assertEqual(self._rate(), Decimal('0'))
 
     def test_a_superannuation_funds_rate_is_not_apportioned_by_residency(self):
-        """s115-105 opens with "you are an individual", so it never reaches a fund."""
+        """A super fund's rate is not apportioned by residency (s115-105)."""
         self.account.taxpayer_type = 'SMSF'
         declare(self.account, 'RESIDENT', date(2015, 1, 1), date(2017, 6, 30))
         declare(self.account, 'FOREIGN', date(2017, 7, 1))
@@ -2807,7 +2654,7 @@ class TaxpayerTypeDiscountTests(TransactionTestCase):
 
 
 class ForeignResidentDisregardTests(TransactionTestCase):
-    """s855-10, s768-915 and the s104-165(3) deeming that overrides them."""
+    """s855-10, s768-915 and the s104-165(3) deeming."""
 
     def setUp(self):
         self.account = create_account()
@@ -2821,7 +2668,7 @@ class ForeignResidentDisregardTests(TransactionTestCase):
         self.assertEqual(self._status(date(2015, 1, 1), date(2020, 1, 1)), cgt.tap.NTAP)
 
     def test_undeclared_residency_leaves_the_question_unanswered(self):
-        """Not NTAP, and therefore not disregarded. An unknown must not become an answer."""
+        """Undeclared residency gives an unknown TAP status and nothing disregarded."""
         self.assertIsNone(self._status(date(2015, 1, 1), date(2020, 1, 1)))
         disregarded, reason = cgt.disregard(self.account, None, date(2020, 1, 1))
         self.assertFalse(disregarded)
@@ -2858,12 +2705,7 @@ class ForeignResidentDisregardTests(TransactionTestCase):
         self.assertFalse(disregarded)
 
     def test_a_false_override_suppresses_the_departure_deeming(self):
-        """What the name is there to warn about, pinned so it cannot be changed silently.
-
-        A parcel held at departure under an I1 election is deemed taxable Australian
-        property. Answering "no" to the override -- true of an ordinary listed share taken
-        on its own -- overrules that, and the gain reads as disregarded.
-        """
+        """A "no" TAP override suppresses the departure deeming."""
         declare(self.account, 'RESIDENT', date(2000, 1, 1), end=date(2021, 6, 30))
         declare(self.account, 'FOREIGN', date(2021, 7, 1), i1=True)
 
@@ -2877,12 +2719,7 @@ class ForeignResidentDisregardTests(TransactionTestCase):
 
 
 class I1ElectionDeemingTests(TransactionTestCase):
-    """s104-165(3): choosing to defer the departure gain keeps those assets in the net.
-
-    This is the reason taxable Australian property cannot be a list of tickers. The deeming
-    attaches to what was owned on the day of departure, so two parcels of the same
-    instrument, bought a month apart either side of that day, get opposite answers.
-    """
+    """s104-165(3): an I1 election keeps parcels held on departure inside the CGT net."""
 
     def setUp(self):
         self.account = create_account()
@@ -2900,18 +2737,18 @@ class I1ElectionDeemingTests(TransactionTestCase):
         self.assertEqual(self._status(date(2018, 1, 1)), cgt.tap.NTAP)
 
     def test_the_two_coexist_for_one_instrument(self):
-        """Which is precisely what a per instrument TAP list cannot represent."""
+        """Two parcels of one instrument can get different TAP statuses."""
         self.assertEqual(self._status(date(2015, 1, 1)), cgt.tap.TAP)
         self.assertEqual(self._status(date(2018, 1, 1)), cgt.tap.NTAP)
 
     def test_without_the_election_there_is_no_deeming(self):
-        """No election means the I1 gain was taxed on departure, so nothing is held over."""
+        """Without an I1 election there is no deeming."""
         ResidencyPeriod.objects.filter(account=self.account, status='FOREIGN').update(
             i1_election_made=False)
         self.assertEqual(self._status(date(2015, 1, 1)), cgt.tap.NTAP)
 
     def test_the_deeming_lapses_on_returning_to_australia(self):
-        """s104-165(3) ends it at the earlier of a CGT event or becoming a resident again."""
+        """The deeming lapses on resuming residency (s104-165(3))."""
         ResidencyPeriod.objects.filter(account=self.account, status='FOREIGN').update(
             end_date=date(2019, 6, 30))
         declare(self.account, 'RESIDENT', date(2019, 7, 1))
@@ -2924,16 +2761,12 @@ class I1ElectionDeemingTests(TransactionTestCase):
             self.account, self.instrument, acquired, sold)
 
     def test_a_no_override_on_a_deemed_parcel_is_reported_as_suppressing_it(self):
-        """The silent failure this exists to make audible."""
+        """A "no" override on a deemed parcel is reported as suppressing the deeming."""
         self.instrument.is_taxable_australian_property_override = False
         self.assertTrue(self._suppressed(date(2015, 1, 1)))
 
     def test_an_override_agreeing_with_the_derivation_is_not_reported(self):
-        """A parcel bought after departure is NTAP anyway, so the override changed nothing.
-
-        Reporting these would raise a warning on every instrument in an ordinary portfolio,
-        which is how a warning stops being read.
-        """
+        """An override that matches the derivation is not reported."""
         self.instrument.is_taxable_australian_property_override = False
         self.assertFalse(self._suppressed(date(2018, 1, 1)))
 
@@ -2941,19 +2774,13 @@ class I1ElectionDeemingTests(TransactionTestCase):
         self.assertFalse(self._suppressed(date(2015, 1, 1)))
 
     def test_a_yes_override_is_not_reported(self):
-        """True makes a gain assessable. It is the documented use, and it costs nothing."""
+        """A "yes" override is not reported."""
         self.instrument.is_taxable_australian_property_override = True
         self.assertFalse(self._suppressed(date(2015, 1, 1)))
 
 
 class AttributionDisregardTests(TransactionTestCase):
-    """s855-40(2) with s276-55: a foreign resident member drops the non-TAP attributions.
-
-    This is the largest single number this phase moves for an ETF holder. A trust attributes
-    its own capital gains, mostly on foreign assets it holds, and for a foreign resident
-    member almost none of it is assessable in Australia, while the application until now
-    reported all of it.
-    """
+    """s855-40(2), s276-55: a foreign resident member's non-TAP attributions are disregarded."""
 
     def setUp(self):
         self.account = create_account()
@@ -2993,12 +2820,12 @@ class AttributionDisregardTests(TransactionTestCase):
         self.assertFalse(cgt.attribution_events(self.account)[0].is_disregarded)
 
     def test_undeclared_residency_disregards_nothing(self):
-        """Unchanged from phase 3, which is what makes this safe to ship."""
+        """Undeclared residency disregards nothing."""
         self._component('DISCOUNTED_NTAP', '4845.57')
         self.assertFalse(cgt.attribution_events(self.account)[0].is_disregarded)
 
     def test_the_two_halves_of_a_mixed_statement_are_treated_separately(self):
-        """Netting TAP against NTAP would lose the only thing that decides the outcome."""
+        """A mixed TAP/NTAP discounted attribution is not disregarded."""
         self._component('DISCOUNTED_TAP', '100.00')
         self._component('DISCOUNTED_NTAP', '900.00')
         self._component('OTHER_NTAP', '50.00')
@@ -3014,7 +2841,7 @@ class AttributionDisregardTests(TransactionTestCase):
 
 
 class TaxSettingsBannerTests(TransactionTestCase):
-    """The dashboard has to say when a figure rests on an assumption."""
+    """The dashboard's tax settings warning."""
 
     def setUp(self):
         from share_dinkum_app.dashboard import _tax_settings_warning
@@ -3038,7 +2865,7 @@ class TaxSettingsBannerTests(TransactionTestCase):
         self.assertIsNone(self._warning(account))
 
     def test_reviewing_the_settings_silences_it_whatever_was_chosen(self):
-        """A banner that cannot be dismissed by answering it teaches people to ignore it."""
+        """Setting tax_settings_reviewed_at silences the warning, whatever was chosen."""
         from django.utils import timezone
         account = create_golden_master_portfolio()['account']
         account.tax_settings_reviewed_at = timezone.now()
@@ -3049,10 +2876,7 @@ class TaxSettingsBannerTests(TransactionTestCase):
 # --- Phase 5: the 2027 regime ---
 
 def load_test_cpi(quarters=None):
-    """CPI rising 10% a year from the first indexable quarter.
-
-    Round numbers, so a factor in an assertion can be read rather than trusted.
-    """
+    """Load CPI rising in round steps from the first indexable quarter."""
     quarters = quarters or {
         date(2027, 7, 1): '100.0',
         date(2027, 10, 1): '102.5',
@@ -3069,12 +2893,7 @@ def load_test_cpi(quarters=None):
 
 
 def enable_2027_regime(test_case, account=None):
-    """Turn the rollout gate on for one test.
-
-    A field on the account rather than a patched constant, because that is what it is now:
-    a setting someone ticks, not source they edit. It ships off, because no CPI has been
-    published for a quarter after the cutover, so any figure it produces is a projection.
-    """
+    """Turn on `model_2027_regime` for the test's account."""
     account = account or getattr(test_case, 'account', None)
     if account is None:
         raise AssertionError('enable_2027_regime needs an account to turn the setting on')
@@ -3084,7 +2903,7 @@ def enable_2027_regime(test_case, account=None):
 
 
 class IndexationFactorTests(TestCase):
-    """Subdivision 960-M, and the refusal to invent a missing quarter."""
+    """Subdivision 960-M indexation factors, and missing CPI quarters."""
 
     def setUp(self):
         load_test_cpi()
@@ -3096,7 +2915,7 @@ class IndexationFactorTests(TestCase):
             Decimal('1.100'))
 
     def test_indexation_never_reaches_back_before_the_cutover(self):
-        """s960-275(1B). An asset bought in 2010 is indexed over one year, not eighteen."""
+        """Indexation runs only from the quarter starting 1 July 2027 (s960-275(1B))."""
         self.assertEqual(
             cgt.indexation_factor(date(2010, 1, 1), date(2028, 8, 20)),
             Decimal('1.100'))
@@ -3114,11 +2933,7 @@ class IndexationFactorTests(TestCase):
             Decimal('1.000'))
 
     def test_a_missing_quarter_raises_rather_than_defaulting(self):
-        """The failure this guards is the quiet one.
-
-        Falling back to the latest published quarter understates the cost base and so
-        overstates the gain; extrapolating does the reverse. Both look like an answer.
-        """
+        """A missing CPI quarter raises rather than defaulting."""
         with self.assertRaises(cgt.IndexationDataUnavailable) as caught:
             cgt.indexation_factor(date(2027, 7, 1), date(2033, 5, 1))
         self.assertIn('2033-04-01', str(caught.exception))
@@ -3130,19 +2945,14 @@ class IndexationFactorTests(TestCase):
 
 
 class IndexationEligibilityTests(TransactionTestCase):
-    """s114-25: a testing period that starts at the cutover, not at acquisition."""
+    """s114-25: the testing period runs from the later of the cutover and acquisition."""
 
     def setUp(self):
         self.account = create_account()
         load_test_cpi()
 
     def test_past_non_residency_does_not_disqualify(self):
-        """The intuitive reading is that time abroad costs you indexation. It does not.
-
-        The testing period starts on the later of 1 July 2027 and the day of acquisition, so
-        someone who lived overseas until 2026 and has been in Australia since is eligible on
-        an asset they bought in 2020. Nothing before the cutover is looked at.
-        """
+        """Non-residency before 1 July 2027 does not affect indexation."""
         declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2020, 12, 31))
         declare(self.account, 'FOREIGN', date(2021, 1, 1), date(2026, 6, 30))
         declare(self.account, 'RESIDENT', date(2026, 7, 1))
@@ -3150,7 +2960,7 @@ class IndexationEligibilityTests(TransactionTestCase):
             self.account, date(2020, 1, 15), date(2030, 1, 15)))
 
     def test_one_week_abroad_inside_the_testing_period_denies_it_entirely(self):
-        """No apportionment and no partial credit, unlike the discount it replaces."""
+        """One week abroad in the testing period denies indexation entirely."""
         declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2020, 12, 31))
         declare(self.account, 'FOREIGN', date(2021, 1, 1), date(2026, 6, 30))
         declare(self.account, 'RESIDENT', date(2026, 7, 1), date(2028, 2, 29))
@@ -3165,11 +2975,7 @@ class IndexationEligibilityTests(TransactionTestCase):
             self.account, date(2020, 1, 15), date(2026, 1, 15)))
 
     def test_undeclared_residency_does_not_get_indexation_on_an_assumption(self):
-        """Unlike the discount, there is no prior behaviour here to preserve.
-
-        Granting it would inflate a cost base on a guess, so an undeclared account is simply
-        not eligible and the schedule says why.
-        """
+        """An account with undeclared residency is not eligible for indexation."""
         self.assertFalse(cgt.is_indexation_eligible(
             self.account, date(2020, 1, 15), date(2030, 1, 15)))
 
@@ -3177,12 +2983,8 @@ class IndexationEligibilityTests(TransactionTestCase):
 def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix=''):
     """A parcel bought well before the cutover and sold well after it.
 
-    Cost base 10,019.95, market value at the cutover 15,000, net proceeds 19,990.05. Round
-    enough that every figure asserted against it can be checked by hand.
-
-    `suffix` makes a second, independent portfolio in the same test. The factories key on a
-    username and a fiscal year type description, both unique, so without it a comparison
-    against a counterfactual portfolio fails on a constraint rather than on its assertion.
+    Cost base 10,019.95, cutover value 15,000, net proceeds 19,990.05. `suffix` allows a
+    second, independent portfolio in the same test.
     """
     account = create_account(
         owner=create_user(username=f'cutover{suffix}'),
@@ -3212,7 +3014,7 @@ def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', su
 
 
 class DeemedSaleSplitTests(TransactionTestCase):
-    """s112-155: one disposal, two gains, taxed under different regimes."""
+    """s112-155: a straddling disposal splits into deferred and post-cutover gains."""
 
     def setUp(self):
         self.data = create_cutover_portfolio()
@@ -3246,7 +3048,7 @@ class DeemedSaleSplitTests(TransactionTestCase):
             deferred.gain_category, constants.CGT_GAIN_DEFERRED_NON_RESIDENTIAL)
 
     def test_the_post_cutover_gain_is_indexed_and_undiscounted(self):
-        """s110-36(1A) makes indexation mandatory, and s115-20 then denies the discount."""
+        """The post-cutover slice is indexed and gets no discount (s110-36(1A), s115-20)."""
         post = self._events()[1]
         self.assertEqual(post.indexation_factor, Decimal('1.100'))
         # 15,000 reacquisition cost lifted by 10% inflation.
@@ -3257,12 +3059,7 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(post.gain_category, constants.CGT_GAIN_NON_RESIDENTIAL)
 
     def test_the_two_slices_sum_to_the_whole_gain_before_indexation_relief(self):
-        """The valuation moves gain between the categories; it does not create or destroy it.
-
-        Worth pinning, because it means a user agonising over the market value is choosing
-        how their gain is taxed rather than how much of it there is. What does change the
-        total is indexation, and the difference here is exactly the relief.
-        """
+        """The two cutover slices sum to the whole gain, less the indexation relief."""
         deferred, post = self._events()
         whole_gain = Decimal('19990.05') - Decimal('10019.95')
         relief = Decimal('16500.000') - Decimal('15000.00')
@@ -3271,11 +3068,7 @@ class DeemedSaleSplitTests(TransactionTestCase):
             whole_gain - relief)
 
     def test_the_twelve_month_rule_ignores_the_deemed_reacquisition(self):
-        """s114-10(9). Sold a month after the cutover, the deferred slice is still discounted.
-
-        Measured from the reacquisition on 1 July 2027 it would have been held for six weeks
-        and would lose the discount, which is the trap this provision exists to prevent.
-        """
+        """s114-10(9): the deferred slice's 12-month test runs from the original purchase."""
         data = create_cutover_portfolio(sell_date=date(2027, 8, 20), suffix='b')
         declare(data['account'], 'RESIDENT', date(2010, 1, 1))
         deferred = cgt.disposal_events(data['account'])[0]
@@ -3307,16 +3100,10 @@ class DeemedSaleSplitTests(TransactionTestCase):
 
 
 class ReturnedExpatIndexationTests(TransactionTestCase):
-    """The harshest edge in the reform, and the one most likely to be read as a bug.
+    """A returned expatriate gets no deemed sale and no discount, only indexation from 2027.
 
-    Resident now, abroad at some point after 8 May 2012, holding an asset bought before the
-    cutover. s112-155(1)(d) denies them the deemed sale because s115-105 applies to them, so
-    none of their pre-2027 growth is banked at 50%. Being resident from the cutover, s114-25
-    is satisfied, indexation is mandatory under s110-36(1A), and s115-20 then denies the
-    discount to a gain worked out on an indexed cost base.
-
-    They end up with neither the discount nor a full indexation history: relief runs only
-    from 2027, on growth that mostly happened before it.
+    s112-155(1)(d) denies the split; s114-25 then allows indexation, and s115-20 removes
+    the discount.
     """
 
     def setUp(self):
@@ -3351,7 +3138,7 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
         self.assertIn('s115-105 applies', event.pending_reason)
 
     def test_they_are_worse_off_than_if_they_had_never_left(self):
-        """Stated as a comparison, because the figure alone does not show the cost."""
+        """A returned expatriate is worse off than if they had never left."""
         caught = cgt.disposal_events(self.account)[0]
 
         never_left = create_cutover_portfolio(suffix='b')
@@ -3369,7 +3156,7 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
 
 
 class CutoverValuationTests(TransactionTestCase):
-    """A valuation is per unit, and has to survive a split to stay meaningful."""
+    """Cutover valuations are per unit and survive share splits."""
 
     def setUp(self):
         self.data = create_cutover_portfolio()
@@ -3382,12 +3169,7 @@ class CutoverValuationTests(TransactionTestCase):
         self.assertEqual(source, 'USER')
 
     def test_a_later_split_does_not_double_the_valuation(self):
-        """The reason valuations are per unit and never per parcel.
-
-        A one-for-two split doubles the units and halves what a unit is worth. A figure
-        stored against the parcel would survive the split unchanged and value the holding at
-        twice what it was; scaling the per-unit figure keeps the parcel worth the same.
-        """
+        """A later share split does not change a parcel's cutover valuation."""
         held = create_instrument(
             account=self.account, market=self.data['instrument'].market, name='HELD')
         Buy.objects.create(
@@ -3427,7 +3209,7 @@ class CutoverValuationTests(TransactionTestCase):
         self.assertEqual(source, 'PRICE_HISTORY')
 
     def test_a_recorded_valuation_beats_a_closing_price(self):
-        """A user who had to source a value for a suspended holding keeps their answer."""
+        """A recorded valuation takes precedence over a closing price."""
         InstrumentPriceHistory.objects.create(
             account=self.account, instrument=self.data['instrument'],
             date=date(2027, 6, 30), open=Decimal('14'), high=Decimal('16'),
@@ -3446,7 +3228,7 @@ class CutoverValuationTests(TransactionTestCase):
 
 
 class DeemedResetDateTests(TransactionTestCase):
-    """One mechanism for four provisions that each reset a cost base to market value."""
+    """The dates on which a cost base is deemed reset to market value."""
 
     def setUp(self):
         self.account = create_account()
@@ -3457,13 +3239,13 @@ class DeemedResetDateTests(TransactionTestCase):
             [(date(2027, 7, 1), 'CUTOVER_2027')])
 
     def test_leaving_australia_without_the_election_adds_one(self):
-        """s104-165: CGT event I1 happened and was taxable, so the cost base resets then."""
+        """A departure without an I1 election adds a reset date (s104-165)."""
         declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2017, 6, 30))
         declare(self.account, 'FOREIGN', date(2017, 7, 1), i1=False)
         self.assertIn((date(2017, 7, 1), 'DEPARTURE'), cgt.deemed_reset_dates(self.account))
 
     def test_the_i1_election_means_there_is_no_reset(self):
-        """The whole point of the choice: the gain is deferred and the cost base untouched."""
+        """A departure with an I1 election adds no reset date."""
         declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2017, 6, 30))
         declare(self.account, 'FOREIGN', date(2017, 7, 1), i1=True)
         self.assertEqual(
@@ -3471,21 +3253,21 @@ class DeemedResetDateTests(TransactionTestCase):
             [(date(2027, 7, 1), 'CUTOVER_2027')])
 
     def test_arriving_in_australia_adds_one(self):
-        """s855-45: growth from before arrival was never within the Australian net."""
+        """Becoming a resident adds a reset date (s855-45)."""
         declare(self.account, 'FOREIGN', date(2010, 1, 1), date(2016, 12, 31))
         declare(self.account, 'RESIDENT', date(2017, 1, 1))
         self.assertIn((date(2017, 1, 1), 'ARRIVAL'), cgt.deemed_reset_dates(self.account))
 
 
 class CapitalGainScheduleTests(TransactionTestCase):
-    """s102-5: netting, ordering, and the difference the order of operations makes."""
+    """s102-5: netting, loss ordering, and discounting after losses."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
         self.account = self.data['account']
 
     def test_losses_reduce_gains_rather_than_each_disposal_being_floored(self):
-        """FY2024/25 in the fixture is two losses and no gains."""
+        """Losses net against gains across the year, not per disposal."""
         schedule = cgt.build_schedule(self.account, 'FY2024/25')
         self.assertEqual(schedule.gross_gains.amount, Decimal('0'))
         self.assertEqual(schedule.gross_losses.amount, Decimal('1568.6881'))
@@ -3494,13 +3276,7 @@ class CapitalGainScheduleTests(TransactionTestCase):
         self.assertEqual(schedule.losses_carried_forward.amount, Decimal('1568.6881'))
 
     def test_the_discount_is_applied_after_losses_not_before(self):
-        """The order changes the answer, so it is pinned rather than assumed.
-
-        FY2023/24 has a 4,401.3617 discountable gain. Bringing 1,000 of prior year losses
-        against it leaves 3,401.3617 to halve, giving 1,700.68085. Discounting first and
-        then deducting the loss would give 1,200.68085 -- a difference of 500 on a 1,000
-        loss, which is the whole value of the loss.
-        """
+        """Prior-year losses are applied before the discount."""
         schedule = cgt.build_schedule(
             self.account, 'FY2023/24', prior_year_losses=Money(Decimal('1000'), 'AUD'))
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
@@ -3521,7 +3297,7 @@ class CapitalGainScheduleTests(TransactionTestCase):
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('500'))
 
     def test_an_opening_balance_is_the_only_way_to_bring_in_earlier_losses(self):
-        """Nothing in the transactions implies it, so a new user needs somewhere to say it."""
+        """A carried-forward loss must be recorded as a positive amount."""
         loss = CapitalLossCarryForward(
             account=self.account,
             fiscal_year=FiscalYear.objects.first(),
@@ -3552,13 +3328,7 @@ class CapitalGainScheduleTests(TransactionTestCase):
         self.assertFalse(schedule.is_draft)
 
     def test_a_statement_disagreeing_on_cost_base_makes_the_schedule_a_draft(self):
-        """And it must surface even though the statement attributes no capital gain.
-
-        `_attribution_events` builds an event only where there is a gain, so a nil-gain
-        statement produces none at all -- and a nil-gain statement with a large cost base
-        movement is the normal shape for a property trust. A check walking the year's events
-        would miss exactly the statements this exists to check.
-        """
+        """A cost base disagreement makes the schedule a draft, even with no attributed gain."""
         self.account.taxpayer_type = 'INDIVIDUAL'
         self.account.save()
         declare(self.account, 'RESIDENT', date(2000, 1, 1))
@@ -3593,12 +3363,7 @@ class CapitalGainScheduleTests(TransactionTestCase):
         self.assertNotIn('disagree with the cost base adjustment', cleared)
 
     def test_an_override_suppressing_the_deeming_makes_the_schedule_a_draft(self):
-        """A blanket "no" takes every assessable gain to zero, and says nothing.
-
-        That is the shape of failure worth catching here: the schedule is not wrong-looking,
-        it is empty, and empty is the correct answer for a foreign resident who left without
-        an I1 election. Only the setting distinguishes the two.
-        """
+        """A TAP override suppressing the deeming makes the schedule a draft."""
         self.account.taxpayer_type = 'INDIVIDUAL'
         self.account.save()
         # Departure after both buys (2022-08-15, 2023-02-20) and before both sells, so the
@@ -3627,12 +3392,7 @@ class CapitalGainScheduleTests(TransactionTestCase):
 
 
 class StatutoryLossOrderingTests(TransactionTestCase):
-    """s102-5 Step 1: losses are spent where they are worth least, and that is the law.
-
-    A deferred non-residential gain carries the 50% discount; a plain non-residential gain
-    does not. Left to choose, a taxpayer would spend a loss on the undiscounted gain, saving
-    twice as much tax. Step 1(a) requires the opposite.
-    """
+    """s102-5 Step 1: losses go against deferred (discounted) gains first."""
 
     def setUp(self):
         self.data = create_cutover_portfolio()
@@ -3668,7 +3428,7 @@ class StatutoryLossOrderingTests(TransactionTestCase):
         ])
 
     def test_the_loss_hits_the_deferred_gain_first(self):
-        """The taxpayer-unfavourable order, applied because s102-5 Step 1(a) requires it."""
+        """A loss is applied to the deferred gain first (s102-5 Step 1(a))."""
         schedule = self._schedule()
         deferred, non_residential = schedule.lines
         self.assertEqual(
@@ -3677,7 +3437,7 @@ class StatutoryLossOrderingTests(TransactionTestCase):
             non_residential.current_year_losses_applied.amount, Decimal('0'))
 
     def test_spending_the_loss_the_other_way_would_have_been_worth_more(self):
-        """Quantifies what the statutory order costs, so it is not mistaken for a bug."""
+        """The statutory order costs more tax than the reverse would."""
         schedule = self._schedule()
         as_required = schedule.net_capital_gain.amount
 
@@ -3690,7 +3450,7 @@ class StatutoryLossOrderingTests(TransactionTestCase):
 
 
 class CGTReportTests(TransactionTestCase):
-    """The two new reports, and the one that stays frozen."""
+    """The CGT event and schedule reports, and the unchanged realised gain report."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -3702,7 +3462,7 @@ class CGTReportTests(TransactionTestCase):
         self.assertEqual(len(df), 3)
 
     def test_the_realised_gain_report_did_not_grow_a_column(self):
-        """It is what users have been exporting for years, so its shape is a contract."""
+        """RealisedCapitalGainReport's columns are unchanged."""
         df = RealisedCapitalGainReport(account=self.account).generate()
         self.assertEqual(list(df.columns), [
             'sell_date', 'instrument', 'quantity_sold', 'buy_id', 'parcel_id', 'sell_id',
@@ -3727,7 +3487,7 @@ class CGTReportTests(TransactionTestCase):
 
 
 class LoadCPICommandTests(TestCase):
-    """Loading CPI, including the convention trap in how the ABS dates a quarter."""
+    """The load_cpi command."""
 
     def _write(self, rows):
         handle = tempfile.NamedTemporaryFile(
@@ -3738,8 +3498,7 @@ class LoadCPICommandTests(TestCase):
         return handle.name
 
     def test_rows_are_loaded_and_normalised_to_the_quarter_start(self):
-        """The ABS dates a quarter by its last month, which is a quarter off if taken at
-        face value. 30 September 2027 is the September quarter, which starts on 1 July."""
+        """Loaded CPI rows are normalised to the start of their quarter."""
         path = self._write('date,index\n2027-09-30,100.0\n2027-12-31,102.5\n')
         call_command('load_cpi', path)
         self.assertEqual(
@@ -3771,7 +3530,7 @@ class LoadCPICommandTests(TestCase):
 
 
 class CaptureCutoverValuationsCommandTests(TransactionTestCase):
-    """Someone has to record the 30 June 2027 close, and it will not happen by itself."""
+    """The capture_cutover_valuations command."""
 
     def setUp(self):
         self.account = create_account()
@@ -3788,7 +3547,7 @@ class CaptureCutoverValuationsCommandTests(TransactionTestCase):
         )
 
     def test_it_records_the_close_for_the_day_before_the_cutover(self):
-        """The deemed sale happens just before 1 July, so 30 June is the day to value."""
+        """The command values 30 June 2027, the day before the cutover."""
         call_command('capture_cutover_valuations', '--account', self.account.description)
         valuation = InstrumentValuation.objects.get()
         self.assertEqual(valuation.valuation_date, date(2027, 6, 30))
@@ -3832,17 +3591,7 @@ class CaptureCutoverValuationsCommandTests(TransactionTestCase):
 
 
 class IndexationNeverDeepensALossTests(TransactionTestCase):
-    """s110-55: a capital loss is worked out on the reduced cost base, which excludes indexation.
-
-    Left unguarded, indexation manufactures a deductible loss out of an asset that merely
-    failed to keep pace with inflation. It also produces a third outcome that a gain-or-loss
-    model has no room for: where the proceeds fall between the plain and the indexed cost
-    base, there is no gain *and* no loss.
-
-    This was found by the loss ordering test reporting a loss of 2,450 on a holding that
-    fell 2,000, which is the shape this kind of bug takes -- not an obviously wrong figure,
-    just a slightly larger one, in the taxpayer's favour.
-    """
+    """s110-55: indexation never creates or deepens a loss."""
 
     def setUp(self):
         self.account = create_account(
@@ -3856,10 +3605,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
         enable_2027_regime(self)
 
     def _sell_at(self, name, unit_price):
-        """Bought after the cutover for 10,000, sold in a quarter where CPI is up 4.5%.
-
-        The indexed cost base is therefore 10,450 and the plain one 10,000.
-        """
+        """Buy after the cutover for 10,000 and sell when CPI is up 4.5% (indexed: 10,450)."""
         instrument = create_instrument(
             account=self.account, market=self.market, name=name)
         Buy.objects.create(
@@ -3888,11 +3634,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
         self.assertEqual(event.gross_loss, Money(Decimal('2000.00'), 'AUD'))
 
     def test_proceeds_between_the_two_cost_bases_are_neither_a_gain_nor_a_loss(self):
-        """The outcome a two-way model has nowhere to put.
-
-        Up 2% against 4.5% inflation: a real loss, but not a deductible one, and certainly
-        not a gain.
-        """
+        """Proceeds between the plain and indexed cost bases give neither a gain nor a loss."""
         event = self._sell_at('FLAT', '10.20')
         self.assertEqual(event.capital_gain, Money(Decimal('0'), 'AUD'))
         self.assertEqual(event.gross_gain, Money(Decimal('0'), 'AUD'))
@@ -3906,13 +3648,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
 
 
 class ExportRoundTripTests(TransactionTestCase):
-    """An export has to be loadable back into the portfolio it came from.
-
-    This is the backup story: `DataExport` is what a user has if their database is lost, and
-    it is the only migration path off this application. A sheet that exports but will not
-    import is a backup that silently is not one, and the failure only shows up on the day it
-    matters.
-    """
+    """An export loads back into the portfolio it came from, or into an empty database."""
 
     def _export(self, account):
         export = DataExport.objects.create(account=account)
@@ -3921,25 +3657,14 @@ class ExportRoundTripTests(TransactionTestCase):
         return Path(export.file.path)
 
     def _detached_export(self, account):
-        """An export copied out of the media folder, the way a backup is kept.
-
-        Deleting the DataExport row takes its file with it, so an export left where the
-        application put it disappears along with the database it was meant to survive. A
-        backup that only exists inside the thing being backed up is not one, which is worth
-        the test making explicit rather than working around.
-        """
+        """An export copied out of the media folder, as a kept backup would be."""
         source = self._export(account)
         destination = Path(tempfile.mkdtemp()) / source.name
         shutil.copy2(source, destination)
         return destination
 
     def _wipe(self):
-        """Empty every table, as losing the database would.
-
-        Deleted in the reverse of the order the loader fills them, which is the only
-        ordering that is guaranteed to respect the protected foreign keys -- and it stays
-        right as models are added, since it is the same list the loader maintains.
-        """
+        """Empty every table, in reverse load order."""
         for model in reversed(list(loading.DataLoader.get_model_load_order())):
             model.objects.all().delete()
         DataExport.objects.all().delete()
@@ -3947,13 +3672,7 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(Account.objects.count(), 0)
 
     def test_an_export_restores_into_an_empty_database(self):
-        """The case the backup exists for, and the one that could not be done at all.
-
-        Restoring is not re-importing. There is no portfolio to load into, and creating one
-        first is what broke it: the new user and account get new ids, then the file arrives
-        carrying the originals, the user collides on username, and every row naming the old
-        account is refused as belonging elsewhere. The file has to supply the portfolio.
-        """
+        """An export restores into an empty database, bringing its own user and portfolio."""
         data = create_golden_master_portfolio()
         account = data['account']
         declare(account, 'RESIDENT', date(2000, 1, 1))
@@ -3979,13 +3698,7 @@ class ExportRoundTripTests(TransactionTestCase):
                 f'{name} did not come back with the same number of rows')
 
     def test_restoring_does_not_derive_what_the_file_already_holds(self):
-        """`_creation_handled` has to survive the trip, or the signals derive a second set.
-
-        A buy creates a parcel by signal. On a restore the file already carries the parcels,
-        including the ones bifurcated by a partial sale, which no signal could reconstruct.
-        Dropping the flag meant both appeared: one set from the file and one conjured, with
-        the cost base adjustments then spread across twice as many parcels as exist.
-        """
+        """A restore keeps the file's parcels and does not derive a second set by signal."""
         data = create_golden_master_portfolio()
         account = data['account']
         declare(account, 'RESIDENT', date(2000, 1, 1))
@@ -4003,12 +3716,7 @@ class ExportRoundTripTests(TransactionTestCase):
             'every parcel should be one the file supplied, not one a signal invented')
 
     def test_a_column_the_model_no_longer_has_is_ignored(self):
-        """Renaming a field must not retire every export taken before it.
-
-        The loader looked up each column and raised on one it could not find, so a single
-        renamed field turned every older export into a file that would not load -- and an
-        export is the backup.
-        """
+        """A column the model no longer has is ignored on import."""
         account = create_account()
         instrument = create_instrument(account=account)
         df = pd.DataFrame([{
@@ -4025,11 +3733,7 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(instrument.name, instrument.name)
 
     def test_a_blank_file_cell_loads_as_no_file(self):
-        """A blank in a file column is NaN, and NaN is truthy.
-
-        It walked past the `if not value` guard, reached the model, and FileField.pre_save
-        asked a float for its `.name`. Nothing in that error mentions a spreadsheet.
-        """
+        """A blank (NaN) file cell loads as no file."""
         account = create_account()
         instrument = create_instrument(account=account)
         df = pd.DataFrame([{
@@ -4063,14 +3767,7 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(AppUser.objects.count(), 1)
 
     def test_a_blank_text_column_loads_as_empty_rather_than_failing(self):
-        """The specific shape of the bug, isolated from the rest of the round trip.
-
-        An exported AppUser has an empty email, because most users never set one. Excel has
-        no way to distinguish an empty string from an absent value, so it comes back as a
-        blank cell, and the loader turned every blank into None. `email` is NOT NULL with a
-        default of empty string, as Django's own `blank=True, null=False` idiom requires, so
-        the insert failed on a constraint.
-        """
+        """A blank email loads as an empty string, not NULL."""
         account = create_account()
         generator = excelinterface.ExcelGen(title='Blank email')
         generator.add_table(
@@ -4093,12 +3790,7 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(account.owner.first_name, '')
 
     def test_a_genuinely_missing_required_value_still_fails(self):
-        """The fix must not turn every blank into a default and swallow real errors.
-
-        Only text columns that are NOT NULL get an empty string, because that is what Django
-        means by `blank=True, null=False`. A missing date or quantity is a broken row and has
-        to say so.
-        """
+        """A missing required value, such as a date, still fails."""
         account = create_account()
         market = create_market(account=account)
         create_instrument(account=account, market=market, name='BHP')
@@ -4126,18 +3818,7 @@ class ExportRoundTripTests(TransactionTestCase):
 
 
 class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
-    """Reading a report must never rewrite a stored figure.
-
-    This is what makes the upgrade path safe to describe. Every migration in this release is
-    additive -- CreateModel and AddField, no data migration -- so applying them cannot move a
-    number. The corrections to how cost base adjustments are weighted only take effect when
-    an adjustment is saved again, which happens on a re-import and not before.
-
-    That means a user can upgrade, look at everything, and still be seeing exactly the
-    figures they lodged. It stops being true the moment they re-import, which is precisely
-    when the changelog tells them to take a snapshot first. If a report ever starts writing
-    on read, that advice becomes wrong and this test is what catches it.
-    """
+    """Reading reports never rewrites a stored figure, so upgrading moves no number."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4171,13 +3852,7 @@ class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
         self.assertEqual(self._allocation_state(), before)
 
     def test_re_saving_an_adjustment_does_not_re_spread_it(self):
-        """The boundary, stated explicitly, because it is easy to assume the opposite.
-
-        An adjustment is allocated once, on creation. Saving it again does nothing, and
-        neither does re-importing the file it came from, since a re-import updates rather
-        than creates. That is what makes an upgrade inert -- and it is also why a correction
-        to the weighting needs a command of its own to reach data that already exists.
-        """
+        """Saving an adjustment again does not re-allocate it."""
         adjustment = self.data['adjustment']
         CostBaseAdjustmentAllocation.objects.filter(
             account=self.account, cost_base_adjustment=adjustment).delete()
@@ -4188,32 +3863,14 @@ class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
 
 
 class FreshImportPicksUpTheCorrectedWeightingTests(ImportWorkbookMixin, TransactionTestCase):
-    """The upgrade path for figures recorded before the weighting was corrected.
+    """Loading a file into a new portfolio applies the corrected cost base weighting.
 
-    A cost base adjustment is spread across parcels once, when it is created, and never
-    again. So upgrading does not re-spread the adjustments already in a database, and neither
-    does re-importing a file into the portfolio it came from -- a re-import matches and
-    updates existing rows rather than creating them.
-
-    Loading the original file into a **new, empty** portfolio does create them, with the
-    corrected code, in the right order. That is the supported way to see what the correction
-    does to a history, and it is non-destructive: the original portfolio is untouched and the
-    two can be compared side by side.
-
-    A command that re-spread adjustments in place was written and then removed. Its output
-    depended on when the adjustment was entered relative to the sells, because the allocation
-    weights parcels by the days they were held during the year and a parcel's sale date is
-    only known once the sell exists. On an imported file the sells are always loaded first, so
-    the answer is stable; entered by hand in another order it is not. Rewriting cost bases on
-    lodged tax data with an order-dependent result is not a trade worth making.
+    Adjustments are allocated once, on creation, so upgrading or re-importing into the
+    same portfolio does not re-spread them.
     """
 
     def _workbook(self, path):
-        """A year with a parcel held throughout and one bought two months before the end.
-
-        The whole point of the correction: the late parcel used to take the same share per
-        unit as the one held all year.
-        """
+        """A workbook with one parcel held all year and one bought two months before year end."""
         generator = excelinterface.ExcelGen(title='Weighting')
         generator.add_table(
             pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]), table_name='Market')
@@ -4262,7 +3919,7 @@ class FreshImportPicksUpTheCorrectedWeightingTests(ImportWorkbookMixin, Transact
         self.assertEqual(sum(by_legacy.values()), Decimal('100.00'))
 
     def test_reloading_the_same_file_does_not_re_spread_it(self):
-        """Which is why a fresh portfolio, not a re-import, is the path that picks it up."""
+        """Reloading the same file does not re-allocate adjustments."""
         account = create_account()
         path = self._workbook(Path(tempfile.mkdtemp()) / 'weighting.xlsx')
         loading.DataLoader(account=account, input_file=path)
@@ -4281,13 +3938,7 @@ class FreshImportPicksUpTheCorrectedWeightingTests(ImportWorkbookMixin, Transact
 
 
 class RefreshPricesButtonTests(TransactionTestCase):
-    """The dashboard button that replaces ticking a checkbox on the account.
-
-    Refreshing prices used to mean opening the account, ticking a field called "update price
-    history", and saving, at which point a signal did the work and unticked it again. Nobody
-    found it. The button sets the same flag and saves, so there is still one implementation
-    of "refresh this portfolio".
-    """
+    """The dashboard's Refresh prices button."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4320,13 +3971,7 @@ class RefreshPricesButtonTests(TransactionTestCase):
         rates.assert_called_once()
 
     def test_exchange_rates_are_refreshed_before_prices(self):
-        """Order matters, and the signal already knew that.
-
-        Saving an instrument stores its value converted at whatever the rate is then, and
-        nothing re-converts it afterwards. Refreshing the rate second leaves every holding
-        valued at the previous rate. Pinned here because the button is now the way most
-        people will reach this code.
-        """
+        """Exchange rates are refreshed before prices."""
         calls = []
         with patch.object(Account, 'update_all_price_history',
                           side_effect=lambda: calls.append('prices')), \
@@ -4337,7 +3982,7 @@ class RefreshPricesButtonTests(TransactionTestCase):
         self.assertEqual(calls, ['rates', 'prices'])
 
     def test_the_flag_is_left_clear_afterwards(self):
-        """Otherwise every later save of the account would refresh again."""
+        """update_price_history is cleared after the refresh."""
         with patch.object(Account, 'update_all_price_history'), \
              patch.object(Account, 'update_all_exchange_rate_history'):
             self.client.post(self.url)
@@ -4346,20 +3991,14 @@ class RefreshPricesButtonTests(TransactionTestCase):
         self.assertFalse(self.account.update_price_history)
 
     def test_a_get_does_not_refresh_anything(self):
-        """It reaches an external provider and writes, so a prefetch must not set it off."""
+        """A GET does not refresh anything."""
         with patch.object(Account, 'update_all_price_history') as prices:
             response = self.client.get(self.url)
         self.assertEqual(response.status_code, 405)
         prices.assert_not_called()
 
     def test_a_user_who_is_not_staff_is_refused(self):
-        """The endpoint is gated exactly like the rest of the admin, and no more.
-
-        There is no anonymous case to test on a local install: `AutoLoginMiddleware` signs
-        every request in, deliberately, because the app runs on your own machine against your
-        own database. So the meaningful gate is the one that still applies once someone is
-        signed in as a user without admin rights.
-        """
+        """A signed-in user without staff rights is refused."""
         outsider = AppUser.objects.create_user(
             username='outsider', password='x', is_staff=False)
         self.client.force_login(outsider)
@@ -4399,13 +4038,7 @@ class RefreshPricesButtonTests(TransactionTestCase):
 
 
 class CaptureCGTSnapshotCommandTests(TransactionTestCase):
-    """The only way to create a snapshot, and therefore the only way the diff report works.
-
-    `capture()` existed but nothing outside the tests called it, so the advice to take a
-    snapshot before lodging was not something a user could act on. The payload is
-    deliberately not editable in the admin -- a snapshot you can adjust afterwards is not
-    evidence of anything -- which left no route to one at all.
-    """
+    """The capture_cgt_snapshot management command."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4430,7 +4063,7 @@ class CaptureCGTSnapshotCommandTests(TransactionTestCase):
             Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
 
     def test_it_records_which_basis_produced_the_figures(self):
-        """Without this a snapshot cannot be compared to anything meaningfully."""
+        """A snapshot records the residency basis of its figures."""
         call_command('capture_cgt_snapshot', '--account', self.account.description)
         self.assertEqual(
             CGTReturnSnapshot.objects.first().basis, cgt.BASIS_LEGACY)
@@ -4458,7 +4091,7 @@ class CaptureCGTSnapshotCommandTests(TransactionTestCase):
                 '--fiscal-year', 'FY1999/00')
 
     def test_the_snapshot_then_feeds_the_basis_change_report(self):
-        """The whole point: a snapshot is only useful because something compares against it."""
+        """A captured snapshot feeds the basis change report."""
         call_command(
             'capture_cgt_snapshot', '--account', self.account.description,
             '--fiscal-year', 'FY2023/24')
@@ -4470,12 +4103,7 @@ class CaptureCGTSnapshotCommandTests(TransactionTestCase):
 
 
 class CaptureSnapshotButtonTests(TransactionTestCase):
-    """Recording the figures from the dashboard, rather than from a terminal.
-
-    The figures a snapshot holds come from the report and cannot be typed in, and the model
-    refuses to let them be edited afterwards. That left the admin with a form nobody could
-    usefully fill in, and the only working route was a management command.
-    """
+    """The dashboard's Take capital gains snapshot button."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4510,10 +4138,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
             Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
 
     def test_nothing_is_marked_as_lodged(self):
-        """Whether figures were filed is a claim about the outside world.
-
-        The application has no way to verify it, so it stays a box the user ticks.
-        """
+        """Snapshots from the button are not marked lodged."""
         self.client.post(self.url)
         self.assertFalse(
             CGTReturnSnapshot.objects.filter(account=self.account, is_lodged=True).exists())
@@ -4567,13 +4192,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
 
 
 class SnapshotColumnPrecisionTests(TransactionTestCase):
-    """Precision is now enforced by the columns, not by a serialiser.
-
-    The figures used to go into a JSON blob as text, so how many decimal places they kept
-    was whatever `str()` produced -- which for a value reached by division was twenty-eight
-    significant digits. Stored in a MoneyField the question does not arise: the column is
-    four decimal places and the database enforces it.
-    """
+    """Snapshot rows are stored at column precision."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4598,16 +4217,7 @@ class SnapshotColumnPrecisionTests(TransactionTestCase):
 
 
 class InexactAllocationPrecisionTests(TransactionTestCase):
-    """A partial sale whose quantities do not divide evenly.
-
-    Every figure in this application that involves a share of something is reached by a
-    division, and Decimal division is inexact: it stops at 28 significant digits and leaves
-    the remainder behind. Sell 135 units out of 745 and the proceeds arrive as
-    7154.835632530120481927710843 -- twenty-four digits past the cent, none of them money.
-
-    Summing fourteen of those made a portfolio total read 2019.106200000001099999999996
-    instead of 2019.1062, which is how this was noticed.
-    """
+    """A partial sale whose quantities do not divide evenly is reported at four places."""
 
     def setUp(self):
         self.account = create_account(
@@ -4640,12 +4250,7 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
                         value.amount.as_tuple().exponent, -4, f'{field} = {value}')
 
     def test_proceeds_less_cost_base_equals_the_reported_gain(self):
-        """It did not, quite.
-
-        `net_proceeds` divided before multiplying and `capital_gain` multiplied before
-        dividing, so the same quantity was reached two ways and the answers parted company
-        in the last digit. Rounding hides that, but the formulas are now the same one.
-        """
+        """Net proceeds less cost base equals the reported capital gain exactly."""
         for event in cgt.disposal_events(self.account):
             self.assertEqual(
                 event.net_proceeds - event.cost_base, event.capital_gain)
@@ -4659,13 +4264,7 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
         self.assertGreaterEqual(Decimal(total).as_tuple().exponent, -4, total)
 
     def test_a_figure_carrying_old_precision_compares_as_unchanged(self):
-        """The compatibility guarantee for snapshots taken before figures were rounded.
-
-        They hold values like 7154.835632530120481927710843. A fresh calculation now gives
-        7154.8356. Comparing raw would report every row of every old snapshot as changed by
-        a hundred-thousandth of a cent, burying anything that mattered, so the comparison
-        happens at the four places the application stores money to.
-        """
+        """An old snapshot figure with full Decimal precision compares as unchanged."""
         drifted = Decimal('7154.835632530120481927710843')
         rounded = Decimal('7154.8356')
         self.assertNotEqual(drifted, rounded)
@@ -4682,7 +4281,7 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
         self.assertTrue((df['status'] == 'UNCHANGED').all())
 
     def test_a_real_change_is_still_reported(self):
-        """The tolerance must not be wide enough to hide something that matters."""
+        """A real change is still reported."""
         fiscal_year = FiscalYear.objects.get(name='FY2023/24')
         snapshot = CGTReturnSnapshot.capture(
             account=self.account, fiscal_year=fiscal_year)
@@ -4697,12 +4296,7 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
 
 
 class ExportButtonTests(TransactionTestCase):
-    """Exporting from the dashboard, and getting the file back rather than a link to it.
-
-    Exporting meant opening Data exports, adding a record, saving it, and then finding the
-    file that the save had generated. The record is worth keeping -- it is the history of
-    what was exported and when -- but it should not be the interface.
-    """
+    """The dashboard's Export portfolio button returns the file itself."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -4715,12 +4309,7 @@ class ExportButtonTests(TransactionTestCase):
         self.url = reverse('admin:dashboard_export')
 
     def _download(self, **post):
-        """Post, and drain the response so its file handle is released.
-
-        FileResponse holds the file open until the body is consumed. A real client always
-        consumes it; a test that does not leaves the handle open, and on Windows the next
-        thing to touch that file fails.
-        """
+        """POST and consume the response so FileResponse releases the file (Windows)."""
         response = self.client.post(self.url, post or None)
         if hasattr(response, 'streaming_content'):
             response.body = b''.join(response.streaming_content)
@@ -4733,8 +4322,7 @@ class ExportButtonTests(TransactionTestCase):
         self.assertContains(response, 'Never exported')
 
     def test_it_returns_the_file_itself(self):
-        """A link would depend on media being served, and would hand out a URL to the whole
-        portfolio. The response is the file."""
+        """The response is the xlsx file as an attachment."""
         response = self._download()
 
         self.assertEqual(response.status_code, 200)
@@ -4752,8 +4340,7 @@ class ExportButtonTests(TransactionTestCase):
         self.assertFalse(export.include_price_history)
 
     def test_price_history_is_left_out_unless_asked_for(self):
-        """It is the largest table by far, and unlike everything else it can be fetched
-        again from the market."""
+        """Price history is included only when requested."""
         self._download()
         self.assertFalse(DataExport.objects.get(account=self.account).include_price_history)
 
@@ -4762,7 +4349,7 @@ class ExportButtonTests(TransactionTestCase):
         self.assertTrue(DataExport.objects.get(account=self.account).include_price_history)
 
     def test_the_file_loads_back_in(self):
-        """The claim the button makes is that this is a backup, so it has to be one."""
+        """The exported file loads back in."""
         response = self._download()
 
         path = Path(tempfile.mkdtemp()) / 'export.xlsx'
@@ -4800,13 +4387,7 @@ class ExportButtonTests(TransactionTestCase):
 
 
 class ManualAllocationImportTests(TransactionTestCase):
-    """Importing a file that pins its own sell allocations, and importing it twice.
-
-    A sell normally allocates itself against parcels by FIFO or lowest gain. A file can
-    instead state the allocations, which is what `strategy = MANUAL` and the
-    `lookup_legacy_buy` column are for: it is how a history worked out elsewhere is carried
-    across without this application re-deriving it and getting different parcels.
-    """
+    """Importing a file that pins its own sell allocations, once and twice."""
 
     def _workbook(self, path, allocations=None):
         if allocations is None:
@@ -4859,14 +4440,7 @@ class ManualAllocationImportTests(TransactionTestCase):
         self.assertEqual(allocation.parcel.buy.legacy_id, 'B002')
 
     def test_loading_the_same_file_twice_updates_rather_than_failing(self):
-        """The promise the loader makes everywhere else, which this path did not keep.
-
-        The parcel a pinned allocation names was resolved before checking whether the
-        allocation already existed, and the resolution only accepts a parcel with quantity
-        still available. On a second load that parcel has already been consumed by the
-        allocation from the first, so the lookup found nothing and the import died on its
-        first row -- with a bare assertion that said neither which row nor what was wrong.
-        """
+        """Loading the same file twice updates rather than fails when a holding is fully sold."""
         # The whole of B002, so nothing of it is left over. A partial sale leaves an
         # unsold remnant and the lookup still finds exactly one parcel, which is why this
         # went unnoticed: it only fails once a holding is completely sold.
@@ -4885,7 +4459,7 @@ class ManualAllocationImportTests(TransactionTestCase):
         self.assertEqual(allocation.parcel.buy.legacy_id, 'B002')
 
     def test_an_unknown_buy_says_which_one_and_why(self):
-        """A bare AssertionError told the user nothing at all."""
+        """An unknown buy legacy id gives an error naming it."""
         path = self._workbook(
             Path(tempfile.mkdtemp()) / 'missing.xlsx',
             allocations=[{
@@ -4899,7 +4473,7 @@ class ManualAllocationImportTests(TransactionTestCase):
         self.assertIn('no buy with that legacy id', message.lower())
 
     def test_an_over_allocated_buy_says_so(self):
-        """Two pinned allocations taking more than the buy ever held."""
+        """Allocations exceeding what a buy holds give an error saying so."""
         path = self._workbook(
             Path(tempfile.mkdtemp()) / 'over.xlsx',
             allocations=[
@@ -4914,13 +4488,7 @@ class ManualAllocationImportTests(TransactionTestCase):
 
 
 class LegalFormSourceTests(TransactionTestCase):
-    """Who decided the legal form, and why nobody should have to type it.
-
-    `legal_form_source` gates `is_classified`, which gates whether a capital gains schedule
-    will call itself final. Nothing ever set it to USER, so the gate could not be passed:
-    every instrument stayed unconfirmed and every schedule stayed a draft, forever, no
-    matter what the user did in the admin.
-    """
+    """`Instrument.save()` records who set the legal form."""
 
     def setUp(self):
         self.account = create_account()
@@ -4937,7 +4505,7 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertFalse(instrument.is_classified)
 
     def test_setting_the_legal_form_confirms_it(self):
-        """What a user does in the admin. They never see the source field."""
+        """Setting the legal form marks it as confirmed."""
         instrument = self._instrument()
         instrument.legal_form = 'COMPANY'
         instrument.save()
@@ -4947,14 +4515,14 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertTrue(instrument.is_classified)
 
     def test_creating_with_a_legal_form_counts_as_confirmed(self):
-        """An import file that states the legal form is stating the user's answer."""
+        """Creating an instrument with a legal form marks it confirmed."""
         instrument = self._instrument(name='VAS', legal_form='UNIT_TRUST')
         instrument.refresh_from_db()
         self.assertEqual(instrument.legal_form_source, 'USER')
         self.assertTrue(instrument.is_classified)
 
     def test_a_suggestion_does_not_count_as_confirmed(self):
-        """The suggester says so by setting the source in the same save."""
+        """A suggestion saved with source SUGGESTED stays unconfirmed."""
         instrument = self._instrument()
         instrument.legal_form = 'COMPANY'
         instrument.legal_form_source = 'SUGGESTED'
@@ -4965,7 +4533,7 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertFalse(instrument.is_classified)
 
     def test_a_user_correcting_a_suggestion_confirms_it(self):
-        """The case that matters: the command guessed, you disagree, you fix it."""
+        """Correcting a suggestion confirms it."""
         instrument = self._instrument()
         instrument.legal_form = 'COMPANY'
         instrument.legal_form_source = 'SUGGESTED'
@@ -4979,7 +4547,7 @@ class LegalFormSourceTests(TransactionTestCase):
         self.assertTrue(instrument.is_classified)
 
     def test_agreeing_with_a_suggestion_by_re_saving_does_not_confirm_it(self):
-        """Saving an unrelated field must not silently promote a guess to an answer."""
+        """Re-saving an unchanged suggestion does not confirm it."""
         instrument = self._instrument()
         instrument.legal_form = 'COMPANY'
         instrument.legal_form_source = 'SUGGESTED'
@@ -5008,12 +4576,7 @@ class LegalFormSourceTests(TransactionTestCase):
 
 
 class Modelling2027RegimeSettingTests(TransactionTestCase):
-    """Turning the 2027 regime on is a setting, not a source edit.
-
-    It used to be `constants.CGT_2027_REGIME_ENABLED`, which meant editing a tracked file --
-    and `uv run update` refuses to pull over a file you have edited, so turning modelling on
-    quietly broke updates. It lives on the account now, beside the other tax settings.
-    """
+    """The 2027 regime is an account setting."""
 
     def setUp(self):
         self.data = create_cutover_portfolio()
@@ -5031,7 +4594,7 @@ class Modelling2027RegimeSettingTests(TransactionTestCase):
         self.assertEqual(len(events), 2, 'a straddling disposal splits at the cutover')
 
     def test_it_is_editable_in_the_admin(self):
-        """The whole point: a person can reach it without editing a file."""
+        """model_2027_regime is editable in the admin."""
         from django.contrib.admin.sites import AdminSite
         from share_dinkum_app.admin import AccountAdmin
 
@@ -5040,7 +4603,7 @@ class Modelling2027RegimeSettingTests(TransactionTestCase):
         self.assertIn('model_2027_regime', form.base_fields)
 
     def test_one_portfolio_can_model_ahead_while_another_does_not(self):
-        """Per account, which a module constant could not express at all."""
+        """One portfolio can model the 2027 regime while another does not."""
         other = create_cutover_portfolio(suffix='b')
         declare(other['account'], 'RESIDENT', date(2010, 1, 1))
         enable_2027_regime(self, other['account'])
@@ -5050,12 +4613,7 @@ class Modelling2027RegimeSettingTests(TransactionTestCase):
 
 
 class PostCutoverWarningTests(TransactionTestCase):
-    """What the schedule says about a year that reaches past 1 July 2027.
-
-    Two directions, and the quiet one matters more. With the setting off, a post-cutover
-    disposal is not being treated cautiously -- it is being worked out under rules that no
-    longer reach that year, and nothing said so.
-    """
+    """Schedule warnings for years with disposals from 1 July 2027, whichever the setting."""
 
     def setUp(self):
         self.data = create_cutover_portfolio()
@@ -5083,7 +4641,7 @@ class PostCutoverWarningTests(TransactionTestCase):
         self.assertIn('Untick "Model 2027 regime"', joined)
 
     def test_a_year_before_the_cutover_says_nothing_either_way(self):
-        """A 2011 schedule is not provisional because a setting is on."""
+        """A year before the cutover gets no 2027 warning either way."""
         enable_2027_regime(self, self.account)
         earlier = cgt.build_schedule(self.account, 'FY2023/24')
         joined = ' '.join(earlier.warnings)
@@ -5092,13 +4650,7 @@ class PostCutoverWarningTests(TransactionTestCase):
 
 
 class YearInProgressIsADraftTests(TransactionTestCase):
-    """A year that has not ended cannot be final, however confirmed its data is.
-
-    Every other draft reason is about data nobody has confirmed, so a fiscal year three
-    weeks old with nothing outstanding reported itself final -- and "final" reads as "these
-    are the year's figures" when ten months of it are still to come. It matters more since
-    the schedule became a file: `is_draft` is stamped into a workbook that travels.
-    """
+    """A fiscal year that has not ended is a draft."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -5133,7 +4685,7 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         self.assertIn(f'{current.end_date:%d %B %Y}', joined)
 
     def test_the_last_day_of_a_year_is_still_open(self):
-        """Inclusive: a disposal made on 30 June is in the year, so it is not done yet."""
+        """A year is still open on its last day."""
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         current = self._year_covering(date.today())
@@ -5150,19 +4702,150 @@ class YearInProgressIsADraftTests(TransactionTestCase):
             self.assertIsNone(_year_still_running(current.name))
 
     def test_the_all_years_view_says_nothing_about_time(self):
-        """Passing no year is a position rather than a return, so there is no year to end."""
+        """The all-years view gets no year-in-progress warning."""
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         self.assertIsNone(_year_still_running(None))
 
 
-class CGTScheduleExportTests(TransactionTestCase):
-    """The capital gains schedule as a file you can hand to someone.
+class FullBackupTests(TransactionTestCase):
+    """The full backup: database and documents, in the shared backup folder."""
 
-    Both reports existed and neither could leave the application: the portfolio export
-    carries only the realised gains report, and there is no command. The schedule was
-    reachable only as a DataFrame in a shell, which is not an export.
-    """
+    def setUp(self):
+        from share_dinkum_app import backup
+
+        self.backup = backup
+        self.root = Path(tempfile.mkdtemp())
+        self.database = self.root / 'db.sqlite3'
+        self.media = self.root / 'media'
+        self.destination = self.root / 'backups'
+
+        connection = sqlite3.connect(self.database)
+        connection.execute('create table t (a int)')
+        connection.execute('insert into t values (42)')
+        connection.commit()
+        connection.close()
+
+        (self.media / 'AFI').mkdir(parents=True)
+        (self.media / 'AFI' / 'statement.pdf').write_bytes(b'%PDF-1.4 not really')
+
+    def test_it_copies_the_database_and_the_documents(self):
+        result = self.backup.make_backup(self.database, self.media, self.destination)
+
+        self.assertEqual(result['media_files'], 1)
+        self.assertGreater(result['database_bytes'], 0)
+        self.assertTrue((result['path'] / 'db.sqlite3').exists())
+        self.assertTrue((result['path'] / 'media' / 'AFI' / 'statement.pdf').exists())
+
+    def test_the_copied_database_is_usable(self):
+        """The copied database opens and holds the data."""
+        result = self.backup.make_backup(self.database, self.media, self.destination)
+
+        connection = sqlite3.connect(result['path'] / 'db.sqlite3')
+        self.assertEqual(connection.execute('select a from t').fetchone()[0], 42)
+        connection.close()
+
+    def test_nothing_to_back_up_returns_none(self):
+        empty = Path(tempfile.mkdtemp())
+        self.assertIsNone(self.backup.make_backup(
+            empty / 'missing.sqlite3', empty / 'missing', self.destination))
+
+    def test_the_latest_backup_is_found_by_name(self):
+        """The latest backup is found by folder name."""
+        for name in ('2026-01-01T090000', '2026-09-05T141921', '2026-03-02T120000'):
+            (self.destination / 'main' / name).mkdir(parents=True)
+        self.assertEqual(
+            self.backup.latest_backup(self.destination).name, '2026-09-05T141921')
+
+    def test_no_backups_yet(self):
+        self.assertIsNone(self.backup.latest_backup(self.destination))
+
+    def test_backups_go_into_a_named_set(self):
+        result = self.backup.make_backup(self.database, self.media, self.destination)
+        self.assertEqual(result['path'].parent.name, 'main')
+
+    def test_old_backups_are_pruned(self):
+        """Backups beyond the retention limit are pruned."""
+        for index in range(7):
+            (self.destination / 'main' / f'2026-01-0{index + 1}T090000').mkdir(parents=True)
+
+        result = self.backup.make_backup(
+            self.database, self.media, self.destination, keep=5)
+
+        kept = self.backup.list_backups(self.destination)
+        self.assertEqual(len(kept), 5)
+        self.assertIn(result['path'].name, kept, 'the new one must survive its own pruning')
+
+    def test_backups_in_the_old_flat_layout_are_still_found(self):
+        """Backups in the old flat layout are still found."""
+        (self.destination / '2026-09-05T141921').mkdir(parents=True)
+        latest = self.backup.latest_backup(self.destination)
+        self.assertEqual(latest.name, '2026-09-05T141921')
+        self.assertEqual(len(self.backup.legacy_backups(self.destination)), 1)
+
+    def test_the_old_flat_layout_is_never_pruned(self):
+        """Old-layout backups are never pruned."""
+        for index in range(7):
+            (self.destination / f'2026-01-0{index + 1}T090000').mkdir(parents=True)
+
+        self.backup.make_backup(self.database, self.media, self.destination, keep=1)
+
+        self.assertEqual(len(self.backup.legacy_backups(self.destination)), 7)
+
+
+class FullBackupButtonTests(TransactionTestCase):
+    """The dashboard's Full backup button."""
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.user = self.account.owner
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        self.url = reverse('admin:dashboard_full_backup')
+        self.root = Path(tempfile.mkdtemp())
+
+    def test_it_writes_to_disk_rather_than_downloading(self):
+        """The backup is written to disk, not returned as a download.
+
+        Only checks a directory is written: the test database is in memory.
+        """
+        with patch.object(dashboard, '_backup_root', return_value=self.root):
+            response = self.client.post(self.url, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        # A file response would carry a Content-Disposition; this one redirects to the page.
+        self.assertNotIn('Content-Disposition', response)
+
+        written = list(self.root.iterdir())
+        self.assertEqual(len(written), 1, 'one timestamped backup directory')
+        self.assertTrue(written[0].is_dir())
+
+    def test_the_message_says_where_it_went(self):
+        """The success message says where the backup went."""
+        with patch.object(dashboard, '_backup_root', return_value=self.root):
+            response = self.client.post(self.url, follow=True)
+
+        body = response.content.decode()
+        self.assertIn('Backed up to', body)
+        self.assertIn('document(s)', body)
+
+    def test_the_two_data_actions_describe_themselves_differently(self):
+        """The export and backup actions describe themselves differently."""
+        actions = {a.name: a for a in dashboard.DASHBOARD_ACTIONS}
+        export = actions['export'].description
+        full = actions['full_backup'].description
+
+        self.assertIn('load back into an empty portfolio', export)
+        self.assertIn('does not contain them', export)
+        self.assertIn('restore it by copying it back', full)
+        self.assertNotIn('This is your backup', export)
+
+
+class CGTScheduleExportTests(TransactionTestCase):
+    """The CGT schedule workbook export."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -5186,7 +4869,7 @@ class CGTScheduleExportTests(TransactionTestCase):
             tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'Warnings'})
 
     def test_money_is_written_as_numbers_a_spreadsheet_can_add_up(self):
-        """A Money object writes as text, and a column of text does not sum."""
+        """Money is written as numbers."""
         path = self._workbook()
         index = pd.read_excel(path, sheet_name='Index')
         sheet = index.set_index('table_name').loc['Summary', 'sheet_name']
@@ -5196,11 +4879,7 @@ class CGTScheduleExportTests(TransactionTestCase):
             'net_capital_gain must be numeric, not text')
 
     def test_a_draft_year_is_exported_and_says_so(self):
-        """Withholding a draft would only push someone to copy the figures out by hand.
-
-        The reasons travel with the file instead, so it still says what it is once it is
-        somewhere this application cannot reach.
-        """
+        """A draft year is exported, flagged, with its warnings."""
         # Undo the setUp declaration, so the schedule is a draft again.
         ResidencyPeriod.objects.filter(account=self.account).delete()
         self.account.taxpayer_type = 'UNDECLARED'
@@ -5215,7 +4894,7 @@ class CGTScheduleExportTests(TransactionTestCase):
         self.assertGreater(len(warnings), 0, 'and the reasons should be in the file')
 
     def test_the_return_schedule_is_laid_out_as_the_form_is(self):
-        """Rows are the form's labels and columns are years, so it is read across."""
+        """The return schedule has a row per form line and a column per year."""
         frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
         self.assertEqual(list(frame.columns), ['line', 'kind', 'FY2023/24'])
 
@@ -5227,12 +4906,7 @@ class CGTScheduleExportTests(TransactionTestCase):
             self.assertIn(category.label, lines)
 
     def test_the_categories_add_up_to_the_stated_total(self):
-        """The check that matters, and the one a wrong key silently breaks.
-
-        Keying the per-category figures on the ATO's wording rather than the stored code
-        left every box zero while the totals stayed right -- a schedule that looks filled in
-        and foots to nothing.
-        """
+        """The per-category gains add up to the stated total."""
         frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
         indexed = frame.set_index(frame['line'].str.strip())
 
@@ -5247,7 +4921,7 @@ class CGTScheduleExportTests(TransactionTestCase):
             gains + (trust or 0) + (unclassified or 0), total, places=4)
 
     def test_a_draft_year_is_marked_in_its_own_column(self):
-        """So the reader can see which columns are still moving without leaving the sheet."""
+        """Draft years are marked in their own row."""
         expected = reports.CGTScheduleReport(
             account=self.account, fiscal_year='FY2023/24').is_draft
         frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
@@ -5268,25 +4942,18 @@ class CGTScheduleExportTests(TransactionTestCase):
 
     def test_the_button_is_on_the_dashboard_under_tax(self):
         body = self.client.get(reverse('admin:dashboard')).content.decode()
-        self.assertIn('Export capital gains schedule', body)
+        self.assertIn('Export Australian CGT report', body)
         self.assertIn(self.url, body)
 
     def test_no_temporary_file_is_left_behind(self):
-        """The response is bytes, so nothing should be holding a temp file open."""
+        """No temporary file is left behind."""
         before = set(Path(tempfile.gettempdir()).glob('*.xlsx'))
         self.client.post(self.url)
         self.assertEqual(set(Path(tempfile.gettempdir()).glob('*.xlsx')) - before, set())
 
 
 class DashboardActionRegistryTests(TransactionTestCase):
-    """Every dashboard button comes from one declaration.
-
-    Each action used to cost three edits in three places -- a view, a line in a patched
-    `admin.site.get_urls`, and a hand-written block in the template -- so a fourth button
-    meant a fourth copy of the same shape. These assert the single declaration really is
-    what drives the URL, the page and the ordering, because a registry nothing reads is just
-    a list.
-    """
+    """DASHBOARD_ACTIONS drives the URLs, the page and the button order."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -5315,7 +4982,7 @@ class DashboardActionRegistryTests(TransactionTestCase):
             self.assertIn(action.description, body)
 
     def test_groups_appear_in_declaration_order(self):
-        """The order of the tuple is the order on the page, and nothing else decides it."""
+        """Groups appear in declaration order."""
         groups = dashboard.action_groups(self.account)
         self.assertEqual([g['label'] for g in groups], ['Prices', 'Tax', 'Data'])
 
@@ -5326,7 +4993,7 @@ class DashboardActionRegistryTests(TransactionTestCase):
         self.assertEqual(positions, sorted(positions))
 
     def test_an_action_status_is_rendered(self):
-        """The status line is the reason these are worth more than a row of buttons."""
+        """Each action's status line is rendered."""
         groups = dashboard.action_groups(self.account)
         export = next(a for g in groups for a in g['actions'] if a['name'] == 'export')
         self.assertEqual(export['status_text'], 'Never exported.')
@@ -5337,26 +5004,20 @@ class DashboardActionRegistryTests(TransactionTestCase):
         self.assertIn('name="include_price_history"', body)
 
     def test_the_admin_site_is_ours(self):
-        """If the AdminConfig swap silently fell back, everything else here still passes."""
+        """admin.site is a ShareDinkumAdminSite."""
         from share_dinkum_app.admin_site import ShareDinkumAdminSite
 
         site = admin.site._wrapped if hasattr(admin.site, '_wrapped') else admin.site
         self.assertIsInstance(site, ShareDinkumAdminSite)
 
     def test_model_registration_survived_the_swap(self):
-        """The risk of replacing the admin site is losing every registered model."""
+        """Models stay registered after the admin site swap."""
         response = self.client.get(reverse('admin:share_dinkum_app_instrument_changelist'))
         self.assertEqual(response.status_code, 200)
 
 
 class PostSalePriceChaseTests(TransactionTestCase):
-    """When to stop looking for a price that is never going to arrive.
-
-    A fully sold instrument was refreshed until a price appeared at or after its last sell.
-    A security that stopped being quoted before the disposal -- a company taken over, a
-    rights entitlement that expired -- can never satisfy that, so it was re-fetched on every
-    refresh forever. Two holdings here were in that state, one of them for ten years.
-    """
+    """When a price refresh stops chasing a fully sold instrument."""
 
     def setUp(self):
         self.account = create_account()
@@ -5379,7 +5040,7 @@ class PostSalePriceChaseTests(TransactionTestCase):
         return sell
 
     def _refreshed(self):
-        """The instruments a refresh would actually go to the network for."""
+        """How many instruments a price refresh fetches."""
         with patch.object(Instrument, 'update_price_history') as fetch:
             self.account.update_all_price_history()
         return fetch.call_count
@@ -5389,23 +5050,18 @@ class PostSalePriceChaseTests(TransactionTestCase):
         self.assertEqual(self._refreshed(), 1)
 
     def test_an_old_sale_with_no_price_since_is_given_up_on(self):
-        """The delisted case: the price being waited for does not exist."""
+        """An old sale with no price since is given up on."""
         long_ago = timezone.now() - timedelta(days=400)
         self._sell_everything(date.today() - timedelta(days=400), recorded_on=long_ago)
         self.assertEqual(self._refreshed(), 0)
 
     def test_a_sale_entered_months_late_is_still_chased(self):
-        """The clock runs from when the disposal was recorded, not when it happened.
-
-        Sold four months ago, typed in today. Counting from the sale date alone would have
-        closed the window before the application ever heard of the sale, so the price that
-        is genuinely available would never be fetched.
-        """
+        """A sale entered late is chased from when it was entered."""
         self._sell_everything(date.today() - timedelta(days=120))
         self.assertEqual(self._refreshed(), 1)
 
     def test_a_price_after_the_sale_ends_the_chase(self):
-        """One successful fetch settles it permanently, whatever the grace period says."""
+        """A price on or after the sale ends the chase."""
         sell_date = date.today() - timedelta(days=2)
         self._sell_everything(sell_date)
         InstrumentPriceHistory.objects.create(
@@ -5419,13 +5075,7 @@ class PostSalePriceChaseTests(TransactionTestCase):
 
 
 class InlineFieldBudgetTests(TransactionTestCase):
-    """A change page has to be submittable, not just renderable.
-
-    Every form field is a POST parameter, and Django refuses a submission carrying too many.
-    The page renders perfectly and then fails on Save, which reads as saving being broken
-    rather than the page being too large -- and it blocked confirming an instrument's legal
-    form, which is a single checkbox on a page carrying a decade of dividends.
-    """
+    """Inlines are dropped when a change page would exceed Django's field limit."""
 
     def setUp(self):
         from django.contrib.admin.sites import AdminSite
@@ -5455,17 +5105,12 @@ class InlineFieldBudgetTests(TransactionTestCase):
         self.assertIn('Buy', self._models())
 
     def test_an_inline_over_the_budget_is_dropped_rather_than_breaking_the_save(self):
-        """Dropping the inline loses a convenience; exceeding the limit loses the page."""
+        """An inline over the budget is dropped, so the page still saves."""
         self.admin.INLINE_FIELD_BUDGET = 10
         self.assertNotIn('Buy', self._models())
 
     def test_the_budget_is_measured_in_fields_rather_than_rows(self):
-        """Rows are the wrong unit: a wide model costs more per row than a narrow one.
-
-        Set the budget just under what the buys actually cost and the inline must go, even
-        though there are only twelve rows -- well inside the 200-row rule that governed this
-        before and could not see the difference.
-        """
+        """The inline budget counts fields, not rows."""
         editable = sum(1 for f in Buy._meta.fields if f.editable)
         self.admin.INLINE_FIELD_BUDGET = editable * 12
         self.assertNotIn('Buy', self._models())
@@ -5475,12 +5120,7 @@ class InlineFieldBudgetTests(TransactionTestCase):
 
 
 class CostBaseAgreesWithStatementTests(TransactionTestCase):
-    """The statement and the adjustment are entered separately, so they can disagree.
-
-    Nothing read the cost base components before this: they were recorded for completeness
-    and no code touched them, so a statement could state one figure while the adjustment
-    that actually moves parcel cost bases carried another, and the schedule said nothing.
-    """
+    """Checking a statement's stated cost base movement against its linked adjustment."""
 
     def setUp(self):
         self.account = create_account()
@@ -5512,12 +5152,7 @@ class CostBaseAgreesWithStatementTests(TransactionTestCase):
         self.assertTrue(statement.cost_base_agrees)
 
     def test_equal_legs_net_to_nil_rather_than_disagreeing(self):
-        """The case that makes reading one leg alone wrong.
-
-        A statement can declare a large excess and an equal shortfall. Checking against the
-        shortfall alone would report a 1,958.03 discrepancy on an adjustment that is
-        correctly nil -- which is a real statement from this portfolio, twice.
-        """
+        """Equal AMIT increase and decrease net to nil and agree with a nil adjustment."""
         statement = self._pair('0.00', [('COSTBASE_INCREASE', '1958.03'),
                                         ('COSTBASE_DECREASE', '1958.03')])
         self.assertEqual(statement.stated_cost_base_movement, Decimal('0'))
@@ -5533,7 +5168,7 @@ class CostBaseAgreesWithStatementTests(TransactionTestCase):
         self.assertTrue(statement.cost_base_agrees)
 
     def test_the_amit_pair_takes_precedence_over_other_lines(self):
-        """A statement can state both; the AMIT net amount is the governing figure."""
+        """The AMIT net amount takes precedence over other cost base lines."""
         statement = self._pair('122.70', [('COSTBASE_INCREASE', '122.70'),
                                           ('NON_ATTRIBUTABLE', '66.53')])
         self.assertEqual(statement.stated_cost_base_movement, Decimal('122.70'))
@@ -5544,7 +5179,7 @@ class CostBaseAgreesWithStatementTests(TransactionTestCase):
         self.assertFalse(statement.cost_base_agrees)
 
     def test_nothing_to_compare_is_not_a_pass(self):
-        """An absent check must not read as a passing one."""
+        """With nothing to compare, cost_base_agrees is None."""
         no_component = self._pair('100.00', [])
         self.assertIsNone(no_component.stated_cost_base_movement)
         self.assertIsNone(no_component.cost_base_agrees)
@@ -5557,14 +5192,7 @@ class CostBaseAgreesWithStatementTests(TransactionTestCase):
 
 
 class ReverseOneToOneInlineTests(TransactionTestCase):
-    """A reverse one-to-one is an object, not a manager, and raises when it is absent.
-
-    `AttributionStatement.cost_base_adjustment` is the app's only `OneToOneField`, and its
-    reverse accessor made every CostBaseAdjustment change page a 500 until a statement was
-    linked to it -- which is to say all of them, since the page is where you would go to
-    link one. A reverse foreign key hands back an empty manager and never raises, so the
-    generic loop over `related_objects` had no reason to expect this.
-    """
+    """A missing reverse one-to-one does not break the CostBaseAdjustment change page."""
 
     def setUp(self):
         from django.contrib.admin.sites import AdminSite
@@ -5601,13 +5229,7 @@ class ReverseOneToOneInlineTests(TransactionTestCase):
 
 
 class ConfirmLegalFormInAdminTests(TransactionTestCase):
-    """Agreeing with a suggestion, which is the case the model alone cannot express.
-
-    `Instrument.save()` promotes to USER only when the legal form changes, so a user who
-    reads a suggestion, decides it is right, and saves records nothing. That is the
-    commonest confirmation there is, and without a way to make it every schedule built on
-    a suggested instrument stays a draft.
-    """
+    """The admin's Confirm legal form tick and bulk action."""
 
     def setUp(self):
         from django.contrib.admin.sites import AdminSite
@@ -5649,7 +5271,7 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
         self.assertTrue(instrument.is_classified)
 
     def test_the_action_confirms_in_bulk(self):
-        """The back catalogue case: a portfolio's worth of closed positions at once."""
+        """The bulk action confirms several instruments at once."""
         names = ['VAS', 'VGS', 'STW']
         for name in names:
             self._suggested(name=name)
@@ -5662,7 +5284,7 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
             self.assertTrue(instrument.is_classified, f'{name} was not confirmed')
 
     def test_the_action_will_not_confirm_an_instrument_with_no_legal_form(self):
-        """There is nothing to confirm, and inventing one would decide a tax outcome."""
+        """The bulk action does not confirm an instrument with no legal form."""
         instrument = Instrument.objects.create(
             account=self.account, market=self.market, name='???',
             currency=DEFAULT_CURRENCY)
@@ -5689,7 +5311,7 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
         self.assertEqual(instrument.legal_form_source, 'USER')
 
     def test_leaving_the_tick_clear_leaves_the_suggestion_alone(self):
-        """Editing an unrelated field must not answer the question on the user's behalf."""
+        """Saving with the tick clear leaves a suggestion unconfirmed."""
         instrument = self._suggested()
         form = self.admin.get_form(self._request(), instrument)(
             instance=instrument,
@@ -5705,12 +5327,7 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
         self.assertFalse(instrument.is_classified)
 
     def test_the_tap_override_options_say_what_they_do(self):
-        """"Unknown" invites an answer, and "No" is true while still being a trap.
-
-        The dangerous option is the honest one: an ordinary listed share is not taxable
-        Australian property in its own right, and saying so overrides the departure deeming.
-        The label has to carry that, because nothing else the user sees does.
-        """
+        """The TAP override options are labelled by what they do."""
         instrument = self._suggested()
         form = self.admin.get_form(self._request(), instrument)(instance=instrument)
         rendered = str(form['is_taxable_australian_property_override'])
@@ -5721,7 +5338,7 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
         self.assertIn('overriding the departure deeming', rendered)
 
     def test_the_tap_override_still_round_trips_all_three_states(self):
-        """Only the labels changed, so the submitted values must still mean what they did."""
+        """The TAP override still round-trips all three states."""
         from share_dinkum_app.admin import UnsetNullBooleanSelect
 
         widget = UnsetNullBooleanSelect()
@@ -5748,10 +5365,10 @@ class ConfirmLegalFormInAdminTests(TransactionTestCase):
 
 
 class ClassificationClearsTheDraftTests(TransactionTestCase):
-    """End to end: confirming the legal form is what lets a schedule call itself final."""
+    """Confirming legal forms clears the schedule's draft warning, end to end."""
 
     def test_a_confirmed_instrument_clears_the_draft_warning(self):
-        """End to end: this is what the whole field exists to do."""
+        """Confirming the legal form clears the draft warning."""
         data = create_golden_master_portfolio()
         account = data['account']
         account.taxpayer_type = 'INDIVIDUAL'
@@ -5773,12 +5390,7 @@ class ClassificationClearsTheDraftTests(TransactionTestCase):
 
 
 class AssetCategoryOverrideTests(TransactionTestCase):
-    """The override names one of eight boxes on a form, not an arbitrary label.
-
-    It was free text, and `asset_category()` returned whatever was in it. Anything typed
-    there went onto a capital gains schedule as a category, which is exactly what having a
-    fixed vocabulary is supposed to prevent.
-    """
+    """The asset category override accepts only real schedule categories."""
 
     def setUp(self):
         self.account = create_account()
@@ -5816,18 +5428,13 @@ class AssetCategoryOverrideTests(TransactionTestCase):
             self.instrument.full_clean()
 
     def test_an_invented_category_is_treated_as_unknown_not_printed(self):
-        """Choices only bind forms. An Excel import writes straight past them.
-
-        The failure this guards is the quiet one: a typo reaching the schedule as though it
-        were a box on the form. Unclassified is the truthful answer and makes the report
-        flag the row instead.
-        """
+        """An invalid category override is treated as unclassified."""
         self.instrument.cgt_asset_category_override = 'Shares in Aus listed companys'
         self.assertEqual(
             cgt.asset_category(self.instrument), CGTAssetCategory.UNCLASSIFIED)
 
     def test_an_invalid_override_does_not_silently_fall_back_to_the_derivation(self):
-        """Ignoring it would discard what the user meant and look like it worked."""
+        """An invalid override does not fall back to the derived category."""
         self.instrument.cgt_asset_category_override = 'nonsense'
         self.assertNotEqual(
             cgt.asset_category(self.instrument),
@@ -5843,36 +5450,19 @@ class AssetCategoryOverrideTests(TransactionTestCase):
 
 
 class VocabularyTests(TransactionTestCase):
-    """The point of moving every fixed vocabulary into one module.
-
-    Ten choice fields were lists of tuples on model classes, and everything that reasoned
-    about them -- the whole cgt package, the signals, the commands -- compared against bare
-    string literals. Nothing checks a literal, so a rename or a missed member failed
-    silently, and here that means a wrong number on a tax return rather than an exception.
-    """
+    """Fixed vocabularies live in choices.py and are used everywhere."""
 
     def setUp(self):
         self.account = create_account()
 
     def test_an_unrecognised_taxpayer_type_is_treated_as_undeclared(self):
-        """The bug this refactor existed to remove.
-
-        `_RATE_BY_TAXPAYER_TYPE.get(taxpayer_type, FULL_DISCOUNT_RATE)` gave the full 50% to
-        anything it did not recognise. Add a taxpayer type to the model and forget it in
-        that dict and every gain that entity makes is quietly halved.
-        """
+        """An unrecognised taxpayer type is treated as undeclared."""
         self.account.taxpayer_type = 'DECEASED_ESTATE'
         self.assertEqual(
             cgt.discount.taxpayer_type_of(self.account), choices.TaxpayerType.UNDECLARED)
 
     def test_a_missing_rate_raises_rather_than_defaulting(self):
-        """The property that actually matters, stated directly.
-
-        Testing that the lookup helper works does not test that `base_rate` uses it without
-        a fallback -- a mutation restoring the old `.get(type, FULL_DISCOUNT_RATE)` passed
-        every other test here. Removing an entry and requiring a KeyError is what pins it:
-        a taxpayer type with no rate must fail loudly, not quietly become 50%.
-        """
+        """`base_rate` raises for a taxpayer type with no rate, rather than defaulting to 50%."""
         from share_dinkum_app.cgt.discount import _RATE_BY_TAXPAYER_TYPE, base_rate
         self.account.taxpayer_type = choices.TaxpayerType.SMSF
 
@@ -5885,13 +5475,13 @@ class VocabularyTests(TransactionTestCase):
         self.assertEqual(base_rate(self.account), Decimal(1) / Decimal(3))
 
     def test_every_declared_taxpayer_type_has_a_rate(self):
-        """An exhaustiveness check, which a dict with a default cannot give you."""
+        """Every taxpayer type has a rate."""
         from share_dinkum_app.cgt.discount import _RATE_BY_TAXPAYER_TYPE
         self.assertEqual(
             set(_RATE_BY_TAXPAYER_TYPE), set(choices.TaxpayerType))
 
     def test_the_asset_category_stores_a_code_and_reads_as_the_ato_wording(self):
-        """Value and label are now separate, which is what makes rewording safe."""
+        """The asset category stores a code and displays the ATO wording."""
         self.assertEqual(
             choices.CGTAssetCategory.AU_LISTED_SHARES.value, 'AU_LISTED_SHARES')
         self.assertEqual(
@@ -5899,8 +5489,7 @@ class VocabularyTests(TransactionTestCase):
             'Shares in Australian listed companies')
 
     def test_choice_values_survived_the_refactor_unchanged(self):
-        """Nothing stored in the database moved, which is why there is no data migration
-        for any field but the asset category."""
+        """Stored choice values did not change."""
         self.assertEqual(
             [c.value for c in choices.ResidencyStatus],
             ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
@@ -5913,7 +5502,7 @@ class VocabularyTests(TransactionTestCase):
         self.assertEqual([c.value for c in choices.CGTBasis], ['LEGACY', 'DIVISION_115'])
 
     def test_the_models_expose_the_shared_vocabulary(self):
-        """Both sides use one definition, so they cannot drift apart."""
+        """The models use the shared vocabularies."""
         self.assertEqual(
             [v for v, _ in Account._meta.get_field('taxpayer_type').choices],
             [c.value for c in choices.TaxpayerType])
@@ -5923,14 +5512,10 @@ class VocabularyTests(TransactionTestCase):
 
 
 class VocabularyPortfolioTests(TransactionTestCase):
-    """The two vocabulary cases that need a portfolio of their own."""
+    """Vocabulary cases that need their own portfolio."""
 
     def test_an_unrecognised_type_is_flagged_rather_than_silently_discounted(self):
-        """It still gets 50%, because that is what an undeclared account has always had.
-
-        The difference is that the schedule now says so, instead of the figure resting on a
-        lookup that missed.
-        """
+        """An unrecognised taxpayer type gets 50% and a schedule warning."""
         data = create_golden_master_portfolio()
         account = data['account']
         Account.objects.filter(pk=account.pk).update(taxpayer_type='DECEASED_ESTATE')
@@ -5941,7 +5526,7 @@ class VocabularyPortfolioTests(TransactionTestCase):
             'does not say who owns this portfolio', ' '.join(schedule.warnings))
 
     def test_the_event_report_shows_the_wording_not_the_code(self):
-        """A person filling in a schedule is looking for the box, not our identifier."""
+        """The event report shows the ATO wording, not the code."""
         data = create_golden_master_portfolio()
         data['instrument'].legal_form = choices.LegalForm.COMPANY
         data['instrument'].save()
@@ -5955,17 +5540,7 @@ class VocabularyPortfolioTests(TransactionTestCase):
 
 
 class PreDepartureDisposalTests(TransactionTestCase):
-    """A sale made before leaving Australia was never inside the I1 deeming.
-
-    s104-165(3) deems the assets you *held at the moment you ceased residency* to be taxable
-    Australian property. Something you sold years earlier was not among them. The deeming
-    was being applied on acquisition date alone, so a share bought in 2015 and sold in 2020
-    -- while still resident, eleven years before any departure -- came back as TAP.
-
-    No figure moved, because a gain is only ever disregarded when the holder was a foreign
-    resident on the day of the event, and here they were not. But the status was reported on
-    every such row, and it was wrong.
-    """
+    """A sale made before departure is outside the I1 deeming."""
 
     def setUp(self):
         self.account = create_account()
@@ -5982,12 +5557,7 @@ class PreDepartureDisposalTests(TransactionTestCase):
         self.assertEqual(self._status(date(2015, 1, 1), date(2020, 1, 1)), cgt.tap.NTAP)
 
     def test_the_question_does_not_change_the_outcome_for_a_resident(self):
-        """Whichever answer TAP takes, a resident is taxed on the gain.
-
-        s855-10 only disregards a gain for a foreign or temporary resident, so for a
-        disposal while resident the status is descriptive rather than operative -- which is
-        why the bug moved no figure.
-        """
+        """A resident's gain is not disregarded, whatever its TAP status."""
         disregarded, reason = cgt.disregard(
             self.account, cgt.tap.NTAP, date(2020, 1, 1), declared=self.declared)
         self.assertFalse(disregarded)
@@ -6000,8 +5570,7 @@ class PreDepartureDisposalTests(TransactionTestCase):
         self.assertEqual(self._status(date(2022, 1, 1), date(2026, 1, 1)), cgt.tap.NTAP)
 
     def test_a_sale_on_the_day_of_departure_is_inside_the_deeming(self):
-        """The boundary. Departure day is the first day of foreign residency, and an asset
-        disposed of on it was still held when residency ceased."""
+        """A sale on the departure day is inside the deeming."""
         self.assertEqual(self._status(date(2015, 1, 1), date(2021, 7, 1)), cgt.tap.TAP)
 
     def test_a_sale_the_day_before_departure_is_outside_it(self):
@@ -6009,12 +5578,7 @@ class PreDepartureDisposalTests(TransactionTestCase):
 
 
 class CarryForwardYearScopeTests(TransactionTestCase):
-    """A capital loss is available against later years, and only later years.
-
-    Prior losses were summed across every carry-forward row regardless of when the loss
-    arose, so a loss made in 2026 would have been applied to a schedule for 2021 -- a
-    deduction claimed years before it existed. It went unnoticed because the table was empty.
-    """
+    """Carried-forward losses apply only to later years."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -6036,14 +5600,14 @@ class CarryForwardYearScopeTests(TransactionTestCase):
             schedule.losses_carried_forward.amount, Decimal('1568.6881') + Decimal('1000'))
 
     def test_a_loss_from_a_later_year_is_not_applied_to_an_earlier_one(self):
-        """The bug. FY2023/24 must not benefit from a loss made in FY2024/25."""
+        """A later year's loss is not applied to an earlier year."""
         self._record(self.later, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
         self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
 
     def test_a_loss_from_the_same_year_is_not_double_counted(self):
-        """The year's own losses are already in the current-year pool."""
+        """A carry-forward recorded for the same year is not applied to it."""
         self._record(self.earlier, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
@@ -6059,7 +5623,7 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         self.assertEqual(schedule.net_capital_gain.amount, Decimal('1700.68085'))
 
     def test_an_explicit_override_still_wins(self):
-        """The what-if path, which does not consult the table at all."""
+        """An explicit prior_year_losses override is used as given."""
         self._record(self.later, '5000')
         schedule = cgt.build_schedule(
             self.account, self.earlier, prior_year_losses=Money(Decimal('1000'), 'AUD'))

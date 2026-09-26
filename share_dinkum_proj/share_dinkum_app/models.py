@@ -61,11 +61,9 @@ class AppUser(AbstractUser):
 
     @property
     def visible_account(self):
-        """The portfolio this user sees: the default they chose, else the first one they created.
+        """The user's default portfolio, else the first one they created.
 
-        The dashboard and the local auto-login both need this answer, and they have to agree: if
-        auto-login picks a user on one basis and the dashboard resolves a portfolio on another, you
-        get signed in to an account whose data you cannot see.
+        Shared by the dashboard and auto-login so both resolve the same portfolio.
         """
         return self.default_account or Account.objects.filter(owner=self).order_by('created_at').first()
 
@@ -87,12 +85,7 @@ class FiscalYearType(models.Model):
     start_day = models.IntegerField(default=1) # 1st (Australia)
 
     def classify_date(self, input_date):
-        """
-        Get or create a FiscalYear based on an arbitrary date.
-
-        :param input_date: A date within the fiscal year.
-        :return: A tuple of (FiscalYear instance, created (True if created, False if retrieved)).
-        """
+        """Get or create the FiscalYear containing `input_date`. Returns `(fiscal_year, created)`."""
 
         # Compute the fiscal start date for the given arbitrary date
         fiscal_start_date = date(input_date.year, self.start_month, self.start_day)
@@ -183,37 +176,20 @@ class Account(models.Model):
     update_price_history = models.BooleanField(default=False)
 
 
-    #: Decides what discount is available at all: an individual halves a capital gain, a
-    #: complying superannuation fund takes a third off, a company gets nothing. Left
-    #: undeclared rather than defaulted to an individual, because guessing wrong here is a
-    #: 50 to 100 per cent error on every gain the portfolio makes.
+    #: Sets the CGT discount: half for an individual or trust, a third for a complying super
+    #: fund, none for a company. Undeclared by default rather than guessed.
     taxpayer_type = models.CharField(
         max_length=11, choices=TaxpayerType.choices, default=TaxpayerType.UNDECLARED,
         help_text='Who owns this portfolio for tax purposes.')
 
-    #: Set once the holder has been through the tax settings, whatever they chose there.
-    #: It is what stops the dashboard nagging, so answering the question is enough --
-    #: a warning that cannot be dismissed by answering it just teaches people to ignore it.
+    #: When set, silences the dashboard's tax settings warning.
     tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
 
-    #: Whether to model the 2027 capital gains regime for this portfolio.
-    #:
-    #: A field rather than the module constant it replaces. The constant meant editing
-    #: tracked source to change a setting, which `uv run update` then refuses to pull over
-    #: ("the new version changes files you have edited"), so turning modelling on quietly
-    #: broke updates. Putting it in `.env` fixes that and is no better for the person: this
-    #: application signs you in automatically and expects a browser, not a hidden dotfile
-    #: and a restart. It belongs beside the other tax settings, where the dashboard already
-    #: sends people.
-    #:
-    #: Nothing before 1 July 2027 is affected either way -- that date is the law, not a
-    #: setting. What this changes is whether disposals after it are modelled under the new
-    #: regime, and those figures are projections: see `CGTScheduleReport`, which marks any
-    #: year containing them as a draft.
+    #: Whether disposals from 1 July 2027 are worked out under the 2027 regime. Earlier
+    #: disposals are unaffected.
     model_2027_regime = models.BooleanField(
         default=False,
         help_text='Model the 2027 capital gains changes for disposals from 1 July 2027. '
-                  'Figures for those years are projections, and the schedule says so. '
                   'Nothing before that date changes.')
 
     def __str__(self):
@@ -225,28 +201,16 @@ class Account(models.Model):
     def portfolio_value_converted(self):
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
 
-    #: How long to keep looking for a price that should have appeared after a disposal.
-    #:
-    #: The condition this bounds -- "keep fetching until a price exists at or after the last
-    #: sell" -- is one a delisted security can never satisfy. A company taken over, or a
-    #: rights entitlement that expired, stops being quoted *before* the disposal is recorded,
-    #: so the price being waited for will never exist and the instrument is re-fetched on
-    #: every refresh forever. One holding here was still being asked about ten years on.
-    #:
-    #: A week rather than a day because the window only governs retries after a failure: for
-    #: a security still trading, the first successful fetch satisfies the condition outright
-    #: and it is never asked again. Nothing depends on the answer either way -- a capital
-    #: gain is worked out from the sale proceeds, and a holding that is fully sold contributes
-    #: nothing to portfolio value -- so giving up costs a display and no figure.
+    #: Days to keep fetching a sold instrument that has no price on or after its last sale.
+    #: A delisted security never gets one, so without a limit it is fetched forever.
     POST_SALE_PRICE_GRACE_DAYS = 7
 
     def update_all_price_history(self):
-        """
-        Update price history for instruments held in this account.
+        """Update price history for this account's instruments.
 
-        Instruments with an open position are always refreshed. Instruments that have been fully
-        sold are refreshed until a data point exists after their final sell date, or until the
-        grace period above has run out.
+        Open positions are always refreshed. A fully sold instrument is refreshed until it has
+        a price on or after its last sale, or until `POST_SALE_PRICE_GRACE_DAYS` after the
+        later of the sale date and the day the sale was recorded.
         """
         instruments = Instrument.objects.filter(account=self, is_active=True)
         today = date.today()
@@ -423,11 +387,7 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
         return Money(new_amount, str(self.convert_to))
 
     def update_current(self):
-        """Update or create the CurrentExchangeRate for this historical rate.
-
-        Only the most recent known rate may drive the "current" rate. A backfilled
-        or older row must not clobber a more recent value with a stale figure.
-        """
+        """Copy this rate to CurrentExchangeRate, unless a later-dated rate exists."""
 
         if hasattr(self, 'date'):
             newer_exists = type(self).objects.filter(
@@ -478,9 +438,9 @@ class CurrentExchangeRate(AbstractExchangeRate):
 
     @classmethod
     def get_or_create(cls, account, convert_from, convert_to, force_refresh=False):
-        """
-        Get the current exchange rate. If missing, stale (>1hr), or force_refresh=True,
-        update history and refresh latest value.
+        """Get the current rate, fetching it if missing, over an hour old, or `force_refresh`.
+
+        Keeps the stored rate if the fetch fails; returns None if there is none.
         """
         obj = cls.objects.filter(
             account=account,
@@ -694,8 +654,6 @@ class Instrument(BaseModel):
     # not reveal. AFI and VAS are both ASX listed and AUD quoted; one is a company and the
     # other a unit trust, and they belong in different boxes on the form.
 
-    #: How the legal form came to be set. A suggestion is never treated as settled: a
-    #: capital gains schedule built on unconfirmed classifications is reported as a draft.
 
     name = models.CharField(max_length=16)
     description = models.CharField(max_length=255, blank=True)
@@ -707,30 +665,21 @@ class Instrument(BaseModel):
         max_length=13, choices=LegalForm.choices, default=LegalForm.UNKNOWN,
         help_text='Shown on the product disclosure statement or annual tax statement.',
     )
-    #: Where the legal form came from, not something to be filled in. It is set for you:
-    #: change the legal form yourself and it becomes USER, which is what marks the answer
-    #: as confirmed. Nothing else does, and until it happens every schedule built on the
-    #: instrument is a draft.
+    #: Where the legal form came from; set automatically, see `save`. Only USER counts as
+    #: confirmed, and schedules on unconfirmed instruments are drafts.
     legal_form_source = models.CharField(
         max_length=9, choices=LegalFormSource.choices, default=LegalFormSource.DEFAULT,
         editable=False,
     )
-    #: One of the eight boxes on the schedule, or nothing. Free text here would put
-    #: whatever was typed straight onto a tax return as a category, which is the one thing
-    #: these labels exist to prevent -- they are the form's vocabulary, not a description.
+    #: Overrides the derived schedule category. Limited to the schedule's own categories.
     cgt_asset_category_override = models.CharField(
         max_length=48, null=True, blank=True,
         choices=CGTAssetCategory.reportable_choices(),
         help_text='Leave empty. Only set this if the category worked out from the legal '
                   'form and the market is wrong for this holding.',
     )
-    #: Suppresses the derivation, rather than recording a fact. Named for what it does,
-    #: because the previous name -- `is_taxable_australian_property` -- read as a question
-    #: about the instrument, and a blank field phrased as a question invites an answer.
-    #: Answering "no" is the trap: it is the truthful answer about an ordinary listed share
-    #: on its own account, and it also switches off the s104-165(3) deeming that is the main
-    #: way such a share becomes taxable Australian property. Leaving it empty is what lets
-    #: that question be asked per parcel, which is where it belongs.
+    #: Overrides the per-parcel TAP derivation for every parcel. Leave empty normally:
+    #: "no" also switches off the s104-165(3) deeming on departure.
     is_taxable_australian_property_override = models.BooleanField(
         null=True, blank=True,
         help_text='Leave empty. Only set this if the instrument is taxable Australian '
@@ -748,25 +697,15 @@ class Instrument(BaseModel):
 
     @safe_property
     def is_classified(self):
-        """Whether the user has confirmed what this instrument legally is.
-
-        A suggestion is not a confirmation. The application can infer a legal form from a
-        ticker or from what a holding has paid, and it is usually right, but a capital gains
-        schedule reports where a gain goes on a tax return and that should rest on someone
-        having said so rather than on a guess that happened to be good.
-        """
+        """Whether the legal form is known and was set or confirmed by the user, not suggested."""
         return (self.legal_form != LegalForm.UNKNOWN
                 and self.legal_form_source == LegalFormSource.USER)
 
     def save(self, *args, **kwargs):
-        """Record who decided the legal form, so nobody has to maintain that by hand.
+        """Set `legal_form_source` to USER when the legal form is set by hand.
 
-        `legal_form_source` is not editable, and until this existed nothing ever set it to
-        USER -- so `is_classified` could never be true and the schedule report could never
-        stop calling itself a draft. The gate was there with no way through it.
-
-        Setting the legal form yourself is the confirmation. Anything that means it
-        differently, which is the suggester, says so by setting the source in the same save.
+        That is: created with a legal form and a DEFAULT source, or the legal form changed
+        without the caller also changing the source (the suggester sets its own).
         """
         if self.legal_form != LegalForm.UNKNOWN:
             previous = (
@@ -877,11 +816,10 @@ class Instrument(BaseModel):
             return f'{self.name} - {self.description} (INACTIVE)'
 
     def update_price_history(self, end_date=None):
-        """
-        Refresh price history data for this instrument up to the supplied end_date.
+        """Fetch price history up to `end_date` (default today) and update the current price.
 
-        When no end_date is provided the current date is used. The fetch always rewinds a few days
-        from the most recent stored price to account for weekends or suspensions.
+        Starts four days before the latest stored price, to cover weekends and suspensions,
+        or from the first buy if there is none.
         """
         end_date = end_date or date.today()
 
@@ -1213,16 +1151,11 @@ class Parcel(BaseModel):
         return self.total_cost_base / self.parcel_quantity
 
     def market_value_at(self, day, purpose='CUTOVER_2027'):
-        """What this parcel was worth on a day, for a deemed disposal.
+        """This parcel's market value on `day`, for a deemed disposal.
 
-        Computed from a per-unit valuation rather than stored against the parcel, which is
-        what keeps it correct across a later split or partial sale. A parcel is replaced,
-        not mutated, by `bifurcate()` and `split_or_consolidate()`, so a stored per-parcel
-        value would detach from its parcel the first time either ran, exactly as the cost
-        base adjustment allocations needed hand-written code to avoid.
-
-        Returns `(value, source)`, or `(None, None)` where no valuation is available. The
-        caller decides what to do about that; nothing here substitutes a guess.
+        Worked out from the instrument's per-unit valuation, adjusted for later splits, so it
+        survives the parcel being split or bifurcated. Returns `(value, source)`, or
+        `(None, None)` if there is no valuation.
         """
         from share_dinkum_app.cgt import cutover
 
@@ -1656,18 +1589,12 @@ class DataExport(BaseModel):
 
 
 class ResidencyPeriod(BaseModel):
-    """A period over which the account holder had one Australian tax residency status.
+    """A period with one Australian tax residency status.
 
-    The CGT discount is not a flat 50% for everyone. s115-105 and s115-115 reduce it in
-    proportion to the days the holder was a foreign or temporary resident, so the
-    application cannot work out a discount at all without knowing who was where and when.
-
-    Nothing is assumed. An account with no residency periods is treated as undeclared and
-    keeps the flat 50% the application has always applied, with every report saying so.
-    Declaring a single period of Australian residency covering the whole holding produces
-    exactly 50% again -- resident days equal total days -- so for a taxpayer who has always
-    lived in Australia this changes no figure at all. It is only ever the periods abroad
-    that move a number.
+    Used to apportion the CGT discount for days as a foreign or temporary resident
+    (s115-105, s115-115). With no periods, residency is undeclared and the flat discount
+    applies, flagged in reports. One Australian period covering every holding gives the
+    same result.
     """
 
     MODEL_DESCRIPTION = 'Periods of Australian tax residency, used to apportion the CGT discount.'
@@ -1703,12 +1630,10 @@ class ResidencyPeriod(BaseModel):
         return self.end_date is None or day <= self.end_date
 
     def validate_intrinsic(self):
-        """Checks that do not depend on what else has been loaded yet.
+        """Reject an end before the start, or an overlap with another period.
 
-        These run on every save, including an Excel import, which does not go through a
-        form and so never calls `clean()`. They are limited to what is true regardless of
-        the order rows arrive in: an import that happens to load a later period first would
-        otherwise be rejected for a gap that the next row fills.
+        Runs on every save, including imports, so it only checks what holds whatever order
+        rows are loaded in.
         """
         if self.start_date is None:
             return
@@ -1727,17 +1652,11 @@ class ResidencyPeriod(BaseModel):
                     f'describe one status at a time.')
 
     def clean(self):
-        """Everything `validate_intrinsic` checks, plus that the history hangs together.
+        """`validate_intrinsic`, plus: no gaps, no open-ended period before another, and no
+        start after the earliest buy.
 
-        A gap is not a neutral absence: a parcel bought inside one has no residency status,
-        and any status invented for it would silently decide a tax outcome. The same goes
-        for a history that starts after the earliest purchase.
-
-        These two live here rather than in `save()` because they are properties of the
-        whole set rather than of one row, so they can be transiently false part way through
-        a bulk load. Where a saved history does end up incomplete,
-        `cgt.residency.coverage_problems()` reports it and the affected gains are marked
-        rather than discounted on a guess.
+        Not run on save, as these can be briefly false mid-import. A saved history with
+        holes is reported by `cgt.residency.coverage_problems()`.
         """
         super().clean()
         self.validate_intrinsic()
@@ -1775,16 +1694,8 @@ class ResidencyPeriod(BaseModel):
 class AttributionStatement(BaseModel):
     """An annual tax statement from a managed investment trust.
 
-    A trust does not only pay cash: it *attributes* its own income to members, including
-    capital gains it made selling assets the member never held. Those gains are the
-    member's for tax purposes, and for a portfolio of ETFs they are frequently larger than
-    anything the member realised themselves. The application had no way to record them.
-
-    Modelled on the statement rather than on the payment, because that is how the
-    information arrives. A trust distributes quarterly but reports once a year, and there
-    is no defensible way to split an annual attribution across four cash payments -- so
-    this sits alongside CostBaseAdjustment, which is annual for the same reason and is
-    usually read off the very same document.
+    Records the capital gains the trust attributes to the member. Annual, like
+    CostBaseAdjustment, because attributions cannot be split across quarterly payments.
     """
 
     MODEL_DESCRIPTION = 'Annual tax statements from managed investment trusts (AMMA statements).'
@@ -1830,12 +1741,7 @@ class AttributionStatement(BaseModel):
 
     @safe_property
     def discounted_capital_gain(self):
-        """The trust's discounted capital gains attributed to this member.
-
-        Halved already, as the trust reports them. The member grosses them up, applies
-        their own capital losses, then applies their own discount percentage -- which is
-        why the schedule wants the grossed up figure rather than this one.
-        """
+        """Discounted gains as the trust reports them, already halved. Not grossed up."""
         return self.component_total('DISCOUNTED_TAP', 'DISCOUNTED_NTAP')
 
     @safe_property
@@ -1850,12 +1756,9 @@ class AttributionStatement(BaseModel):
 
     @safe_property
     def reconciles(self):
-        """Whether the components agree with the total the statement itself states.
+        """Whether the grossed-up total is within 2 cents of the stated total.
 
-        Twice the discounted gains plus the other method gains must equal the stated total.
-        Where it does not, the statement was misread or the layout was not understood, and
-        the figures should not be relied on. Returns None where the statement does not
-        state a total to check against.
+        None if the statement has no stated total.
         """
         stated = self.components.filter(component='TOTAL_CY_CG', is_active=True).first()
         if stated is None:
@@ -1864,18 +1767,11 @@ class AttributionStatement(BaseModel):
 
     @safe_property
     def stated_cost_base_movement(self):
-        """The cost base movement this statement declares, signed, or None.
+        """The cost base movement this statement declares (positive is an increase), or None.
 
-        Positive increases the cost base. Three shapes of statement say this three ways, and
-        the order below is the order they take precedence in, because a statement that
-        states an AMIT cost base net amount states the governing figure even where other
-        non-assessable lines also appear.
-
-        **The AMIT pair must be netted, never read one leg at a time.** A statement can
-        declare an excess and a shortfall that are both large and exactly equal -- 1,958.03
-        each way, netting to nil, is a real example from this portfolio -- so a check against
-        the shortfall alone would report a 1,958.03 discrepancy where the correct answer is
-        zero.
+        In order of precedence:
+        * AMIT increase less decrease, always netted, as the two can be large and equal.
+        * Otherwise, the negated non-attributable or tax-deferred amount.
         """
         def total(*components):
             found = self.components.filter(component__in=components, is_active=True)
@@ -1896,15 +1792,10 @@ class AttributionStatement(BaseModel):
 
     @safe_property
     def cost_base_agrees(self):
-        """Whether the linked cost base adjustment matches what this statement states.
+        """Whether the linked cost base adjustment is within 2 cents of the stated movement.
 
-        The two are entered separately and deliberately stay that way: the adjustment moves
-        parcel cost bases and the statement records what the issuer said, and a check is only
-        worth having while both sides are read independently. Deriving one from the other
-        would make them agree by construction and detect nothing.
-
-        Returns None where there is nothing to compare -- no linked adjustment, or no cost
-        base line transcribed -- because an absent check is not a passing one.
+        The two are entered independently so this check means something. None if either is
+        missing.
         """
         adjustment = getattr(self, 'cost_base_adjustment', None)
         if adjustment is None:
@@ -1917,11 +1808,7 @@ class AttributionStatement(BaseModel):
 
 
 class AttributionComponent(BaseModel):
-    """One line from an annual tax statement.
-
-    Long and narrow rather than a column per line: statements differ between issuers and
-    gain new categories over time, so a new component is a new row rather than a migration.
-    """
+    """One line from an annual tax statement. A row per line, so new lines need no migration."""
 
     MODEL_DESCRIPTION = 'Individual components of a managed investment trust annual statement.'
 
@@ -1944,14 +1831,10 @@ class AttributionComponent(BaseModel):
 
 
 class CGTReturnSnapshot(BaseModel):
-    """What the capital gains figures were for a fiscal year, at a point in time.
+    """A fiscal year's capital gains figures as they stood at a point in time.
 
-    Capital gains figures are derived, never stored, so improving a calculation silently
-    changes what the app reports for years the user may already have lodged. A snapshot
-    records the figures as they stood, so a later change can be detected and explained
-    rather than quietly replacing a number someone filed a return on.
-
-    Take one before lodging. CGTBasisChangeReport compares it against a fresh calculation.
+    Gains are recomputed on every report, so a calculation change can alter a lodged year.
+    Take one before lodging; CGTBasisChangeReport compares it with a fresh calculation.
     """
 
     MODEL_DESCRIPTION = 'A record of the capital gains figures for a fiscal year as they stood at a point in time.'
@@ -1979,8 +1862,7 @@ class CGTReturnSnapshot(BaseModel):
         lodged = ' (lodged)' if self.is_lodged else ''
         return f'{self.fiscal_year.name} snapshot {self.taken_at.isoformat()}{lodged}'
 
-    #: Only the fields worth comparing are captured. Identifiers locate a row; the rest are
-    #: the figures that can move.
+    #: The fields captured per row.
     CAPTURED_FIELDS = [
         'sell_allocation_id', 'sell_date', 'instrument', 'quantity_sold',
         'days_held', 'proceeds', 'cost_base', 'capital_gain',
@@ -2007,10 +1889,9 @@ class CGTReturnSnapshot(BaseModel):
 
     @classmethod
     def capture(cls, account, fiscal_year, taken_at=None, basis='LEGACY', is_lodged=False):
-        """Record the realised capital gain figures for one fiscal year.
+        """Snapshot the realised capital gains for one fiscal year.
 
-        Re-capturing on the same day replaces that day's snapshot rather than accumulating
-        near-duplicates; capturing on a later day adds to the history.
+        A second capture on the same day replaces that day's snapshot.
         """
         from share_dinkum_app.reports import RealisedCapitalGainReport
         from share_dinkum_app import version as version_module
@@ -2053,24 +1934,10 @@ class CGTReturnSnapshot(BaseModel):
 
 
 class CGTReturnSnapshotRow(BaseModel):
-    """One disposal, as it stood when a snapshot was taken.
+    """One sell allocation, as it stood when a snapshot was taken.
 
-    These were a single JSON blob on the snapshot, held as text so it would survive the
-    Excel export and import round trip through one cell. A cell holds 32,767 characters,
-    which worked out at about three hundred rows -- and rows are *sell allocations*, not
-    sales, so one sale spanning twelve parcels is twelve of them. Anyone trading actively
-    reached the cap, and `capture()` refused rather than truncating, so the feature simply
-    stopped working for them.
-
-    As ordinary rows there is no cap, the figures are queryable, and a snapshot exports as
-    its own sheet instead of an unreadable wall of JSON in one cell.
-
-    **`sell_allocation_id` is a plain UUID, not a foreign key**, and that is the whole point
-    of the model. A snapshot exists to record what the figures were *before* something
-    changed, and what changed is often the allocation itself: a later sale bifurcates a
-    parcel and its allocations are replaced. A foreign key would either block that with
-    PROTECT, or destroy the evidence with CASCADE. The identifier is kept as a value so the
-    record outlives what it points at.
+    `sell_allocation_id` is a plain UUID, not a foreign key, so the row outlives the
+    allocation if a later sale replaces it.
     """
 
     MODEL_DESCRIPTION = 'One disposal within a capital gains snapshot, as it stood when taken.'
@@ -2106,11 +1973,7 @@ class CGTReturnSnapshotRow(BaseModel):
         return f'{self.instrument} | {self.sell_date} | {self.capital_gain}'
 
     def as_dict(self):
-        """The shape the basis change report compares against.
-
-        Values stay as Decimal, Money and date rather than being flattened to text. The
-        report converts what it needs; nothing else has to parse anything.
-        """
+        """The captured fields as a dict of Decimal, Money and date values."""
         return {
             'sell_allocation_id': self.sell_allocation_id,
             'sell_date': self.sell_date,
@@ -2123,15 +1986,9 @@ class CGTReturnSnapshotRow(BaseModel):
         }
 
 class CPIIndex(models.Model):
-    """The Consumer Price Index, one row per quarter.
+    """The Consumer Price Index, one row per quarter. Shared, not per account.
 
-    Not a `BaseModel`, and deliberately not tied to an account. CPI is a published national
-    statistic, the same number for every user of this application, so hanging it off a
-    portfolio would mean each portfolio carrying its own copy of a public fact and being
-    able to disagree with the others about it.
-
-    Loaded by `manage.py load_cpi`. Where a quarter is missing, indexation raises rather
-    than guessing -- see `cgt.indexation`.
+    Loaded by `manage.py load_cpi`. Indexation raises if a quarter it needs is missing.
     """
 
     MODEL_DESCRIPTION = 'Consumer Price Index by quarter, used for cost base indexation.'
@@ -2168,20 +2025,11 @@ class CPIIndex(models.Model):
 
 
 class InstrumentValuation(BaseModel):
-    """What one unit of an instrument was worth on a given day.
+    """What one unit of an instrument was worth on a day, for a deemed disposal.
 
-    **Per unit, never per parcel**, and that is the important part. A parcel is not a stable
-    thing: `Parcel.bifurcate()` and `split_or_consolidate()` replace parcel rows rather than
-    mutating them, so anything hung off a parcel needs hand-written code to follow it across
-    a partial sale, which `CostBaseAdjustmentAllocation.bifurcate()` had to grow. A unit
-    value needs none of that. `Parcel.market_value_at()` multiplies it out on demand and
-    scales for any split that happened afterwards.
-
-    One mechanism serves four different deemed disposals, which is why it is worth having a
-    model rather than a special case for 2027: s112-155 (everyone, on 1 July 2027), s112-175
-    (pre-CGT assets on the same date), s104-165 (leaving Australia) and s855-45 (arriving).
-    Each needs the same thing -- what was this worth on that day -- and differs only in what
-    is then done with the answer.
+    Per unit rather than per parcel, because parcels are replaced when split or partly sold;
+    `Parcel.market_value_at()` multiplies it out. `purpose` says which deemed disposal it
+    is for (see `ValuationPurpose`).
     """
 
     MODEL_DESCRIPTION = 'The value of one unit of an instrument on a date, for a deemed disposal.'
@@ -2212,19 +2060,11 @@ class InstrumentValuation(BaseModel):
 
 
 class CapitalLossCarryForward(BaseModel):
-    """A capital loss available to be applied against a later year's gains.
+    """A capital loss carried forward from one year to later years.
 
-    Two quite different things share this model, distinguished by `is_opening_balance`.
-
-    An **opening balance** is a loss from a return lodged before this portfolio existed in
-    the application. Without somewhere to put it, every new user with any history gets a
-    wrong figure on their first schedule, and there is nothing in their transactions from
-    which it could be inferred. It is a number they read off their last notice of
-    assessment.
-
-    Anything else is a loss this application worked out itself for a year that has been
-    closed off. It is stored rather than recomputed so that a later correction to an old
-    year does not silently rewrite the losses a lodged return already relied on.
+    Either an opening balance from returns lodged before using this application
+    (`is_opening_balance`), or a closed year's loss. Stored rather than recomputed, so a later
+    correction does not change losses a lodged return relied on.
     """
 
     MODEL_DESCRIPTION = 'Capital losses carried forward into a later income year.'

@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='account',
             name='model_2027_regime',
-            field=models.BooleanField(default=False, help_text='Model the 2027 capital gains changes for disposals from 1 July 2027. Figures for those years are projections, and the schedule says so. Nothing before that date changes.'),
+            field=models.BooleanField(default=False, help_text='Model the 2027 capital gains changes for disposals from 1 July 2027. Nothing before that date changes.'),
         ),
     ]

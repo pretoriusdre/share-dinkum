@@ -17,7 +17,7 @@ from django.core.management import call_command
 from djmoney.money import Money
 
 import share_dinkum_app
-from share_dinkum_app import excelinterface
+from share_dinkum_app import backup as backup_module, excelinterface
 from share_dinkum_app import yfinanceinterface
 from django.db import models
 
@@ -38,22 +38,11 @@ def make_tz_naive(df):
 
 
 def restore_blank_text_defaults(df, model):
-    """Turn a blank cell back into an empty string where the column cannot hold a null.
+    """Replace None with the default (or '') in non-null CharField and TextField columns.
 
-    Excel has no way to tell an empty string from an absent value: both are an empty cell,
-    and both come back from pandas as a null that the step above turns into None. For most
-    columns that is right. For a text column declared `blank=True, null=False` -- Django's
-    own idiom for optional text, and what `AbstractUser.email` uses -- it is wrong, and the
-    insert fails on a NOT NULL constraint.
-
-    This is what made an export fail to load back into the portfolio it came from: almost
-    nobody sets an email, so almost every export carried a blank one. The backup was not a
-    backup, and there was no sign of it until the day someone needed to restore.
-
-    Deliberately narrow. Only `CharField` and `TextField` columns that are NOT NULL are
-    filled, because those are the ones where blank genuinely means empty. A missing date or
-    quantity stays None and still fails, because a row without one is a broken row and
-    should say so rather than being quietly completed with a default.
+    Excel cannot distinguish an empty string from an empty cell, so a blank optional text
+    field such as `AppUser.email` would otherwise fail its NOT NULL constraint. Other
+    columns are left as None, so a missing date or quantity still fails.
     """
     for col in df.columns:
         if col.startswith('lookup_') or '__' in col:
@@ -125,18 +114,10 @@ def queryset_to_df(queryset):
 class DataLoader():
 
     def __init__(self, account=None, input_file=None):
-        """Load a file into `account`, or into the portfolio the file itself names.
+        """Load `input_file` into `account`, or, if None, into the portfolio the file names.
 
-        Passing an account is the ordinary case: you are adding to a portfolio you already
-        have. Passing None is a restore -- the database has nothing in it, and the file has
-        to supply the portfolio as well as its contents.
-
-        A restore could not be done at all before this. The notebook creates the user and
-        the portfolio first, which gives them new ids, and then the file arrives carrying
-        the originals: the user collides on username, and every row that names the old
-        account is refused as belonging to a different portfolio. Since a DataExport is the
-        backup and the only way off this application, that made the backup one you could
-        not restore, discoverable on the one day it mattered.
+        `account=None` is a restore: the file's own Account row is loaded and used, keeping
+        its original id.
         """
         self.input_file = input_file
         self.account = account
@@ -148,11 +129,9 @@ class DataLoader():
             self.load_all_tables()
 
     def account_named_by_file(self):
-        """The portfolio this file came from, where it already exists here.
+        """The existing Account matching the file's single Account row, or None.
 
-        Returns None where it does not, which is the restore proper: the Account row is
-        loaded from the file like any other and adopted once it exists, so the portfolio
-        keeps the id every other row in the file refers to.
+        Raises ValueError if the file has no Account row or more than one.
         """
         df = self.mapping.get('Account')
         if df is None or df.empty or 'id' not in df.columns:
@@ -208,12 +187,7 @@ class DataLoader():
     
 
     def load_all_tables(self):
-        """Load every table in the file, or none of them.
-
-        A file can fail part way through, most often where a transaction names an instrument which
-        was never listed. Without a transaction that leaves a half loaded portfolio, which is hard
-        to tell apart from a complete one, so the whole file is applied as a single unit.
-        """
+        """Load every table in the file in one transaction, so a failure loads nothing."""
 
         model_load_order = self.get_model_load_order()
 
@@ -393,11 +367,9 @@ class DataLoader():
 
 
     def check_belongs_to_account(self, obj, model):
-        """Refuse to move an existing record into a different portfolio.
+        """Raise ValueError if `obj` already belongs to a different portfolio.
 
-        Records are matched on their id alone, so an export taken from one portfolio can be pointed
-        at another. The account would then be overwritten rather than a copy being made, emptying
-        the portfolio the records came from. Nobody loading a file means that, so it is stopped here.
+        Loading would otherwise move it out of that portfolio rather than copy it.
         """
         existing_account_id = getattr(obj, 'account_id', None)
         if existing_account_id is None or existing_account_id == self.account.id:
@@ -413,15 +385,11 @@ class DataLoader():
 
 
     def get_existing_by_unique_fields(self, model, record):
-        """Find the record this one would collide with, on whichever unique constraint it satisfies.
+        """The existing record this one matches, or None.
 
-        Reference tables such as Market and Instrument are unique per portfolio, so a second file
-        covering the same instruments would otherwise fail on the first repeated code.
-
-        Transactions have no unique constraint, because two identical buys on the same day are two
-        real buys. They are matched on legacy_id instead, which is the reference you give a row in
-        the file, so loading the same file twice updates those rows rather than doubling your
-        holdings. A row with no legacy_id is always added.
+        Matched on `legacy_id` within the account first, then on any unique constraint whose
+        fields are all present. Transactions have no unique constraint, so without a
+        `legacy_id` they are always added.
         """
         legacy_id = record.get('legacy_id')
         model_field_names = {field.name for field in model._meta.fields}
@@ -483,11 +451,10 @@ class DataLoader():
         return available_parcels
 
     def resolve_pinned_parcel(self, legacy_id, model, row):
-        """The parcel a manually allocated row names, or an error saying why there isn't one.
+        """The one available parcel from the buy with `legacy_id`.
 
-        This used to be a bare `assert`, which raised an AssertionError carrying no message:
-        the import stopped, and the log said only that something had gone wrong looking up a
-        legacy id. Neither the row nor the reason was recoverable from it.
+        Raises ValueError naming the cause: no such buy, nothing left to allocate, or more
+        than one available parcel.
         """
         parcels = self.get_available_parcels(legacy_id=legacy_id)
 
@@ -577,63 +544,34 @@ def force_delete_and_recreate_folder(folder_path):
 from share_dinkum_app.models import Account, DataExport
 
 class DataBackupManager:
+    """Backup and restore, with the parts that need Django.
 
-    # Seconds are included so two backups taken in the same minute do not collide. Sorting stays
-    # chronological against older folders created before seconds were added, because those names
-    # are a prefix of the longer ones.
-    BACKUP_FOLDER_FORMAT = "%Y-%m-%dT%H%M%S"
+    Copying, layout and pruning are in `share_dinkum_app.backup`. This adds the Excel
+    exports bundled with a backup, and restoring, which takes a pre-restore copy first.
+    """
 
-    RETAIN_BACKUPS = 5
+    BACKUP_FOLDER_FORMAT = backup_module.BACKUP_FOLDER_FORMAT
+    RETAIN_BACKUPS = backup_module.RETAIN_BACKUPS
 
     # Restores copy the live data here first, so an unwanted restore can be undone.
     PRE_RESTORE_NAME = 'pre_restore'
     RETAIN_PRE_RESTORE = 3
 
-    def __init__(self, base_path: Path):
-        self.base_path = Path(base_path)
-
+    def __init__(self, base_path: Path = None):
+        #: Defaults to the shared backup root; tests pass their own.
+        self.base_path = Path(base_path) if base_path else backup_module.DEFAULT_BACKUP_ROOT
 
     def list_backups(self, name):
-        """Backup folder names within a set, newest first.
-
-        Every caller orders backups through this one method. Listing and selecting from separate
-        orderings is how a restore ends up loading a different backup from the one displayed.
-        """
-        backup_base_path = self.base_path / name
-        if not backup_base_path.exists():
-            return []
-
-        return sorted(
-            (folder.name for folder in backup_base_path.iterdir() if folder.is_dir()),
-            reverse=True,
-        )
-
+        """Backup folder names within a set, newest first."""
+        return backup_module.list_backups(self.base_path, name)
 
     @staticmethod
     def copy_sqlite_database(source: Path, destination: Path):
-        """Copy a SQLite database using its online backup API.
-
-        A plain file copy of a database that is being written to can capture a torn file, and the
-        development server may well be running while a backup is taken. The backup API takes a
-        consistent snapshot regardless.
-        """
-        source_connection = sqlite3.connect(f'file:{source}?mode=ro', uri=True)
-        try:
-            destination_connection = sqlite3.connect(destination)
-            try:
-                with destination_connection:
-                    source_connection.backup(destination_connection)
-            finally:
-                destination_connection.close()
-        finally:
-            source_connection.close()
-
+        """Alias for `backup.copy_sqlite_database`."""
+        backup_module.copy_sqlite_database(source, destination)
 
     def create_data_exports_for_all_accounts(self, include_price_history: bool = True):
-        """
-        Create a DataExport for each Account.
-        The signals attached to DataExport will generate the files automatically.
-        """
+        """Create a DataExport for every account; a signal writes each file."""
         accounts = Account.objects.all()
         logger.info(f"Creating DataExport for {accounts.count()} accounts")
         with transaction.atomic():
@@ -645,55 +583,41 @@ class DataBackupManager:
                 export.refresh_from_db()
 
 
-    def cleanup_old_backups(self, name, keep=5):
+    def cleanup_old_backups(self, name, keep=None):
+        """Keep only the most recent `keep` backups in a set."""
+        removed = backup_module.cleanup_old_backups(
+            self.base_path, name, keep or self.RETAIN_BACKUPS)
+        for folder_name in removed:
+            logger.info('Deleted old backup: %s', folder_name)
+
+    def backup(self, name=backup_module.DEFAULT_NAME, include_data_export=True):
+        """Copy the database and media into a new backup, pruning older ones.
+
+        `include_data_export` first writes an Excel export per portfolio into media, so the
+        backup includes a readable copy. Returns the `make_backup` result, or None if there
+        is no data.
         """
-        Keep only the most recent 'keep' backups in the specified backup folder.
-        """
-        logger.info(f"Cleaning up old backups in {name}, keeping the most recent {keep} backups.")
-        backup_base_path = self.base_path / name
-        if not backup_base_path.exists():
-            logger.info(f"No backups found in {backup_base_path} to clean up.")
-            return
+        if include_data_export:
+            self.create_data_exports_for_all_accounts()
 
-        for folder_name in self.list_backups(name)[keep:]:
-            old_backup = backup_base_path / folder_name
-            try:
-                shutil.rmtree(old_backup)
-                logger.info(f"Deleted old backup: {old_backup}")
-            except Exception as e:
-                logger.error(f"Failed to delete old backup {old_backup}: {e}", exc_info=True)
+        result = backup_module.make_backup(
+            database=Path(settings.DATABASES['default']['NAME']),
+            media=Path(settings.MEDIA_ROOT),
+            root=self.base_path,
+            name=name,
+            keep=self.RETAIN_BACKUPS,
+        )
+        if result is None:
+            logger.info('No data to back up yet.')
+            return None
 
-
-
-    def backup(self, name):
-        """
-        Backup SQLite DB, media folder, and create DataExport files for all accounts.
-        """
-        folder_name = datetime.now().strftime(self.BACKUP_FOLDER_FORMAT)
-        backup_path = self.base_path / name / folder_name
-
-        backup_path.mkdir(parents=True, exist_ok=False)
-
-        # Create DataExports for all accounts
-        self.create_data_exports_for_all_accounts()
-
-        # Backup SQLite DB
-        db_file = Path(settings.DATABASES['default']['NAME'])
-        backup_db_file = backup_path / db_file.name
-        logger.info(f"Backing up SQLite DB from {db_file} to {backup_db_file}")
-        self.copy_sqlite_database(db_file, backup_db_file)
-
-        # Backup media folder (includes DataExport files)
-        media_backup = backup_path / "media"
-        shutil.copytree(Path(settings.MEDIA_ROOT), media_backup)
-
-        self.cleanup_old_backups(name=name, keep=self.RETAIN_BACKUPS)
-
-        logger.info(f"Backup completed successfully at {backup_path}")
+        logger.info('Backup completed successfully at %s', result['path'])
+        return result
 
     def restore(self, name):
-        """
-        Restore SQLite DB and media folder from backup.
+        """Interactively restore the database and media from one of a set's five latest backups.
+
+        Asks which backup and for confirmation, then takes a pre-restore copy first.
         """
 
         backup_base_path = self.base_path / name
@@ -755,11 +679,9 @@ class DataBackupManager:
 
 
     def snapshot_current_data(self):
-        """Copy the live database and media aside so that a restore can be undone.
+        """Copy the live database and media to the pre-restore set, so a restore can be undone.
 
-        Deliberately does not create DataExport records the way backup() does: this runs on data
-        that is about to be replaced, and should not write to the database it is preserving.
-        Recover with restore(name=DataBackupManager.PRE_RESTORE_NAME).
+        Writes nothing to the database. Undo with `restore(name=PRE_RESTORE_NAME)`.
         """
         folder_name = datetime.now().strftime(self.BACKUP_FOLDER_FORMAT)
         snapshot_path = self.base_path / self.PRE_RESTORE_NAME / folder_name

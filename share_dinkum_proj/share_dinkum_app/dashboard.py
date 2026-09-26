@@ -1,31 +1,20 @@
 """The admin dashboard: what it shows, and the actions it offers.
 
-Split out of `admin.py`, which had grown to hold the model admins and the whole dashboard
-at once.
-
-The actions are declared rather than written out. Each one used to cost three separate
-edits -- a view here, a line in a patched `admin.site.get_urls`, and a hand-written block in
-the template -- so every new button was a fourth copy of the same shape, and the copies had
-begun to drift. `DASHBOARD_ACTIONS` is now the single place: the URL, the button, its
-grouping and its status line all come from one entry, and `ShareDinkumAdminSite` and the
-template both read from it.
-
-What an action must carry is the interesting part. A button on its own is not much use --
-the question a person actually has is *whether they need to press it*, so an action names a
-`status` callable answering "when was this last done" ("Latest close held: 2026-09-05",
-"Never exported.") and a `description` answering "what will this do to me". Both are read
-straight off the page rather than remembered.
+Each action is one entry in `DASHBOARD_ACTIONS`, which supplies its URL, button, group,
+`description` (what it does) and `status` (when it was last done, e.g. "Never exported.").
+`ShareDinkumAdminSite` and the template both read from it.
 """
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Callable
 import logging
 import tempfile
 
+from django.conf import settings
 from django.contrib import admin, messages
 from django.db.models import Max
 from django.http import FileResponse, HttpResponse
@@ -91,7 +80,7 @@ def _format_money(money):
 
 
 def _export_last_taken(account):
-    """When this portfolio was last exported, so the page can say whether it is due."""
+    """The date of this portfolio's latest data export, or None."""
     if account is None:
         return None
     latest = (
@@ -104,11 +93,7 @@ def _export_last_taken(account):
 
 
 def _snapshot_last_taken(account):
-    """When this portfolio last had a capital gains snapshot taken.
-
-    Shown beside the button for the same reason as the price date: whether it is worth
-    pressing is a question the page can answer.
-    """
+    """The date of this portfolio's latest capital gains snapshot, or None."""
     if account is None:
         return None
     return (
@@ -119,11 +104,7 @@ def _snapshot_last_taken(account):
 
 
 def _prices_last_updated(account):
-    """The most recent day this portfolio has a closing price for.
-
-    Shown next to the refresh button so the answer to "do I need to press this?" is on the
-    page rather than in the user's head.
-    """
+    """The latest date this portfolio has a price for, or None."""
     if account is None:
         return None
     return (
@@ -134,12 +115,10 @@ def _prices_last_updated(account):
 
 
 def _tax_settings_warning(account):
-    """Whether this account's capital gains rest on an assumption nobody has confirmed.
+    """A warning if capital gains rest on undeclared tax settings, else None.
 
-    Only raised once there is something at stake -- an account with no sales has no capital
-    gain to get wrong -- and it goes quiet permanently once the user has been to the tax
-    settings, whatever they chose there. A banner that cannot be dismissed by answering it
-    trains people to ignore banners.
+    Raised when the account has sales and its taxpayer type or residency is undeclared, or
+    its residency history has holes. Silenced by `tax_settings_reviewed_at`.
     """
     if account is None or account.tax_settings_reviewed_at is not None:
         return None
@@ -177,11 +156,8 @@ def prepare_dashboard_context(request, context):
     total_portfolio_value_display = None
     parcel_labels = []
     parcel_values = []
-    #: Summed from the slices actually drawn rather than read off the account, so the
-    #: caption can never disagree with the chart above it. The two are normally the same
-    #: figure, but an instrument whose conversion fails is skipped for the chart and would
-    #: still count towards the account total -- and a total that does not add up to its own
-    #: parts is worse than no total at all.
+    #: Summed from the chart's slices, not read off the account, so the caption always
+    #: matches the chart (an instrument that fails to convert is left out of both).
     parcel_total = Decimal('0')
     parcel_total_display = None
     income_labels = []
@@ -589,18 +565,9 @@ def dashboard_view(request):
 
 @require_POST
 def export_data_view(request):
-    """Build a full Excel export of the portfolio and hand it straight back.
+    """Create a DataExport and return its Excel file as a download.
 
-    Exporting meant opening Data exports, adding a record, saving it, and then finding the
-    file on the record that the save had generated. The record is worth keeping -- it is the
-    history of what was exported and when -- but it should not be the interface.
-
-    The file is streamed as the response rather than being linked to. A link would depend on
-    media being served, which differs between a local run and anything behind a real web
-    server, and would hand out a URL to a file containing the whole portfolio.
-
-    Price history is excluded unless asked for. It is by far the largest table and it is
-    reconstructible from the market, which the rest of the file is not.
+    Price history is included only if the `include_price_history` option is ticked.
     """
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
@@ -637,17 +604,9 @@ def export_data_view(request):
 
 @require_POST
 def capture_snapshot_view(request):
-    """Record the capital gains figures for every year that has a sale.
+    """Take a capital gains snapshot for every fiscal year with a sale.
 
-    Capital gains are worked out on demand and never stored, so improving a calculation
-    changes what the application says about a year that may already have been filed. This is
-    the record of what it said beforehand, and the only way to create one: the figures come
-    from the report rather than from anything typed, and the model will not let them be
-    edited afterwards.
-
-    Snapshots are deliberately **not** marked as lodged here. Whether a set of figures was
-    actually filed with the ATO is a claim about the outside world that the application has
-    no way to verify, so it stays a box the user ticks themselves.
+    Snapshots are not marked lodged; the user ticks that themselves.
     """
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
@@ -701,18 +660,9 @@ def capture_snapshot_view(request):
 
 @require_POST
 def refresh_prices_view(request):
-    """Refresh prices and exchange rates for the portfolio the user is looking at.
+    """Refresh prices and exchange rates for the user's portfolio.
 
-    This exists because the only way to do it was to open the account, tick a checkbox
-    called "update price history", and save -- at which point a signal did the work and
-    unticked it again. That is a button wearing a field's clothing, and nobody found it.
-
-    POST only, because it reaches out to a market data provider and writes. A GET would let
-    a link, a prefetch or a refresh trigger it, and the request is slow enough that firing it
-    twice is worse than merely wasteful.
-
-    The work itself is unchanged: this sets the same flag and saves, so there is one
-    implementation of "refresh this portfolio" rather than two that can drift.
+    Sets `Account.update_price_history` and saves; a signal does the work.
     """
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
@@ -752,14 +702,9 @@ def refresh_prices_view(request):
 
 @require_POST
 def export_cgt_schedule_view(request):
-    """Hand back the capital gains schedule as a workbook.
+    """Return the capital gains schedule as an Excel download.
 
-    Built into a temporary file and returned as bytes rather than streamed from disk. The
-    portfolio export streams from the `DataExport` record it creates, but there is no record
-    to create here -- a schedule is derived and reproducible, so storing one would be
-    keeping a stale copy of something the application can always work out again. That leaves
-    only a temp file, whose handle would have to outlive the response; reading ~50KB into
-    memory avoids the question entirely.
+    Built in a temporary file, read into memory and deleted; nothing is stored.
     """
     from share_dinkum_app.reports import cgt_schedule_workbook
 
@@ -792,6 +737,33 @@ def export_cgt_schedule_view(request):
     return response
 
 
+@require_POST
+def full_backup_view(request):
+    """Back up the database and media to the backups folder, not as a download."""
+    from share_dinkum_app import backup as backup_module
+
+    dashboard_url = reverse('admin:dashboard')
+    database = Path(settings.DATABASES['default']['NAME'])
+    media = Path(settings.MEDIA_ROOT)
+
+    try:
+        result = backup_module.make_backup(database, media, _backup_root())
+    except Exception as exc:
+        logger.warning('Full backup failed: %s', exc, exc_info=True)
+        messages.error(request, f'Could not complete the backup: {exc}')
+        return redirect(dashboard_url)
+
+    if result is None:
+        messages.info(request, 'There is no data to back up yet.')
+        return redirect(dashboard_url)
+
+    messages.success(
+        request,
+        f'Backed up to {result["path"]} — {result["database_bytes"] / 1024 / 1024:.1f} MB '
+        f'database and {result["media_files"]} document(s).')
+    return redirect(dashboard_url)
+
+
 @dataclass(frozen=True)
 class ActionOption:
     """A checkbox posted along with an action, such as "include price history"."""
@@ -802,15 +774,10 @@ class ActionOption:
 
 @dataclass(frozen=True)
 class DashboardAction:
-    """One button on the dashboard, and everything the page needs to render it.
+    """One dashboard button and everything needed to render and route it.
 
-    `name` becomes the URL name as `admin:dashboard_<name>`. Those names are reversed by the
-    template and by the tests, so they are part of the interface and not free to change.
-
-    `status` is given the account and returns whatever the page should say about when this
-    was last done. It is separate from `description` on purpose: the description is fixed
-    text about what the button does, while the status is the changing fact that tells you
-    whether to press it at all.
+    * `name` gives the URL name `admin:dashboard_<name>`, used by the template and tests.
+    * `status(account)` returns text on when it was last done; `description` says what it does.
     """
 
     name: str
@@ -822,12 +789,9 @@ class DashboardAction:
     status: Callable | None = None
     options: tuple[ActionOption, ...] = ()
     primary: bool = False
-    #: What the button says while it is working. These actions run synchronously and can
-    #: take a while, so a button that still looks clickable invites a second press and a
-    #: second full run.
+    #: Button text while the (synchronous) action runs; the button is disabled meanwhile.
     busy_label: str = 'Working...'
-    #: True where the response is a file rather than a page. Such a form never navigates,
-    #: so a disabled button would stay disabled for good and has to be put back by hand.
+    #: True if the response is a file download, so the page must re-enable the button.
     returns_file: bool = False
 
     @property
@@ -852,9 +816,32 @@ def _export_status(account):
     return f'Last exported {localize(latest)}.' if latest else 'Never exported.'
 
 
-#: Every action the dashboard offers, in the order it is shown. Grouped so that five of them
-#: read as three short lists rather than one long one; the groups are the kinds of thing a
-#: person comes to the dashboard to do, not the models involved.
+def _backup_root():
+    """The backup root shared with `uv run update` and the notebook."""
+    from share_dinkum_app import backup as backup_module
+
+    return backup_module.DEFAULT_BACKUP_ROOT
+
+
+def _backup_status(account):
+    """When the latest backup was taken, read from the backup folder names."""
+    from share_dinkum_app import backup as backup_module
+
+    latest = backup_module.latest_backup(_backup_root())
+    if latest is None:
+        return 'No backup taken yet.'
+    try:
+        taken = datetime.strptime(latest.name, '%Y-%m-%dT%H%M%S')
+    except ValueError:
+        # A folder someone put there by hand. Say what it is called rather than nothing.
+        return f'Last backup {latest.name}.'
+    # A localised datetime ends in "p.m." already, and a second full stop next to it reads
+    # as a typo. A date does not, so the other status lines still add their own.
+    text = localize(taken)
+    return f'Last backup {text}' + ('' if text.endswith('.') else '.')
+
+
+#: Every dashboard action, in display order.
 DASHBOARD_ACTIONS = (
     DashboardAction(
         name='refresh_prices',
@@ -872,8 +859,7 @@ DASHBOARD_ACTIONS = (
         route='capture-snapshot/',
         group='Tax',
         label='Take capital gains snapshot',
-        description=('Take one before changing your tax settings, so any figure that moves '
-                     'can be explained.'),
+        description='Used later to show whether any figure has moved.',
         view=capture_snapshot_view,
         status=_snapshot_status,
         busy_label='Taking snapshot...',
@@ -882,9 +868,8 @@ DASHBOARD_ACTIONS = (
         name='export_cgt_schedule',
         route='export-cgt-schedule/',
         group='Tax',
-        label='Export capital gains schedule',
-        description=('Every year in one workbook: the figures a return asks for, the '
-                     'categories behind them, every event, and whether each year is final.'),
+        label='Export Australian CGT report',
+        description='Every year in one workbook.',
         view=export_cgt_schedule_view,
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
@@ -899,24 +884,31 @@ DASHBOARD_ACTIONS = (
         route='export/',
         group='Data',
         label='Export portfolio',
-        description=('An Excel file of everything, which loads back into an empty portfolio. '
-                     'This is your backup.'),
+        description=('One Excel file of your records, which you can read and load back into '
+                     'an empty portfolio. It names your documents but does not contain '
+                     'them, and leaves out price history unless asked, since the market can '
+                     'supply that again.'),
         view=export_data_view,
         status=_export_status,
         options=(ActionOption(name='include_price_history', label='include price history'),),
         busy_label='Building...',
         returns_file=True,
     ),
+    DashboardAction(
+        name='full_backup',
+        route='full-backup/',
+        group='Data',
+        label='Full backup',
+        description=('Copies the complete database and all attached documents to a separate folder.'),
+        view=full_backup_view,
+        status=_backup_status,
+        busy_label='Backing up...',
+    ),
 )
 
 
 def action_groups(account):
-    """The actions arranged for the template: an ordered list of (group, [actions]).
-
-    Built here rather than in the template so that the template loops over data instead of
-    deciding anything. Group order follows first appearance in DASHBOARD_ACTIONS, so the
-    order of the tuple above is the order on the page.
-    """
+    """`DASHBOARD_ACTIONS` as `[(group, [actions])]`, groups in order of first appearance."""
     groups = []
     index_by_group = {}
     for action in DASHBOARD_ACTIONS:
