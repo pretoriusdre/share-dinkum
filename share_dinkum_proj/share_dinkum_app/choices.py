@@ -1,23 +1,7 @@
-"""Every fixed vocabulary in the application, in one place.
+"""Every fixed vocabulary (TextChoices) in the application.
 
-These were lists of tuples on the model classes, and everything that reasoned about them --
-the whole `cgt` package, the signals, the management commands -- compared against bare
-string literals. Nothing checks a literal. A rename, a typo, or a new member added to a
-model and missed in a lookup fails silently, and in this application "silently" means a
-wrong number on a tax return rather than an exception.
-
-Two rules follow from that, and they are why this module exists rather than the enums
-hanging off the models:
-
-**The `cgt` package must not import models.** It reads them, but only through objects handed
-to it, and `Instrument.cgt_asset_category` already needs a deferred import to avoid the
-cycle. Putting the vocabularies here lets both sides share one definition without either
-depending on the other.
-
-**Values are stable, labels are not.** A label is English shown to a person and can be
-reworded; a value is what sits in the database and gets compared. Keeping them separate is
-what stops a change of wording from silently reclassifying stored rows -- which the asset
-categories previously risked, since the category *was* its own label.
+Here rather than on the models so `cgt` can use them without importing models at module
+level. Values are stored and compared, so they must not change; labels can be reworded.
 """
 
 from django.db import models
@@ -57,12 +41,7 @@ class LegalFormSource(models.TextChoices):
 
 
 class CGTAssetCategory(models.TextChoices):
-    """The eight boxes on the ATO Capital Gains Tax Schedule, in form order.
-
-    The label is the ATO's wording and the value is ours. They used to be the same string,
-    which meant the database stored a 37-character English sentence and every comparison in
-    the package rested on it -- so rewording a box would have reclassified stored rows.
-    """
+    """The eight categories on the ATO CGT schedule, in form order. Labels are ATO wording."""
 
     AU_LISTED_SHARES = 'AU_LISTED_SHARES', 'Shares in Australian listed companies'
     OTHER_SHARES = 'OTHER_SHARES', 'Other shares'
@@ -73,8 +52,7 @@ class CGTAssetCategory(models.TextChoices):
     COLLECTABLES = 'COLLECTABLES', 'Collectables'
     OTHER_ASSETS = 'OTHER_ASSETS', 'Other assets'
 
-    #: Not a box on the form. An asset nobody has classified is visibly unknown rather than
-    #: quietly falling into a taxable category, and a schedule carrying one stays a draft.
+    #: Not on the form: the category could not be worked out. Makes a schedule a draft.
     UNCLASSIFIED = 'UNCLASSIFIED', 'Unclassified'
 
     @classmethod
@@ -84,11 +62,7 @@ class CGTAssetCategory(models.TextChoices):
 
     @classmethod
     def label_for(cls, value):
-        """The ATO's wording for a stored value.
-
-        Reports render this rather than the value. A schedule is read by a person filling in
-        a form, and "AU_LISTED_SHARES" is not a box on it.
-        """
+        """The label for a stored value, or the value itself if unrecognised."""
         try:
             return cls(value).label
         except ValueError:
@@ -96,11 +70,7 @@ class CGTAssetCategory(models.TextChoices):
 
     @classmethod
     def reportable_choices(cls):
-        """Choices for a field that may only name a real box on the form.
-
-        UNCLASSIFIED is an answer the application reaches on its own when it does not know;
-        it is not something a user should be able to select as an override.
-        """
+        """Choices excluding UNCLASSIFIED, for the override field."""
         return [(member.value, member.label) for member in cls.reportable()]
 
 
@@ -162,25 +132,15 @@ class AttributionComponent(models.TextChoices):
     # such a statement cannot be transcribed at all. Which line moves a cost base differs
     # between the two, and getting that backwards is the whole reason to record them
     # separately rather than mapping them onto the AMIT names.
-    #: Reduces the cost base under CGT event E4. On a pre-AMIT statement this is the line
-    #: that does what the AMIT cost base net amount does, and a nil here is what shows a
-    #: nil adjustment was read rather than never entered.
+    #: Pre-AMIT: reduces the cost base (CGT event E4).
     TAX_DEFERRED = 'TAX_DEFERRED', 'Tax-deferred amount (reduces cost base)'
-    #: Does not touch the cost base. s104-71(3) excludes the part of a non-assessable
-    #: payment attributable to the CGT discount from the E4 reduction, so recording this as
-    #: a cost base movement would understate every later gain.
+    #: Does not adjust the cost base (s104-71(3)).
     CGT_CONCESSION = 'CGT_CONCESSION', 'CGT concession amount (does not adjust cost base)'
-    #: Leaves the cost base alone but reduces the reduced cost base, so it can only ever
-    #: make a loss smaller, never a gain larger. Tax-free and tax-exempt are stated as
-    #: separate lines on a Vanguard statement and are kept separate here for that reason:
-    #: a transcription that has to merge two printed lines into one is not a transcription.
+    #: Reduce only the reduced cost base. Kept as two lines, as statements print them.
     TAX_FREE = 'TAX_FREE', 'Tax-free amount (reduces reduced cost base only)'
     TAX_EXEMPT = 'TAX_EXEMPT', 'Tax-exempt amount (reduces reduced cost base only)'
-    #: Cash distributed in excess of what the trust attributed. Some AMIT statements
-    #: state this instead of an AMIT cost base net amount, under 'other non-assessable
-    #: amounts', and it is what reduces the cost base on those. Kept distinct from
-    #: TAX_DEFERRED because the two belong to different regimes and appear on
-    #: differently shaped statements; reading one as the other loses that.
+    #: Cash in excess of the attribution. Reduces the cost base on AMIT statements that give
+    #: this instead of an AMIT cost base net amount.
     NON_ATTRIBUTABLE = 'NON_ATTRIBUTABLE', 'Other non-attributable amount (reduces cost base)'
 
     # Income, which is not a capital gain but arrives on the same statement.

@@ -1,11 +1,6 @@
-"""Build an empty import template from the models themselves.
+"""Build an empty import template (headers only) from the models, for a new portfolio.
 
-The template shipped with the project doubles as sample data, so it carries a couple of thousand
-instrument rows that have to be deleted before it is any use as a starting point. This builds the
-same workbook with the headers only, which is what you want when setting up another portfolio.
-
-Generating it from the models rather than keeping a second file by hand also means the headers
-cannot drift away from what the loader expects.
+Generated from the models so the headers always match what the loader expects.
 """
 
 from pathlib import Path
@@ -57,12 +52,7 @@ EXTRA_COLUMNS = {
 
 
 def get_lookup_column(field):
-    """The column name used to point at a related record by something a person would recognise.
-
-    Matches the `foo__bar` form that the loader resolves, filtered to the portfolio being loaded.
-    Returns None where the related model has nothing readable to match on, in which case the field
-    is left out of the template.
-    """
+    """The `field__name` or `field__code` lookup column for a relation, or None if neither exists."""
     related_field_names = {f.name for f in field.related_model._meta.fields}
     for candidate in ('name', 'code'):
         if candidate in related_field_names:
@@ -71,7 +61,7 @@ def get_lookup_column(field):
 
 
 def get_template_columns(model):
-    """The columns a person fills in for one model, in the order they are easiest to read."""
+    """A model's fillable columns: legacy_id first, notes last, currency after its amount."""
     field_names = {f.name for f in model._meta.fields}
     money_field_names = {f.name for f in model._meta.fields if isinstance(f, MoneyField)}
 

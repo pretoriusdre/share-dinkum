@@ -1,25 +1,15 @@
-"""Where the account holder was, and when.
+"""The account holder's residency history, and day counting over it.
 
-Nothing else in this package can characterise a gain without an answer here. The CGT
-discount is apportioned by residency (s115-105, s115-115), whether a gain can be
-disregarded altogether turns on it (s855-10), and so does whether indexation is available
-from 2027 (s114-25). One module owns the day counting so those three do not each grow their
-own slightly different version of it.
-
-**An account with no declared residency is not assumed to be resident.** It is `LEGACY`:
-the flat 50% the application has always applied, reported as an assumption rather than as a
-fact. Declaring residency is what switches an account to `DIVISION_115`, and for a taxpayer
-who has always lived in Australia the two produce identical figures -- resident days equal
-total days -- so the declaration costs such a user nothing and buys everyone else
-correctness.
+Used for discount apportionment (s115-105, s115-115), disregarding gains (s855-10) and
+indexation (s114-25). With no periods declared the basis is `LEGACY`: the flat discount,
+reported as an assumption. Declaring periods switches it to `DIVISION_115`.
 """
 
 from datetime import date, timedelta
 
 from share_dinkum_app.choices import CGTBasis, ResidencyStatus
 
-#: Re-exported so a caller reasoning about residency does not have to know where the
-#: vocabulary is defined.
+#: Re-exported from ResidencyStatus.
 RESIDENT = ResidencyStatus.RESIDENT
 FOREIGN = ResidencyStatus.FOREIGN
 TEMPORARY = ResidencyStatus.TEMPORARY
@@ -27,14 +17,10 @@ TEMPORARY = ResidencyStatus.TEMPORARY
 #: Residency has been declared, so Division 115 apportionment applies.
 BASIS_DIVISION_115 = CGTBasis.DIVISION_115
 
-#: Residency has not been declared. The flat 50% is applied and said to be an assumption.
+#: Residency has not been declared. The flat rate is applied and flagged as an assumption.
 BASIS_LEGACY = CGTBasis.LEGACY
 
-#: Foreign and temporary residency before this date does not reduce the discount.
-#: s115-115(2) and (3) apportion only over days after 8 May 2012, the date the discount was
-#: withdrawn from foreign residents. A gain accrued while abroad in 2005 keeps its full
-#: discount, which is why the naive "resident days over total days" formula is wrong for
-#: anyone with a long holding.
+#: Days abroad on or before this date do not reduce the discount (s115-115).
 APPORTIONMENT_START_DATE = date(2012, 5, 8)
 
 
@@ -50,7 +36,7 @@ def periods(account):
 
 
 def basis(account, declared=None):
-    """Whether this account's gains are characterised by declaration or by assumption."""
+    """DIVISION_115 if any residency is declared, else LEGACY."""
     if declared is None:
         declared = periods(account)
     return BASIS_DIVISION_115 if declared else BASIS_LEGACY
@@ -86,16 +72,9 @@ def _inclusive_days(start, end):
 
 
 def days_by_status(account, start, end, declared=None):
-    """How many days in [start, end] fall in each declared status.
+    """Days in [start, end], both inclusive (s115-105(2)(d)), counted by status.
 
-    Both endpoints count. s115-105(2)(d) describes the discount testing period as
-    "starting on the day you acquired the CGT asset and ending on the day the CGT event
-    happens", and the ATO's own apportionment worksheet counts both of those days, so a
-    parcel bought and sold on the same day is one day, not none.
-
-    Days not covered by any declared period are returned under None. That should be
-    impossible once `ResidencyPeriod.clean()` has run, but a spreadsheet import can reach
-    the database without it, and a silent zero there would quietly grant a full discount.
+    Days no period covers are counted under None.
     """
     counts = {}
     if start is None or end is None or end < start:
@@ -124,12 +103,7 @@ def resident_days(account, start, end, declared=None):
 
 
 def non_resident_days(account, start, end, declared=None):
-    """Days of foreign or temporary residency in [start, end].
-
-    Temporary residents count with foreign residents: s115-105(2)(e) reaches anyone who was
-    "a foreign resident or a temporary resident", and the apportionment in s115-115 is
-    driven by the days that were *not* days of Australian residency.
-    """
+    """Days of foreign or temporary residency in [start, end] (s115-105(2)(e))."""
     counts = days_by_status(account, start, end, declared=declared)
     return counts.get(FOREIGN, 0) + counts.get(TEMPORARY, 0)
 
@@ -140,11 +114,9 @@ def undeclared_days(account, start, end, declared=None):
 
 
 def has_non_resident_days_after_cutoff(account, start, end, declared=None):
-    """The s115-105(2)(e) test: any foreign or temporary residency after 8 May 2012.
+    """The s115-105(2)(e) test: any foreign or temporary day in [start, end] after 8 May 2012.
 
-    This is the switch that decides whether apportionment happens at all. It is deliberately
-    a test over the *whole* ownership period rather than over the year of sale, which is why
-    a returned expatriate stays caught by it for as long as they hold the asset.
+    Tests the whole ownership period, so a returned expatriate stays caught.
     """
     if start is None or end is None:
         return False
@@ -153,12 +125,7 @@ def has_non_resident_days_after_cutoff(account, start, end, declared=None):
 
 
 def first_departure(account, declared=None):
-    """The first move from Australian residency to foreign or temporary residency.
-
-    Returns the period that begins the absence, or None. This is what s104-165 hangs on:
-    leaving Australia triggers CGT event I1, and the choice made then decides whether the
-    assets held at that moment stay inside the Australian net.
-    """
+    """The first non-resident period that follows a resident one (a departure), or None."""
     if declared is None:
         declared = periods(account)
     previous = None
@@ -170,13 +137,10 @@ def first_departure(account, declared=None):
 
 
 def coverage_problems(account, declared=None):
-    """Ways a saved residency history fails to answer the questions asked of it.
+    """Problems with the saved residency history, as sentences; empty if none or undeclared.
 
-    Returns a list of sentences, empty when the history is sound. This exists because the
-    strict validation in `ResidencyPeriod.clean()` only runs behind a form: an Excel import
-    writes rows directly, and a set of rows that is individually valid can still leave a
-    hole. Reporting the hole is the point -- a gain whose residency is unknown is marked as
-    such rather than quietly given a full discount.
+    Checks for gaps, an open-ended period followed by another, and a start after the
+    earliest buy. Needed because imports skip `ResidencyPeriod.clean()`.
     """
     from share_dinkum_app.models import Buy
 

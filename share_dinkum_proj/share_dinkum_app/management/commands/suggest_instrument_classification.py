@@ -1,13 +1,7 @@
-"""Suggest a legal form for instruments that have not been classified.
+"""Suggest market countries and legal forms for unclassified instruments; list the rest.
 
-Capital gains reporting needs to know whether each holding is a company or a trust, because
-the schedule reports them in different boxes and a ticker does not say which it is. This
-command fills in what it can and lists what it cannot, so the remaining work is a short,
-visible list rather than a silent gap.
-
-Nothing here overwrites an answer the user has given. Suggestions are recorded as
-suggestions, and a capital gains schedule built on unconfirmed classifications reports
-itself as a draft.
+Legal forms come from income history, then the seed list, then (with --use-market-data)
+yfinance. User-confirmed values are never overwritten; suggestions stay unconfirmed.
 
     uv run dev suggest_instrument_classification
     uv run dev suggest_instrument_classification --account "Default Portfolio"
@@ -114,7 +108,7 @@ class Command(BaseCommand):
                 'units, and most ETFs are trusts.')
 
     def _market_data(self, instrument):
-        """Provider metadata, or None. A lookup failure must not stop the command."""
+        """yfinance info for the instrument, or None on any failure."""
         try:
             ticker = yfinanceinterface.yf.Ticker(instrument.yfinance_ticker_code)
             return ticker.info or None

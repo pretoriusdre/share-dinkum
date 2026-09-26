@@ -1,13 +1,7 @@
-"""Deriving an instrument's capital gains schedule category.
+"""Deriving an instrument's CGT schedule category from its legal form and market.
+This classifies capital gains for the Australian CGT schedule.
 
-The schedule splits assets eight ways, and an investor cannot reasonably be asked which of
-eight labels applies to each holding. They can answer one much simpler question -- is this
-a company or a trust -- which is printed on every product disclosure statement and annual
-tax statement. Combined with where the market is, that one answer produces the category.
-
-Nothing here guesses. An instrument whose legal form has not been set is reported as
-unclassified, so an unknown asset stays visibly unknown instead of defaulting into a
-plausible looking box on a tax return.
+An instrument with no legal form is UNCLASSIFIED rather than guessed.
 """
 
 from share_dinkum_app.choices import CGTAssetCategory, LegalForm
@@ -18,8 +12,7 @@ AUSTRALIA = 'AU'
 #: Forms that are an interest in a company.
 SHARE_LIKE = {LegalForm.COMPANY}
 
-#: Forms that are an interest in a trust. A stapled security is a share and a unit bound
-#: together; the ATO's own instructions put them with units, so they go there.
+#: Forms that are an interest in a trust. Stapled securities go with units, per the ATO.
 UNIT_LIKE = {LegalForm.UNIT_TRUST, LegalForm.STAPLED}
 
 
@@ -35,8 +28,8 @@ def market_country(market):
 def asset_category(instrument):
     """The CGT schedule category for gains on this instrument.
 
-    An explicit override wins. Otherwise the category follows from the legal form, the
-    country of the market, and whether the market is a listed exchange.
+    A valid override wins; an invalid one gives UNCLASSIFIED. Otherwise it follows from the
+    legal form, the market's country, and whether the market is listed.
     """
     if instrument is None:
         return CGTAssetCategory.UNCLASSIFIED
@@ -82,21 +75,19 @@ def asset_category(instrument):
 
 
 def is_real_property(instrument):
-    """Whether this instrument is a direct interest in land.
+    """Whether the instrument's legal form is real property.
 
-    Real property brings the residential capital gain categories of s102-6 and the deemed
-    sale rules of Subdivision 112-E into play, none of which this application implements.
-    Detecting it is what lets the schedule refuse rather than quietly report a wrong figure.
+    Its gains are residential under s102-6, whose quarantining is not implemented, so the
+    schedule warns.
     """
     return getattr(instrument, 'legal_form', None) == LegalForm.REAL_PROPERTY
 
 
 def suggest_legal_form(instrument, market_data=None):
-    """A suggested legal form for an instrument, or None if nothing is known.
+    """A suggested legal form, or None.
 
-    `market_data` is an optional mapping of the kind yfinance returns. It is consulted only
-    after the seed list, and treated as weak evidence: quoteType reports EQUITY for stapled
-    securities and listed property trusts, both of which are wrong for this purpose.
+    From the seed list, else a yfinance-style `market_data` quoteType of ETF or MUTUALFUND
+    (unit trust). EQUITY is ignored, as it also covers stapled securities and trusts.
     """
     seeded = reference.seed_legal_form(getattr(instrument, 'name', None))
     if seeded:
@@ -117,21 +108,9 @@ def suggest_legal_form(instrument, market_data=None):
 
 
 def suggest_legal_form_from_activity(instrument):
-    """Infer the legal form from what the instrument has actually paid.
+    """Infer the legal form from income history, or None if there is none.
 
-    Much stronger evidence than any list of codes, because it comes from the user's own
-    records rather than from a guess about what they might hold:
-
-    * a company pays **dividends**, and only a company can frank one;
-    * a trust pays **distributions**, and attributes rather than distributes its income;
-    * a **stapled security** is a share and a unit bound together, so it pays both, which
-      is a signature nothing else produces.
-
-    Returns None where there is no income history to reason from, which is the honest
-    answer for a holding that has never paid anything.
-
-    A trust and a stapled security land in the same box on the CGT schedule, so confusing
-    the two changes no reported figure. Confusing either with a company does.
+    Dividends only: company. Distributions only: unit trust. Both: stapled security.
     """
     from share_dinkum_app.models import Distribution, Dividend
 

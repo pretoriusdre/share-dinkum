@@ -4,12 +4,10 @@ from share_dinkum_app.constants import DEFAULT_CURRENCY
 
 
 def add_currencies(*amounts, default_currency=DEFAULT_CURRENCY):
-    """
-    Sum multiple Money objects safely.
-    
-    - Ignores zero amounts.
-    - Raises an error if nonzero amounts have different currencies.
-    - Returns Money(0, default_currency) if all amounts are zero or no amounts provided.
+    """Sum Money amounts, ignoring zeros (whatever their currency).
+
+    Raises TypeError for a non-Money, ValueError for mixed non-zero currencies. Returns
+    `Money(0, default_currency)` if nothing is non-zero.
     """
     # Filter out invalid or zero amounts
     nonzero_amounts = []

@@ -10,10 +10,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PLACEHOLDER = '__REPLACE_ME__'
 
 def ensure_secret_key(env_path: Path, placeholder: str = DEFAULT_PLACEHOLDER) -> str:
-    """
-    Ensures a valid SECRET_KEY is set in the .env file.
-    Generates one if the key is missing or still a placeholder.
-    """
+    """Return the .env SECRET_KEY, generating and writing one if missing or a placeholder."""
     if not env_path.exists():
         new_key = get_random_secret_key()
         env_path.write_text(f'SECRET_KEY={new_key}\n')

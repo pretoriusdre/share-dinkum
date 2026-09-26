@@ -1,18 +1,9 @@
-"""Record what each holding was worth on 30 June 2027, and on any other deemed sale date.
+"""Record each instrument's unit value on 30 June 2027 and on departure and arrival dates.
 
-s112-155 deems every holding sold at market value just before 1 July 2027. Without a figure
-for that day, a gain on a parcel held across the cutover cannot be split into the half that
-keeps the 50% discount and the half that is indexed instead, so the whole thing falls back to
-a single unsplit gain.
-
-The value is needed for one specific day, and the ordinary price refresh will not supply it:
-`update_price_history` runs on demand and only for instruments with an open position or a
-recent sale, so an instrument sold in 2029 may have no price recorded for 2027 at all. Nor
-can it be reconstructed later from a provider that has delisted the security.
-
-Run this once, soon after the cutover, and then leave it. Existing valuations are never
-overwritten unless `--overwrite` is given, because a user who had to source a value for an
-unlisted holding should not have it replaced by a stale closing price.
+Without the 30 June 2027 value, a parcel held across the cutover cannot be split and its
+gain is marked pending. Values come from stored closing prices; run this soon after the
+cutover, before a delisted security's prices become unavailable. Existing valuations are
+kept unless `--overwrite` is given.
 """
 
 from datetime import date

@@ -1,11 +1,8 @@
 
 """Automatic login for local, single-user installs.
 
-Share Dinkum runs on your own machine against your own database, so there is nobody to keep out and
-a password is only an obstacle between you and your data. This middleware signs every request in as
-the local user, and creates that user on first run so that a fresh install needs no setup step at
-all. Set LOCAL_AUTO_LOGIN=False in .env before letting anyone else reach an install; that removes
-this middleware and restores the normal Django login page.
+Signs every request in as a local superuser, creating one on first run. Set
+LOCAL_AUTO_LOGIN=False in .env to remove it and restore the normal login page.
 """
 
 from django.contrib.auth import get_user_model, login
@@ -17,28 +14,16 @@ LOCAL_USERNAME = 'admin'
 
 
 def _usable_superusers():
-    """Superusers that can actually get into the admin, oldest first.
-
-    is_active and is_staff matter as much as is_superuser: the admin turns either of them away at
-    the door, so signing in as such a user lands on a login page it can never get past. Skipping
-    them lets a usable account be found or created instead.
-    """
+    """Active staff superusers (the ones the admin accepts), oldest first."""
     return get_user_model().objects.filter(
         is_superuser=True, is_active=True, is_staff=True
     ).order_by('date_joined')
 
 
 def _portfolio_recency(user):
-    """Sort key that opens the app on the portfolio you set up most recently.
+    """Sort key ranking a user by when their visible portfolio was created.
 
-    Whichever data you loaded last is the data you are working on, so that is what the app should
-    show, in either direction: import the sample data to look at it and you get the sample data;
-    import your own afterwards and you get your own. Ranking by the account each user would
-    actually display, rather than by the users themselves, is what keeps this honest, because that
-    is the same account the dashboard will resolve once the sign-in happens.
-
-    Users with no portfolio at all sort below every user that has one. Among equals the caller's
-    ordering decides, so the result never depends on dictionary or query ordering.
+    Picks the user whose portfolio was set up most recently. Users with none rank lowest.
     """
     account = user.visible_account
     return (account is not None, account.created_at if account is not None else None)
@@ -57,10 +42,9 @@ class AutoLoginMiddleware:
 
     @staticmethod
     def _local_user():
-        """The account requests run as, or None to leave the normal login page in place.
+        """The user to sign in as, created if none exists, or None to show the login page.
 
-        Looked up per request rather than once at startup, because on a brand new database there is
-        no user to find until the first request creates one.
+        Looked up per request, since a new database has no user until the first request.
         """
         usable = list(_usable_superusers())
         if usable:

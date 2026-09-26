@@ -1,27 +1,14 @@
 """Reference data for classifying instruments.
 
-Two lookups live here, and the distinction between them matters.
-
-`EXCHANGE_COUNTRY` is a fact about the world: the ASX is in Australia and will not stop
-being so. Hardcoding it costs nothing and is never wrong.
-
-`SEED_LEGAL_FORMS` is different. It is a convenience for the codes an Australian investor
-is most likely to hold, and it is deliberately incomplete: it covers the widely held ASX
-ETFs and listed investment companies, which is where the company-versus-unit-trust
-distinction is least obvious and most often got wrong. AFI and VAS are both AUD-quoted ASX
-listings, and one is a company while the other is a unit trust.
-
-A seed value is only ever a starting suggestion. It is applied when an instrument is first
-created, recorded as SUGGESTED rather than confirmed, and overwritten the moment the user
-says otherwise. It is never consulted again after that. Nothing in the tax calculation
-trusts this table -- an instrument the user has not confirmed is reported as unclassified
-rather than quietly assumed.
+* `SUFFIX_COUNTRY`, `EXCHANGE_COUNTRY`: market country lookups.
+* `SEED_LEGAL_FORMS`: legal forms for widely held ASX codes where they are not obvious
+  (e.g. AFI is a company, VAS a unit trust). Deliberately incomplete. Used only as a
+  SUGGESTED legal form, which schedules flag as unconfirmed.
 """
 
 from share_dinkum_app.choices import LegalForm
 
-#: yfinance ticker suffix -> ISO 3166-1 alpha-2 country. An instrument with no suffix is
-#: listed in the United States, which is the convention yfinance itself uses.
+#: yfinance ticker suffix -> ISO country code. No suffix means the US, as in yfinance.
 SUFFIX_COUNTRY = {
     '': 'US',
     'AX': 'AU', 'NZ': 'NZ',
@@ -54,8 +41,7 @@ COMPANY = LegalForm.COMPANY
 UNIT_TRUST = LegalForm.UNIT_TRUST
 STAPLED = LegalForm.STAPLED
 
-#: Widely held ASX codes where the legal form is not obvious from the ticker.
-#: Incomplete by design -- see the module docstring.
+#: Widely held ASX codes where the legal form is not obvious. Incomplete by design.
 SEED_LEGAL_FORMS = {
     # Exchange traded funds. Registered managed investment schemes, so unit trusts, even
     # where the fund holds only foreign shares.
@@ -80,11 +66,7 @@ SEED_LEGAL_FORMS = {
 
 
 def country_for_market(code=None, suffix=None):
-    """Best guess at the country a market is in, or None if unrecognised.
-
-    The suffix is checked first: it is the yfinance convention the application already
-    relies on to fetch prices, so it is the more dependable of the two.
-    """
+    """The market's country from its suffix, else its code, or None if unrecognised."""
     if suffix is not None:
         cleaned = str(suffix).strip().lstrip('.').upper()
         if cleaned in SUFFIX_COUNTRY:

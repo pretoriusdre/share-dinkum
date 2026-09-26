@@ -10,22 +10,12 @@ from share_dinkum_app import cgt, excelinterface
 from share_dinkum_app.choices import CGTAssetCategory, CGTBasis
 
 def _key(value):
-    """A sell allocation id as text, or None.
-
-    Both sides of the comparison have to agree on the type of the key. They have not always:
-    the captured figures used to come back from JSON as strings and now come back as real
-    UUIDs, at which point nothing matched and every row was reported as removed and re-added.
-    """
+    """A sell allocation id as text, or None, so snapshot and current keys compare equal."""
     return None if value is None else str(value)
 
 
 class BaseReport:
-    """Shared machinery for reports that have to talk about money in one currency.
-
-    A portfolio can hold instruments quoted in several currencies, and a total that mixes
-    them is meaningless. Conversion was written once inside OpenParcelReport and needed by
-    every report since, so it lives here rather than being copied with small differences.
-    """
+    """Base for reports, with cached conversion of Money to the account currency."""
 
     def __init__(self, account: Account):
         self.account = account
@@ -52,15 +42,9 @@ class BaseReport:
 
 
 class RealisedCapitalGainReport:
-    """One row per parcel consumed by a sale.
+    """One row per disposal event (normally one per sell allocation), from `cgt.disposal_events`.
 
-    The column set is deliberately fixed. This report is what users have been reading and
-    exporting for years, so it is not the place to add a discount or a category as those
-    arrive -- new columns belong on a new report, where a change in shape cannot disturb an
-    existing one.
-
-    The figures come from the cgt package rather than being recomputed here, so that this
-    report and every later one agree by construction.
+    The columns are fixed for existing users; new fields go on CGTEventReport.
     """
 
     def __init__(self, account: Account):
@@ -157,19 +141,12 @@ class OpenParcelReport(BaseReport):
 
 
 class CGTBasisChangeReport:
-    """Compares captured capital gains figures against a fresh calculation.
+    """Compare each snapshot with a fresh calculation of its year.
 
-    Capital gains figures are derived rather than stored, so a correction anywhere in the
-    calculation changes what the app reports for years already lodged. This report makes
-    that movement explicit: for every snapshot, it recomputes the year and reports each
-    line that changed, was added, or disappeared.
-
-    A row here is not necessarily a problem. It usually means a figure has become more
-    correct. The point is that the change is visible and attributable, rather than a number
-    quietly differing from the one on a lodged return.
+    Reports every sell allocation that changed, was added or was removed.
     """
 
-    #: Fields worth comparing. Identifiers and dates are used to match rows, not diffed.
+    #: Fields compared. Rows are matched on sell allocation id.
     COMPARED_FIELDS = ['quantity_sold', 'days_held', 'proceeds', 'cost_base', 'capital_gain']
 
     def __init__(self, account: Account, fiscal_year=None, lodged_only: bool = False):
@@ -177,11 +154,8 @@ class CGTBasisChangeReport:
         self.fiscal_year = fiscal_year
         self.lodged_only = lodged_only
 
-    #: Figures are compared at the precision the application stores money to. Anything
-    #: finer is the residue of an inexact division rather than a real difference, and a
-    #: snapshot taken under an older build can carry a full 28 significant digits of it.
-    #: Comparing raw would report every row of every old snapshot as changed, by a
-    #: hundred-thousandth of a cent, and bury the changes that matter.
+    #: Compare at stored money precision, so division residue in older snapshots is not
+    #: reported as a change.
     COMPARISON_PLACES = Decimal('0.0001')
 
     @classmethod
@@ -282,16 +256,9 @@ class CGTBasisChangeReport:
 
 
 class CGTEventReport(BaseReport):
-    """Every capital gains event for an account, with its full characterisation.
+    """Every capital gains event, including trust attributions, with every CGTEvent field.
 
-    Where RealisedCapitalGainReport is frozen at the columns it has always had, this one is
-    free to grow: it emits every field of CGTEvent, in declaration order, so a field added
-    to the fact table appears here without anything being edited. That is the whole reason
-    the two are separate reports rather than one report with a flag.
-
-    Unlike the realised gains report it also carries trust attributions, and from 1 July 2027
-    it carries two rows for a disposal the deemed sale splits, sharing one sell allocation
-    id.
+    Asset categories are shown as their ATO labels.
     """
 
     def __init__(self, account: Account, fiscal_year=None):
@@ -314,12 +281,7 @@ class CGTEventReport(BaseReport):
 class CGTScheduleReport(BaseReport):
     """The s102-5 method statement for a fiscal year, one row per s102-6 category.
 
-    **Refuses to present itself as final while anything is unconfirmed.** An unclassified
-    instrument, a suggested rather than confirmed asset category, an undeclared residency, a
-    trust statement that does not reconcile, or a missing valuation each make this a draft,
-    and `warnings()` says which. Producing a confident schedule over incomplete data is the
-    failure this guards against: the number looks the same either way, and only one of them
-    can be lodged.
+    A draft while `warnings()` is non-empty.
     """
 
     def __init__(self, account: Account, fiscal_year=None):
@@ -353,7 +315,7 @@ class CGTScheduleReport(BaseReport):
         return pd.DataFrame(rows, columns=columns)
 
     def summary(self):
-        """The single figures a return actually asks for, plus what qualifies them."""
+        """The year's totals, draft flag and warnings, as a dict."""
         schedule = self.schedule
         return {
             'fiscal_year': schedule.fiscal_year,
@@ -373,12 +335,7 @@ class CGTScheduleReport(BaseReport):
 
 
 def _plain(value):
-    """A Money as a plain number, so a spreadsheet can add it up.
-
-    Excel has no money type. Writing the Money object through would render it as text and
-    every column of figures would arrive unsummable, which for a schedule someone is about
-    to transcribe onto a tax return is worse than useless.
-    """
+    """A Money (or number) as a float, so Excel can sum it. None stays None."""
     if value is None:
         return None
     amount = getattr(value, 'amount', value)
@@ -386,18 +343,10 @@ def _plain(value):
 
 
 def cgt_schedule_workbook(account, output_path, fiscal_years=None):
-    """Write the capital gains schedule for every year with a sale into one workbook.
+    """Write the CGT schedule workbook to `output_path` and return the path.
 
-    Every year rather than one, because the years are not independent: losses carried
-    forward tie them together, and a schedule that shows one year alone cannot show where
-    its opening losses came from.
-
-    **A draft year is exported, not withheld.** The report refuses to call itself final
-    while anything is unconfirmed, and the temptation is to block the export on that. But a
-    draft is exactly what someone needs to send an accountant to ask about, and blocking it
-    only teaches them to copy the figures out by hand, losing the warnings entirely. Instead
-    every row carries `is_draft`, and the reasons get a sheet of their own -- so the file
-    says what it is wherever it ends up.
+    Covers `fiscal_years`, default every year with a sale. Draft years are included, with
+    an `is_draft` column and a Warnings sheet.
     """
     if fiscal_years is None:
         fiscal_years = sorted({
@@ -465,13 +414,8 @@ def cgt_schedule_workbook(account, output_path, fiscal_years=None):
     return output_path
 
 
-#: The schedule's own labels, in form order: what each row is called, which figure fills it,
-#: and how it is emphasised. Rows are the form's lines and columns are years, which is the
-#: shape the form is actually in -- the long-form category-per-row table is easier to compute
-#: and much harder to transcribe from.
-#:
-#: A label with no key is a heading. `flag` marks a figure that ought to be looked at rather
-#: than copied straight across.
+#: The ATO schedule's lines in form order, as `(kind, label, figure key)`. A None key is a
+#: heading; `flag` marks a figure to check rather than copy.
 CGT_RETURN_LAYOUT = [
     ('heading', 'Current year capital gains and losses', None),
     *[entry for category in CGTAssetCategory.reportable() for entry in (
@@ -509,17 +453,10 @@ CGT_RETURN_LAYOUT = [
 
 
 def _cgt_return_figures(account, fiscal_year):
-    """One year's figures, keyed to match CGT_RETURN_LAYOUT.
+    """One year's figures keyed to CGT_RETURN_LAYOUT, and whether the year is a draft.
 
-    The per-category gains and losses are taken from the events rather than from
-    `Schedule.lines`, and that is not a shortcut. The schedule groups by s102-6 category,
-    which is the order losses are spent in; the form's top section groups by the eight asset
-    categories, which is where a gain is reported. They are different questions and the
-    answers do not line up.
-
-    Attributed trust gains are kept out of the eight and put on their own line, which is
-    what the form asks for: a distribution is reported as a capital gain from a trust, not
-    as a gain on the units.
+    Per-asset-category gains and losses come from the events, since `Schedule.lines` groups
+    by s102-6 category instead. Trust attributions go on their own line.
     """
     report = CGTScheduleReport(account=account, fiscal_year=fiscal_year)
     schedule = report.schedule
@@ -568,7 +505,7 @@ def _cgt_return_figures(account, fiscal_year):
 
 
 def cgt_return_schedule_frame(account, fiscal_years):
-    """The schedule as the form lays it out: one row per label, one column per year."""
+    """The schedule as the form lays it out: a row per line, a column per year, plus a draft row."""
     per_year = {}
     drafts = {}
     for year in fiscal_years:

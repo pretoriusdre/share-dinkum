@@ -1,18 +1,7 @@
-"""Record what the capital gains figures are today, so a later change can be explained.
+"""Snapshot today's capital gains figures, per fiscal year with a sale.
 
-Capital gains are worked out on demand and never stored, which is what makes it safe to
-correct a calculation: nothing already in the database has to be rewritten. The cost is that
-improving a calculation silently changes what the application reports for a year you have
-already lodged, and there is then no record of what it used to say.
-
-A snapshot is that record. Take one for every year you have lodged, before upgrading or
-before changing anything about how your gains are worked out -- declaring residency, setting
-your taxpayer type, classifying an instrument. `CGTBasisChangeReport` then compares the
-snapshot against a fresh calculation and tells you which lines moved and by how much.
-
-This is the only way to create one. The figures come from the report rather than from
-anything you type, and the model deliberately will not let you edit them afterwards: a
-snapshot you can adjust is not evidence of anything.
+Gains are recomputed on every report, so take a snapshot of lodged years before upgrading
+or changing tax settings. `CGTBasisChangeReport` then shows what moved.
 """
 
 from django.core.management.base import BaseCommand, CommandError
@@ -78,7 +67,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'  {verb} {len(years)} year(s).'))
 
     def _years(self, account, wanted):
-        """Fiscal years worth snapshotting: the ones with a disposal in them."""
+        """The named fiscal year, or every year with a sale."""
         if wanted:
             fiscal_year = FiscalYear.objects.filter(name=wanted).first()
             if fiscal_year is None:

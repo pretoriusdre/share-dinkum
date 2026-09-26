@@ -1,17 +1,9 @@
-"""CGT events: one row per thing that can produce a capital gain or loss.
+"""CGT events: one flat row per capital gain or loss, which every CGT report reads from.
 
-A single flat record, built once, that every capital gains report is then a projection of.
-The alternative -- each report walking the object graph and recomputing -- is how the two
-existing reports came to derive proceeds differently from one another, and how a column
-list came to be asserted against dict ordering at runtime.
-
-Today the only source is a disposal: a SellAllocation, which is one parcel being consumed
-by one sale. Two further sources are known to be needed and are not built yet. Capital
-gains *attributed* by a managed investment trust are a source the application cannot
-currently represent at all, and for an ETF-heavy portfolio they are frequently the larger
-number. From 1 July 2027 a disposal of a parcel held across that date produces two rows
-rather than one, under s112-155. The `source` field exists to keep those distinguishable
-when they arrive.
+Sources:
+* a disposal (one SellAllocation), split into two rows by s112-155 when a parcel held
+  across 1 July 2027 is sold after it and the 2027 regime is modelled
+* a gain attributed by a managed investment trust's annual statement
 """
 
 from dataclasses import dataclass, fields, replace
@@ -42,35 +34,29 @@ SOURCE_DISPOSAL = 'disposal'
 #: A capital gain attributed by a managed investment trust, from its annual statement.
 SOURCE_ATTRIBUTION = 'trust_attribution'
 
-#: Whether the asset the gain arose on was taxable Australian property. For an attribution
-#: the trust states it. For a disposal it is derived from the holder's residency history,
-#: and is None where none has been declared. Defined in cgt.tap, re-exported here so that a
-#: report reading events does not need to know which module owns the vocabulary.
+#: TAP status values, re-exported from cgt.tap for reports.
 TAP = tap_module.TAP
 NTAP = tap_module.NTAP
 TAP_MIXED = tap_module.TAP_MIXED
 
-#: Working out the gain by reference to the discount, rather than by indexing the cost
-#: base. Until 1 July 2027 it is the only method available to an individual.
+#: The gain is eligible for the CGT discount.
 METHOD_DISCOUNT = 'discount'
 
-#: No discount, because the holding period test is not met.
+#: No discount: held 12 months or less, indexed, post-cutover, or a trust's other-method gain.
 METHOD_OTHER = 'other'
 
 REGIME_PRE_CUTOVER = 'pre_2027'
 REGIME_POST_CUTOVER = 'post_2027'
 
-#: A disposal that falls wholly on one side of 1 July 2027, or one the deemed sale does not
-#: reach. One row, as every disposal has been until now.
+#: A disposal not split by s112-155.
 SLICE_WHOLE = 'whole'
 
-#: The two halves of a disposal split by s112-155. They share a sell allocation id, so a
-#: report can present them as one sale, and they sum to the gain the whole disposal made.
+#: The two halves of a disposal split by s112-155. They share a sell allocation id and,
+#: before indexation, sum to the whole gain.
 SLICE_PRE_CUTOVER = 'pre_cutover'
 SLICE_POST_CUTOVER = 'post_cutover'
 
-#: Indexation was denied to this row, or could not be worked out. Distinct from a factor of
-#: 1.000, which means indexation applied and inflation happened to be flat.
+#: No indexation applied. Distinct from 1.000, which means indexed with flat CPI.
 NO_INDEXATION = None
 
 
@@ -78,8 +64,7 @@ NO_INDEXATION = None
 class CGTEvent:
     """One capital gains event, with everything needed to characterise and trace it.
 
-    Frozen because a report should not be able to adjust a figure on its way to a
-    spreadsheet; if a number is wrong, it is wrong where it is derived.
+    Frozen, so reports cannot alter figures.
     """
 
     # --- what and when -----------------------------------------------------
@@ -87,17 +72,13 @@ class CGTEvent:
     event_date: date
     fiscal_year: str | None
     instrument: str
-    #: Which box on the CGT schedule this belongs in, derived from the instrument's legal
-    #: form and market. 'Unclassified' where the user has not said what the asset is.
+    #: The CGT schedule category, from the instrument's legal form and market.
     asset_category: str
-    #: False where the category rests on a default or a suggestion rather than on the
-    #: user's own answer, so a schedule built on it can be marked as a draft.
+    #: False if the instrument's legal form is not confirmed by the user.
     asset_category_confirmed: bool
 
     # --- traceability, so any figure can be followed back to its records ----
-    #: The primary keys themselves, not text. Anything needing a string form (the snapshot
-    #: payload, a spreadsheet cell) converts at its own boundary, so nothing here changes
-    #: the type a report has always emitted.
+    #: Primary key values, not strings.
     sell_allocation_id: object | None
     parcel_id: object | None
     buy_id: object | None
@@ -125,11 +106,9 @@ class CGTEvent:
     net_proceeds: Money | None
 
     # --- outcome -----------------------------------------------------------
-    #: Signed, as the existing reports present it.
+    #: Signed: negative is a loss.
     capital_gain: Money | None
-    #: Gross gain and gross loss, each non-negative, exactly one of them non-zero. The CGT
-    #: schedule asks for these separately per asset category, and netting them inside a
-    #: holding loses information the form needs.
+    #: Each non-negative, at most one non-zero. The schedule reports them separately.
     gross_gain: Money | None
     gross_loss: Money | None
 
@@ -141,81 +120,53 @@ class CGTEvent:
     tap_status: str | None = None
     #: Australian residency status on the day of the event, or None where undeclared.
     residency_status: str | None = None
-    #: Whether the gain drops out of the Australian return entirely. A disregarded event is
-    #: kept rather than filtered away: it still has to be explainable, and a schedule that
-    #: silently omits a large sale is indistinguishable from one that lost it.
+    #: Whether the gain is excluded from the Australian return. Kept, not filtered out, so
+    #: reports can explain it.
     is_disregarded: bool = False
-    #: The provision doing the disregarding, for the report to cite.
+    #: The provision that disregards it.
     disregard_reason: str | None = None
-    #: How the discount was arrived at: by declared residency, or by assuming it.
+    #: Whether the discount used declared residency or was assumed.
     discount_basis: str = residency_module.BASIS_LEGACY
-    #: True where an instrument-level override, and nothing else, is what makes this
-    #: disposal non-taxable. The gain is disregarded because of a setting rather than
-    #: because of the facts, and the schedule says so.
+    #: True if only the instrument's TAP override makes this disposal non-taxable.
     tap_override_suppressed_deeming: bool = False
 
     # --- the 2027 regime ---------------------------------------------------
-    #: Whether this row is a whole disposal or one half of one split by s112-155.
+    #: Whole disposal, or one half of an s112-155 split.
     slice: str = SLICE_WHOLE
-    #: The s102-6 category, which decides where the gain is reported and, more importantly,
-    #: the order in which capital losses are spent against it. Only set from the cutover:
-    #: before it, the categories did not exist.
+    #: The s102-6 category, which sets the order losses are applied. Set from the cutover only.
     gain_category: str | None = None
-    #: The Division 114 factor applied to the cost base, or None where indexation was not
-    #: available. 1.000 is a real answer and means the index did not move.
+    #: The Division 114 factor applied to the cost base, or None if not indexed.
     indexation_factor: Decimal | None = None
-    #: Why this row cannot yet be reported as final: a missing valuation, a missing CPI
-    #: quarter, an unclassified asset, or a statutory outcome surprising enough to need
-    #: saying out loud. A schedule with any of these is a draft.
+    #: Why this row is not final, e.g. a missing valuation or CPI quarter, or an outcome that
+    #: needs explaining. Makes the schedule a draft.
     pending_reason: str | None = None
-    #: False where the source figures failed their own internal check, None where there was
-    #: nothing to check against. A statement that does not reconcile should not be relied on.
+    #: Whether the source statement reconciles; None if there was nothing to check.
     source_reconciles: bool | None = None
 
 
-#: Money is stored throughout this application at four decimal places, and per-unit prices
-#: at six. A figure derived by division carries whatever Decimal's 28 significant digits
-#: leave behind -- a gain of exactly $3,179.90 arrives as -3179.90000000000000000000000,
-#: and a sum of fourteen of them as 2019.106200000001099999999996. Those trailing digits are
-#: not precision, they are the residue of an inexact division, and carrying them into a
-#: report makes a dollar amount look like a measurement.
-#:
-#: Rounding happens here, at the boundary where a computed figure becomes a reported one,
-#: and never in the snapshot serialiser. That distinction matters: a snapshot rounded on its
-#: way to storage would stop matching a fresh calculation, and the basis change report would
-#: call every row changed. Rounding on both sides of that comparison keeps them equal.
+#: Reported precision: totals at four places, unit prices at six, matching storage. Rounds
+#: away Decimal division residue (e.g. 2019.106200000001099999999996).
 TOTAL_PLACES = Decimal('0.0001')
 UNIT_PLACES = Decimal('0.000001')
 
 
 def _money(value, places=TOTAL_PLACES):
-    """A money amount at the precision this application actually stores.
-
-    ROUND_HALF_UP, matching `convert_to_decimal_field`, so a figure computed here and the
-    same figure written to a column agree rather than differing by a cent at the halfway
-    point.
-    """
+    """Round a Money to `places`, ROUND_HALF_UP to match `convert_to_decimal_field`."""
     if value is None:
         return None
     return Money(value.amount.quantize(places, rounding=ROUND_HALF_UP), value.currency)
 
 
 def event_fields():
-    """Field names in declaration order.
-
-    Reports derive their column list from this rather than repeating it, which is what
-    removes the need to assert a dict's key order at runtime.
-    """
+    """CGTEvent field names in declaration order, for report columns."""
     return [f.name for f in fields(CGTEvent)]
 
 
 def _gain_category(instrument, deferred=False):
     """The s102-6 category a gain falls into.
 
-    A share portfolio only ever produces non-residential gains, so this is nearly always the
-    same answer. The residential branch exists to be honest about a gap rather than to work:
-    the residential categories bring in the Subdivision 26-155 quarantining that steps 3 and
-    4 of the s102-5 method statement apply, and none of that is implemented.
+    Residential only for real property; the Subdivision 26-155 quarantining that category
+    needs is not implemented.
     """
     if classification.is_real_property(instrument):
         return CGT_GAIN_RESIDENTIAL
@@ -223,12 +174,7 @@ def _gain_category(instrument, deferred=False):
 
 
 def models_2027_regime(account):
-    """Whether this portfolio models the 2027 regime.
-
-    Defaults to False for anything that is not an account, so a caller passing None gets
-    the old regime rather than an AttributeError. Off is also the safe direction: it is the
-    law as it stands today, and the figures it produces are not projections.
-    """
+    """Whether this portfolio models the 2027 regime. False for None."""
     return bool(getattr(account, 'model_2027_regime', False))
 
 
@@ -239,10 +185,9 @@ def _regime_for(event_date):
 
 
 def _events_from_allocation(allocation, account=None, declared=None):
-    """Build one event from a SellAllocation, preserving the app's existing arithmetic.
+    """Events for one SellAllocation: one row, or two if split at the 2027 cutover.
 
-    Proceeds are apportioned from the sale by quantity, and the cost base is the parcel's
-    own total, both exactly as RealisedCapitalGainReport has always computed them.
+    Proceeds are the sale's apportioned by quantity; the cost base is the parcel's total.
     """
     parcel = allocation.parcel
     sell = allocation.sell
@@ -336,13 +281,11 @@ def _events_from_allocation(allocation, account=None, declared=None):
 
 
 def _apply_cutover(whole, allocation, account=None, declared=None):
-    """Characterise a disposal that happens on or after 1 July 2027.
+    """Characterise a disposal on or after 1 July 2027.
 
-    Returns one row or two. Two where s112-155 deems the parcel sold at the cutover, which
-    splits the gain into a deferred half carrying the old 50% discount and a post-cutover
-    half carrying indexation instead. One where the deemed sale does not apply, which is
-    either because the parcel was bought after the cutover anyway, or because s112-155(1)(d)
-    denied it.
+    Two rows where s112-155 deems the parcel sold at the cutover: a deferred slice keeping the
+    discount and a post-cutover slice indexed instead. One row where the deemed sale does not
+    apply, or no cutover valuation exists (marked pending).
     """
     parcel = allocation.parcel
     sell = allocation.sell
@@ -376,19 +319,10 @@ def _apply_cutover(whole, allocation, account=None, declared=None):
 
 
 def _outcome(proceeds, indexed_cost_base, plain_cost_base):
-    """Gain, loss, or neither, given an indexed and an unindexed cost base.
+    """Return `(signed gain, cost_base_used)` given indexed and unindexed cost bases.
 
-    Indexation may increase a gain's cost base but must never create or deepen a loss.
-    s100-45 and s104-10(4) work a capital loss out against the **reduced cost base**, and
-    s110-55 excludes indexation from it. Left unguarded, inflation would manufacture a
-    deductible loss out of an asset that merely failed to keep pace with it.
-
-    That leaves three outcomes rather than two, and the middle one is easy to miss: where
-    the proceeds land between the two cost bases there is no gain *and* no loss. Reporting
-    the indexed figure there would invent a loss; reporting the plain one would invent a
-    gain.
-
-    Returns `(gain, cost_base_used)`, the gain signed as the rest of the package expects.
+    Indexation can reduce a gain but never create a loss: a loss uses the reduced cost base,
+    which excludes indexation (s110-55). Proceeds between the two give neither.
     """
     zero = _zero_like(proceeds)
     if proceeds > indexed_cost_base:
@@ -401,13 +335,9 @@ def _outcome(proceeds, indexed_cost_base, plain_cost_base):
 def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
     """A post-cutover disposal that s112-155 does not split.
 
-    The interesting case is the returned expatriate. s112-155(1)(d) denies them the deemed
-    sale because s115-105 applies to them, so nothing of their pre-2027 growth is banked at
-    50%. If they are then an Australian resident from the cutover, s114-25 is satisfied and
-    indexation is mandatory under s110-36(1A) -- and s115-20 denies the discount to any gain
-    worked out on an indexed cost base. So they lose the discount they would have had and
-    get indexation running only from 2027 in its place. That is the Act working as written,
-    but it looks so much like a bug that the row carries an explanation.
+    If indexation is available it is mandatory (s110-36(1A)) and removes the discount
+    (s115-20). For a returned expatriate denied the split by s112-155(1)(d), that means no
+    discount and indexation only from 2027, so the row carries `reason` to explain it.
     """
     category = _gain_category(sell.instrument)
     if not indexation_eligible:
@@ -436,16 +366,10 @@ def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
 
 
 def _split_events(whole, buy, sell, market_value, indexation_eligible):
-    """The two gains a deemed sale produces.
+    """The deferred and post-cutover gains from an s112-155 deemed sale at `market_value`.
 
-    Before indexation they sum exactly to the gain the disposal made: the market value is
-    subtracted on one side and added back on the other, so it moves gain between the two
-    categories without changing the total. Indexation then lifts the reacquisition cost on
-    the post-cutover side, and that difference is the relief.
-
-    Which side a dollar lands on still matters, because the two are taxed differently: the
-    deferred side keeps the 50% discount, the other gets indexation instead, and losses are
-    spent against the deferred side first.
+    Before indexation they sum to the whole gain. The deferred slice keeps the discount; the
+    post-cutover slice is indexed from 1 July 2027 and gets no discount.
     """
     deferred_gain = _money(market_value - whole.cost_base)
 
@@ -515,11 +439,7 @@ def _zero_like(money):
 
 
 def share_of_parcel(parcel, quantity):
-    """What fraction of a parcel an allocation represents.
-
-    A cost base adjustment is held against the whole parcel, so an allocation that consumes
-    part of one carries a proportionate share of it.
-    """
+    """`quantity` as a fraction of the parcel's quantity; zero for an empty parcel."""
     parcel_quantity = parcel.parcel_quantity
     if not parcel_quantity:
         return Decimal('0')
@@ -527,16 +447,10 @@ def share_of_parcel(parcel, quantity):
 
 
 def _attribution_events(statement, account=None, declared=None):
-    """Events for one annual trust statement.
+    """Events for one trust statement: up to one discounted and one other-method gain.
 
-    Up to two, because the discounted and other-method gains are taxed differently and the
-    schedule reports them separately. Netting them into one row would lose the distinction
-    and understate the discount available.
-
-    The discounted amount is **grossed up**. A trust reports its discounted gains already
-    halved; the member adds the halved part back, applies their own capital losses, and
-    then applies their own discount percentage, which need not be the trust's. Carrying the
-    trust's halved figure would apply the discount twice.
+    Discounted gains are grossed up (doubled), because the trust reports them halved and the
+    member applies their own discount after losses.
     """
     events = []
     event_date = statement.financial_year_end_date
@@ -626,29 +540,17 @@ def _attribution_events(statement, account=None, declared=None):
 
 
 def _attributed_discount_percentage(account, declared):
-    """The discount a member applies to a gain a trust attributed to them.
+    """The taxpayer type's flat discount rate, not apportioned for residency.
 
-    The flat rate for the taxpayer type, without residency apportionment, and the reason is
-    a gap in the source document rather than a shortcut. s115-105 apportions over the
-    *discount testing period* -- the days the asset was owned -- and for an attributed gain
-    the asset was owned by the trust, not by the member. An annual tax statement reports a
-    total; it does not disclose when the trust bought what it sold, so the fraction cannot
-    be worked out from anything the application holds.
-
-    The exposure this leaves is narrow. A foreign resident's attributed gains on non-TAP
-    assets are disregarded outright under s855-40(2), so nothing is apportioned there. What
-    remains is a foreign resident's attributed gains on taxable Australian property, where
-    the full rate is applied and the schedule flags the assumption.
+    s115-105 apportions over the trust's ownership period, which the statement does not
+    disclose. This only matters for a foreign resident's TAP gains; NTAP ones are
+    disregarded (s855-40(2)).
     """
     return discount_module.base_rate(account)
 
 
 def _tap_status(tap_amount, ntap_amount):
-    """Whether the trust's own asset was taxable Australian property.
-
-    Kept because it decides whether a foreign resident member can disregard the gain --
-    a distinction that cannot be recovered once the two are added together.
-    """
+    """TAP, NTAP, mixed or None, from the trust's TAP and NTAP amounts."""
     if tap_amount and ntap_amount:
         return TAP_MIXED
     if tap_amount:
@@ -688,9 +590,9 @@ def all_events(account, fiscal_year=None):
 
 
 def disposal_events(account, fiscal_year=None):
-    """Every disposal for an account, oldest sale first.
+    """Every disposal event for an account, oldest sale first.
 
-    `fiscal_year` accepts a FiscalYear or its name, and narrows the result to that year.
+    `fiscal_year` (a FiscalYear or its name) narrows the result to that year.
     """
     from share_dinkum_app.models import Sell
 

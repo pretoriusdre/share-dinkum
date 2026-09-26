@@ -1,31 +1,13 @@
-"""The s102-5 method statement: turning a year's CGT events into one net capital gain.
+"""The s102-5 method statement: a year's CGT events to one net capital gain.
 
-Three things happen here that a naive sum of gains gets wrong.
+* Current-year then prior-year losses are netted across the year, before the discount.
+* From 1 July 2027 losses are applied in the s102-6 category order (s102-5 Step 1).
+  Within a category, and before the cutover, they go against the least-discounted gains
+  first, which saves the most tax.
 
-**Losses are netted across the year, not floored per parcel.** A loss on one parcel reduces
-a gain on another. Reporting each disposal's gain in isolation, never below zero, overstates
-the year by the whole of every loss.
-
-**Losses are applied before the discount, never after.** s102-5 Step 1 and Step 2 reduce the
-gains; Step 5 then discounts what is left. A $100 gain and a $100 loss net to nothing. Take
-the discount first and the same facts produce a $50 gain and a $100 loss, which is a $50 loss
--- a different answer, and a wrong one.
-
-**From 1 July 2027 the order the losses are spent in is prescribed, and it runs against the
-taxpayer.** s102-5 Step 1 requires losses to reduce deferred non-residential gains first,
-then deferred residential, then non-residential, then residential. The deferred categories
-are the ones that kept the 50% discount, so the Act spends losses where they are worth least.
-Before the cutover there are no categories and the choice is entirely the taxpayer's, so this
-module makes the favourable one: losses go against the least-discounted gains first, where a
-dollar of loss saves the most tax.
-
-Discretion survives *within* a category after the cutover (Step 1, Note 3), and is exercised
-the same way.
-
-Out of scope, and stated on the schedule rather than left to be discovered: the Subdivision
-26-155 quarantining at steps 3 and 4, which only bites on residential gains; the
-`minimum tax gap amount` of s119-10(2), which needs the taxpayer's whole taxable income; and
-wash sales, rollovers, deceased estates and the small business concessions.
+Not implemented: Subdivision 26-155 quarantining (residential gains only, warned about),
+the s119-10(2) minimum tax gap amount, wash sales, rollovers, deceased estates and small
+business concessions.
 """
 
 from dataclasses import dataclass, field
@@ -42,8 +24,7 @@ from share_dinkum_app.constants import (
     CGT_GAIN_RESIDENTIAL,
 )
 
-#: Where a year has no s102-6 categories because it predates them, everything sits in one
-#: pool and the taxpayer chooses the order freely.
+#: The single pool for gains with no s102-6 category (pre-cutover).
 UNCATEGORISED = 'capital gain'
 
 
@@ -75,18 +56,13 @@ class Schedule:
     total_discount: Money
     net_capital_gain: Money
     losses_carried_forward: Money
-    #: The base for the Division 119 minimum tax: gains remaining after step 6, before the
-    #: Division 30 and 31 deductions this application does not hold.
+    #: Division 119 minimum tax base: the net gain, before Division 30 and 31 deductions.
     minimum_tax_capital_gain_base: Money
     warnings: list = field(default_factory=list)
 
     @property
     def is_draft(self):
-        """Whether any figure here rests on something unconfirmed.
-
-        A draft schedule is not a broken one, but it must not be presented as final. Every
-        reason it is a draft is in `warnings`.
-        """
+        """True if there are any `warnings`."""
         return bool(self.warnings)
 
 
@@ -95,31 +71,21 @@ def _zero(currency):
 
 
 def _category_of(event):
-    """Which pool a gain is netted in.
-
-    Pre-cutover events carry no s102-6 category, because the categories did not exist, so
-    they share one pool.
-    """
+    """The event's s102-6 category, or UNCATEGORISED."""
     return event.gain_category or UNCATEGORISED
 
 
 def _ordered_categories(present):
-    """Categories in the order losses are spent against them.
-
-    The statutory order for anything the categories apply to, then anything else. A year
-    that straddles the cutover can hold both, which is why this does not simply pick one.
-    """
+    """`present` categories in statutory loss order, then any others."""
     ordered = [c for c in CGT_LOSS_ABSORPTION_ORDER if c in present]
     ordered += [c for c in present if c not in CGT_LOSS_ABSORPTION_ORDER]
     return ordered
 
 
 def _spend(pool, gains):
-    """Apply a pool of losses across gains, least-discounted first.
+    """Apply `pool` to `(amount, discount rate)` gains, lowest rate first.
 
-    Returns `(applied_by_index, remaining_pool)`. Within a category the taxpayer chooses the
-    order, and this is the choice worth making: a dollar of loss taken off a gain that is
-    fully taxed saves twice what it saves taken off a half-discounted one.
+    Returns `(applied_by_index, remaining_pool)`.
     """
     applied = [Decimal('0')] * len(gains)
     order = sorted(range(len(gains)), key=lambda i: gains[i][1])
@@ -133,12 +99,7 @@ def _spend(pool, gains):
 
 
 def _carried_forward_into(account, fiscal_year, zero):
-    """Losses from years *before* this one.
-
-    A loss is only available against a later year. Summing every carry-forward row
-    regardless of date would apply a loss made in 2026 to a schedule for 2021, which is not
-    a small error -- it is a deduction claimed years before it existed.
-    """
+    """Total carried-forward losses from years before `fiscal_year` (all years if None)."""
     from share_dinkum_app.models import CapitalLossCarryForward, FiscalYear
 
     rows = CapitalLossCarryForward.objects.filter(account=account, is_active=True)
@@ -153,10 +114,9 @@ def _carried_forward_into(account, fiscal_year, zero):
 
 
 def build(account, fiscal_year, prior_year_losses=None):
-    """The s102-5 method statement for one fiscal year.
+    """Build the Schedule for one fiscal year.
 
-    `prior_year_losses` overrides what is read from `CapitalLossCarryForward`, which is what
-    lets a caller model "what if I had another ten thousand of losses" without writing rows.
+    `prior_year_losses` overrides the total read from `CapitalLossCarryForward`.
     """
     currency = account.currency
     zero = _zero(currency)
@@ -251,18 +211,7 @@ def build(account, fiscal_year, prior_year_losses=None):
 
 
 def _year_still_running(fiscal_year):
-    """The end of a fiscal year that has not reached it yet, or None.
-
-    Every other reason a schedule is a draft is about data nobody has confirmed. This one is
-    about time, and it was missing: a year in progress had nothing unconfirmed in it and so
-    reported itself final, three weeks in. "Final" is then read as "these are the year's
-    figures" when the year has ten months left to run and every one of them can change the
-    answer -- a sale, a distribution, a cost base adjustment, or simply the discount on a
-    parcel ticking over another day.
-
-    Returns the end date so the warning can name it, because "not finished" invites the
-    question "finished when?".
-    """
+    """The fiscal year's end date if it has not passed yet, else None (and None for None)."""
     from share_dinkum_app.models import FiscalYear
 
     if fiscal_year is None:
@@ -282,13 +231,11 @@ def _year_still_running(fiscal_year):
 
 
 def _statements_disagreeing_on_cost_base(account, year_name):
-    """Statements whose cost base line contradicts the adjustment linked to them.
+    """Statements in the year whose stated cost base movement disagrees with their linked
+    adjustment.
 
-    Queried from the statements rather than from the events, and that is the whole point.
-    An attribution event is only built where a statement attributed a capital gain, so a
-    statement declaring nil gains and a large cost base movement -- which is most of them
-    for a property trust -- produces no event at all and would be invisible to a check that
-    walked the year's events.
+    Queried from statements, not events, because a statement with no capital gain produces
+    no event.
     """
     from share_dinkum_app.models import AttributionStatement
 
@@ -308,17 +255,10 @@ def _statements_disagreeing_on_cost_base(account, year_name):
 
 
 def _warnings(account, live_events, all_events, year_name=None):
-    """Everything that stops this schedule being final.
+    """Every reason this schedule is not final, as messages.
 
-    Each of these is a case where the application knows it does not know something. Emitting
-    a confident figure over any of them would be the failure mode worth avoiding: an
-    incomplete answer that looks complete.
-
-    Most checks read `live_events`, the rows that reach the schedule. One reads `all_events`
-    and has to: a disregarded row has already dropped out of `live_events`, so a check that
-    asks why something was disregarded cannot be written against what is left. That is the
-    same blind spot in miniature -- the rows worth questioning are exactly the ones a
-    schedule stops carrying.
+    Most checks use `live_events`; the cutover and TAP override checks use `all_events`,
+    which includes disregarded rows.
     """
     warnings = []
 

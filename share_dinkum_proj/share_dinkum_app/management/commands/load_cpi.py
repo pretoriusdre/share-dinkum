@@ -1,9 +1,7 @@
-"""Load quarterly CPI index numbers, which cost base indexation needs from 1 July 2027.
+"""Load quarterly CPI index numbers for cost base indexation from 1 July 2027.
 
-The series is ABS 6401.0 table 2, "Index Numbers; All groups CPI; Australia", series ID
-A2325846C. It is published about four weeks after each quarter ends, which creates a timing
-problem worth knowing about: a disposal in late June cannot be finally indexed until the
-following month's release, and that is every user who files early.
+Source: ABS 6401.0 table 2, All groups CPI, Australia (series A2325846C), published about
+four weeks after each quarter.
 """
 
 import csv
@@ -77,12 +75,9 @@ class Command(BaseCommand):
         return sorted(rows)
 
     def _parse(self, raw_date, raw_value):
-        """One row, or None where it is a header or blank.
+        """Parse a row to `(quarter_start, index)`, or None if it is not a data row.
 
-        The ABS publishes the quarter by its *last* month, so a row dated 30 September 2027
-        is the September quarter, which starts on 1 July. Both conventions are accepted and
-        normalised to the quarter start, because getting this backwards shifts every factor
-        by a quarter and would be invisible in the output.
+        Any date in a quarter maps to its start; the ABS dates a quarter by its last month.
         """
         raw_date = (raw_date or '').strip()
         raw_value = (raw_value or '').strip()

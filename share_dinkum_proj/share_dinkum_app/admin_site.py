@@ -1,15 +1,7 @@
-"""The admin site itself, so the dashboard is part of it rather than bolted on.
+"""The admin site, with the dashboard as its index.
 
-This replaces two blocks that reassigned `admin.site.get_urls` and `admin.site.index` at
-import time, each guarded by a flag on the site object to stop a second import doing it
-twice. That worked, but it left the dashboard depending on module import order, and every
-new action had to be threaded through a closure over the original `get_urls`. Subclassing
-gives both as ordinary overrides, and the guards stop being necessary because nothing is
-being mutated in place.
-
-`share_dinkum_app.apps.ShareDinkumAdminConfig` names this class as `default_site`, which
-makes `admin.site` an instance of it. Every existing `admin.site.register(...)` therefore
-keeps working untouched -- nothing needs re-registering against a second site.
+`admin_apps.ShareDinkumAdminConfig` sets this as `default_site`, so `admin.site` is an
+instance of it and `admin.site.register(...)` works as usual.
 """
 
 from django.contrib import admin
@@ -25,12 +17,9 @@ class ShareDinkumAdminSite(admin.AdminSite):
     index_title = 'Share Dinkum. An open-source share tracker.'
 
     def get_urls(self):
-        """Admin URLs, with the dashboard and one route per declared action.
+        """Admin URLs plus the dashboard and one route per dashboard action.
 
-        Imported inside the method rather than at module level. This class is named by
-        `AdminConfig.default_site` and so is imported very early -- before the app registry
-        is populated -- while `dashboard` reaches models and would fail if pulled in at that
-        point.
+        `dashboard` is imported here, as this module loads before the app registry is ready.
         """
         from share_dinkum_app.dashboard import DASHBOARD_ACTIONS, dashboard_view
 

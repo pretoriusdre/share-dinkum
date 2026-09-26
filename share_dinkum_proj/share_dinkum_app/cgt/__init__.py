@@ -1,38 +1,20 @@
-"""Capital gains tax calculation.
+"""Capital gains tax characterisation. Reads the database, never writes to it.
 
-Everything that characterises a capital gain for tax purposes lives here, and nothing here
-writes to the database. Models store gross, mechanical figures -- proceeds, cost base, the
-difference between them. How that difference is *taxed* depends on residency, on the asset,
-and on when the event happened, all of which change over time and none of which should be
-baked into a stored value.
+Models store the mechanical figures (proceeds, cost base); this package works out how they
+are taxed, so a correction changes reports but not stored data.
 
-Keeping the characterisation separate is what makes a correction safe: improving a
-calculation changes what a report says, but nothing already recorded. Where that shifts a
-figure for a year the user may already have lodged, CGTReturnSnapshot and
-CGTBasisChangeReport exist to make the movement visible rather than silent.
+* Cost base: purchase, brokerage and cost base adjustments.
+* Division 115 discount by taxpayer type, apportioned for days abroad (s115-105).
+* Gains disregarded for foreign or temporary residents (s855-10, s768-915, s855-40(2)).
+* From 1 July 2027: CPI indexation (Division 114), the s112-155 deemed sale, and the
+  s102-5 statutory loss order.
+* The s102-5 method statement.
 
-Current scope
--------------
-* The cost base is the parcel's own build-up: purchase, brokerage, cost base adjustments.
-* The discount follows Division 115, including the s115-105 apportionment for days spent
-  abroad and the rate differences between taxpayer types.
-* Gains a foreign or temporary resident can disregard under s855-10, s768-915 and
-  s855-40(2) are identified as such.
+With no residency declared, the flat discount applies and reports say so.
 
-All of that depends on the account declaring who and where the holder is. An account that
-has declared nothing keeps the flat 50% the application has always applied, and every
-report built on it says so. Declaring an unbroken period of Australian residency reproduces
-the same figures exactly, so the declaration is free for the users it does not affect.
-
-* From 1 July 2027 the discount gives way to CPI indexation of the cost base (Division 114),
-  a holding that straddles the cutover is split in two by the deemed sale of s112-155, and
-  the s102-5 method statement absorbs losses in the statutory order.
-
-Not yet implemented, and each raises or flags rather than guessing: the s112-185 apportioning
-method, which has not been made, so a straddling disposal needs a market valuation; the
-residential categories of s102-6 and the Subdivision 26-155 quarantining that goes with them;
-the s115-115(4) market value election; and the `minimum tax gap amount` of s119-10(2), which
-needs income this application does not hold.
+Not implemented (flagged or raised, not guessed): the s112-185 apportioning method (a
+straddling disposal needs a market valuation), Subdivision 26-155 quarantining, the
+s115-115(4) election, and the s119-10(2) minimum tax gap amount.
 """
 
 from share_dinkum_app.cgt.discount import (

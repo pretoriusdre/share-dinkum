@@ -40,12 +40,7 @@ def assign_default_account(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Market)
 def suggest_market_country(sender, instance, created, **kwargs):
-    """Fill in where a market is, when it can be told from the code or suffix.
-
-    Only on creation, and only when nothing was supplied. The country decides whether
-    instruments on this market are "Australian listed" for capital gains reporting, so a
-    later edit by the user must never be undone by a signal.
-    """
+    """On creation with no country, suggest one from the market's code or suffix."""
     if not created or instance.country:
         return
 
@@ -57,11 +52,9 @@ def suggest_market_country(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Instrument)
 def suggest_instrument_legal_form(sender, instance, created, **kwargs):
-    """Suggest whether a well known code is a company or a trust.
+    """On creation with an unknown legal form, suggest one for a known code.
 
-    Recorded as a suggestion, never as a confirmation: the distinction is what lets a
-    capital gains schedule say it is a draft. Anything the user has confirmed is left
-    alone, and so is anything not on the seed list.
+    Saved with source SUGGESTED, so it does not count as confirmed.
     """
     if not created or instance.legal_form_source == LegalFormSource.USER:
         return
@@ -132,14 +125,7 @@ def create_sell_allocations(sender, instance, created, **kwargs):
         unit_proceeds = instance.unit_proceeds
 
         def get_unit_net_capital_gain(parcel):
-            """Rank parcels by the gain per unit left after any discount.
-
-            The discount rule comes from the cgt package rather than being applied here, so
-            that parcel selection and the reports can never disagree about what a gain is
-            worth. That matters more than it looks: this is the one place a discount is
-            applied to a decision rather than to a figure, and the rule it uses is known to
-            be wrong for a foreign or temporary resident.
-            """
+            """Per-unit gain after discount, using the same rule as the reports."""
             capital_gain = unit_proceeds - parcel.unit_cost_base
             return cgt.apply_discount(
                 capital_gain,
@@ -211,16 +197,10 @@ def handle_sell_allocation_deletion(sender, instance, **kwargs):
 
 
 def _fiscal_year_start(adjustment, end):
-    """The first day of the year an adjustment relates to.
+    """The start of the fiscal year containing `end`, from the account's fiscal year type.
 
-    Read from the account's own fiscal year configuration rather than assumed to be twelve
-    months back from the end date, so a non-Australian or non-calendar year works. Computed
-    arithmetically rather than through FiscalYearType.classify_date, which creates a
-    FiscalYear row as a side effect -- not something a routine that only needs a date
-    should be doing.
-
-    Falls back to twelve months back where no fiscal year type is set, guarding the
-    29 February case that has no counterpart in the preceding common year.
+    Without one, the day after `end` a year earlier. Avoids `classify_date`, which creates
+    a FiscalYear row.
     """
     fiscal_year_type = getattr(adjustment.account, 'fiscal_year_type', None)
     if fiscal_year_type is not None:
@@ -237,16 +217,9 @@ def _fiscal_year_start(adjustment, end):
 
 @receiver(post_save, sender=CostBaseAdjustment)
 def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
-    """Spread a new adjustment across the parcels that were held during the year.
+    """Allocate a new adjustment across the parcels held during its year.
 
-    Runs once, when the adjustment is first created. Deliberately not on every save: an
-    adjustment that has already been allocated has parcels depending on those allocations,
-    and re-running on an ordinary edit would silently move cost base around underneath
-    figures the user may have lodged.
-
-    The consequence is that a correction to how the weighting works does not reach
-    adjustments that already exist. `manage.py reallocate_cost_base_adjustments` is how that
-    is done, deliberately and with a diff, rather than as a side effect of upgrading.
+    Runs on creation only, so editing an adjustment never moves existing allocations.
     """
     assert isinstance(instance, CostBaseAdjustment)
 
@@ -257,11 +230,10 @@ def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
 
 
 def allocate_cost_base_adjustment_now(instance):
-    """The allocation itself, callable without a save.
+    """Allocate an adjustment across parcels, weighted by quantity times days held in the year.
 
-    Separated from the signal so that re-allocating an existing adjustment is an explicit
-    act with its own entry point, rather than something achieved by poking at
-    `_creation_handled` and hoping the signal fires.
+    Only for the QTY_HELD method. The largest weight takes the rounding residual, so the
+    allocations sum exactly to the adjustment.
     """
     logger.debug('Handling cost base allocation for %s', instance)
 
@@ -274,13 +246,7 @@ def allocate_cost_base_adjustment_now(instance):
     cutoff_date = _fiscal_year_start(instance, end)
 
     def days_held_in_year(parcel):
-        """Days the parcel was actually held during the year the adjustment relates to.
-
-        Bounded at both ends. Only bounding the sale side gave a parcel bought part way
-        through the year a full year's weight, so a holding of two months took the same
-        share per unit as one held throughout -- overstating its cost base and understating
-        every gain later derived from it.
-        """
+        """Days the parcel was held within the adjustment's year, inclusive."""
         start = max(cutoff_date, parcel.buy.date)
         finish = min(end, parcel.sale_date) if parcel.sale_date else end
         return max((finish - start).days + 1, 0)
@@ -510,10 +476,7 @@ def generate_export_file(sender, instance, created, **kwargs):
 
 @receiver(post_delete)
 def delete_file_on_delete(sender, instance, **kwargs):
-    """
-    Deletes the file when a model instance is deleted.
-    Only works if the file field is named 'file'.
-    """
+    """Delete a deleted instance's `file`, for any model with a field of that name."""
     file_field = getattr(instance, 'file', None)
     if file_field:
         file_field.delete(save=False)
@@ -521,9 +484,7 @@ def delete_file_on_delete(sender, instance, **kwargs):
 
 @receiver(pre_save)
 def delete_file_on_change(sender, instance, **kwargs):
-    """
-    Deletes old file if the 'file' field is updated.
-    """
+    """Delete the old `file` when a saved instance's `file` changes."""
     if not instance.pk:
         return  # New instance, nothing to delete
 

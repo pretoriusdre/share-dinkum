@@ -6,16 +6,7 @@ from functools import wraps
 
 
 def safe_property(func):
-    """
-    Combined decorator: behaves like @property but returns None when the instance is unsaved.
-
-    Useful for model properties that shouldn't run logic when the object is in the Django admin 'add' view.
-
-    Example:
-        @safe_property
-        def sale_date(self):
-            return self.sell.date
-    """
+    """Like @property, but returns None while the instance is being added (e.g. admin add view)."""
     @property
     @wraps(func)
     def wrapper(self):

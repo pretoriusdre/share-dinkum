@@ -118,13 +118,8 @@ class GenericModelAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-    #: Roughly how many form fields all the inlines on one change page may add up to.
-    #: The 200-row rule below is about how long a page takes to build; this is about
-    #: whether it can be submitted at all. A form field is a POST parameter, and Django
-    #: refuses a submission with too many of them -- so a page over the limit renders
-    #: perfectly, then raises TooManyFieldsSent when you press Save, which reads as the
-    #: save being broken rather than the page being too big. Rows are the wrong unit for
-    #: that: 35 dividends carry more fields than 100 of something narrow.
+    #: Approximate total form fields allowed across a change page's inlines, so saving does not
+    #: hit Django's TooManyFieldsSent limit.
     INLINE_FIELD_BUDGET = 6000
 
     def get_inline_instances(self, request, obj=None):
@@ -228,23 +223,10 @@ CONFIRM_LEGAL_FORM_FIELD = 'confirm_legal_form'
 
 
 class UnsetNullBooleanSelect(forms.NullBooleanSelect):
-    """A nullable boolean labelled by what each state does, not by what it asserts.
+    """NullBooleanSelect for the TAP override, labelled by what each option does.
 
-    Django's labels are Unknown / Yes / No. Both halves of that mislead here.
-
-    "Unknown" describes a fact nobody has established yet, so it asks to be resolved. For
-    an override the empty state is not an open question -- it is the working setting, and
-    the one that lets the answer be derived per parcel.
-
-    "No" is worse, because it is true. An ordinary listed share is not taxable Australian
-    property in its own right, so answering honestly is exactly what a careful person does
-    -- and it silently overrides the s104-165(3) departure deeming, which is the main route
-    by which such a share becomes taxable Australian property. Set across a portfolio it
-    reads every capital gain as disregarded. Saying what the option does, rather than what
-    it asserts, is the difference between a true answer and an informed one.
-
-    Only the labels change. The submitted values stay unknown/true/false, so
-    `NullBooleanSelect.value_from_datadict` still round-trips None correctly.
+    "No" overrides the s104-165(3) departure deeming, which the plain label hides. Only the
+    labels change; the submitted values are the standard ones.
     """
 
     def __init__(self, attrs=None):
@@ -257,17 +239,9 @@ class UnsetNullBooleanSelect(forms.NullBooleanSelect):
 
 
 class InstrumentAdminForm(forms.ModelForm):
-    """Adds the one thing `Instrument.save()` cannot express: agreeing with a suggestion.
+    """Instrument form with a "Confirm legal form" tick, to accept a suggestion unchanged.
 
-    `Instrument.save()` promotes `legal_form_source` to USER only when the legal form
-    *changes*, which covers correcting a suggestion and creating an instrument that already
-    carries one. It cannot cover the commonest case of all -- the suggestion is right, and
-    you want to say so -- because nothing changes, so nothing is recorded and the schedule
-    goes on calling itself a draft with no indication why.
-
-    Making it a tick rather than inferring it from a save is deliberate. The alternative was
-    to treat any save as confirmation, which would mean editing an unrelated field on the
-    same form silently answers a tax question on the user's behalf.
+    An explicit tick, so saving an unrelated field never confirms the legal form.
     """
 
     confirm_legal_form = forms.BooleanField(
@@ -293,12 +267,7 @@ class InstrumentAdmin(GenericModelAdmin):
     actions = ['confirm_legal_form_action']
 
     def get_fields(self, request, obj=None):
-        """Offer the tick only where there is something to confirm.
-
-        Once the form is confirmed the readonly `legal_form_source` says so, and a tick that
-        could be un-ticked would raise a question this deliberately does not answer: whether
-        clearing it should demote a confirmed answer back to a suggestion.
-        """
+        """Show the confirm tick only for a saved, unconfirmed instrument with a legal form."""
         fields = list(super().get_fields(request, obj))
         if obj is None or obj.is_classified or obj.legal_form == LegalForm.UNKNOWN:
             return [name for name in fields if name != CONFIRM_LEGAL_FORM_FIELD]
@@ -323,11 +292,7 @@ class InstrumentAdmin(GenericModelAdmin):
 
     @admin.action(description='Confirm legal form as your answer')
     def confirm_legal_form_action(self, request, queryset):
-        """Confirm in bulk, which is how a back catalogue of closed positions gets done.
-
-        Anything still unclassified is named rather than skipped quietly: it is the one
-        outcome where the user's selection did not do what they asked.
-        """
+        """Confirm the selected instruments' legal forms, naming any with none set."""
         confirmed = 0
         already = 0
         unclassified = []

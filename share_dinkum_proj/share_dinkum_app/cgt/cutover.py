@@ -1,31 +1,16 @@
 """Subdivision 112-E: the deemed sale and reacquisition on 1 July 2027.
 
-The Act does not split a straddling gain arithmetically. It deems the asset **sold on
-30 June 2027 and reacquired on 1 July 2027** at market value (s112-155(2)), and defers the
-resulting gain or loss until the asset is actually disposed of (s112-160). One economic
-disposal therefore produces two gains with different characters: the deferred one, which
-keeps the 50% discount, and the gain on growth after the cutover, which is indexed instead.
+s112-155(2) deems an asset held across the cutover sold on 30 June 2027 and reacquired on
+1 July 2027 at market value; the gain is deferred to the actual sale (s112-160).
 
-Three consequences the arithmetic-split model does not capture, and which this module
-exists to get right:
+* The deferred gain is its own s102-6 category and absorbs losses first (s102-5 Step 1(a)).
+* The reacquisition resets the date for indexation (s960-275(1B)) but not for the 12-month
+  rule (s114-10(9)).
+* Market value or the statutory apportionment is chosen at lodgment for the year of sale
+  (s103-25, s112-155(4)).
 
-* The deferred gain is a **separate category** under s102-6, not a component of the later
-  gain. It absorbs capital losses first, ahead of everything else (s102-5 Step 1(a)).
-* The reacquisition resets the acquisition date for indexation (s960-275(1B)) but is
-  **disregarded for the 12-month rule** (s114-10(9)), so a parcel bought in 2020 and sold in
-  2028 counts as held for more than twelve months on both sides of the cutover.
-* Nothing has to be decided in June 2027. The choice between a market valuation and the
-  statutory apportionment is made when the return for the year of the actual sale is lodged
-  (s103-25, s112-155(4)), so a user who does nothing at the cutover has lost no option.
-
-**s112-155(1)(d) denies all of this to anyone s115-105 applies to**, which reaches much
-further than "foreign residents". s115-105(2)(e) catches anyone who was a foreign *or
-temporary* resident during any part of the ownership period after 8 May 2012 -- a returned
-expatriate, or a former 482 visa holder who has since become a permanent resident. They get
-no deemed sale, so no 50% is banked on their pre-2027 growth, and if they are resident from
-the cutover then indexation applies and s115-20 takes the discount away as well. They can
-end up with neither. See `pending_reason` on the events this produces: the report has to say
-that out loud, because it looks like a bug.
+s112-155(1)(d) denies the deemed sale to anyone s115-105 applies to: a foreign or temporary
+resident at any time during ownership after 8 May 2012, including returned expatriates.
 """
 
 from datetime import timedelta
@@ -37,9 +22,7 @@ from share_dinkum_app.choices import TaxpayerType, ValuationPurpose, ValuationSo
 from share_dinkum_app.cgt import discount as discount_module, residency
 from share_dinkum_app.constants import CGT_CUTOVER_DATE
 
-#: s112-155(2) deems the sale to happen just before 1 July 2027 and the reacquisition on it.
-#: The valuation is the same figure for both, so one date is enough to look one up, but the
-#: gain either side of it belongs to different regimes and the two names keep that legible.
+#: s112-155(2): deemed sale on 30 June 2027, reacquisition on 1 July 2027, at one valuation.
 DEEMED_SALE_DATE = CGT_CUTOVER_DATE - timedelta(days=1)
 DEEMED_REACQUISITION_DATE = CGT_CUTOVER_DATE
 
@@ -47,7 +30,7 @@ PURPOSE_CUTOVER = ValuationPurpose.CUTOVER_2027
 PURPOSE_DEPARTURE = ValuationPurpose.DEPARTURE
 PURPOSE_ARRIVAL = ValuationPurpose.ARRIVAL
 
-#: Why a straddling disposal could not be split, in the order the caller should care about.
+#: Reasons a straddling disposal was not split.
 PENDING_NO_VALUATION = (
     'No market value recorded for {instrument} on {day}, so the gain cannot be split across '
     'the cutover. Record one, or run "manage.py capture_cutover_valuations".'
@@ -64,11 +47,11 @@ PENDING_S115_105 = (
 
 
 def deemed_sale_applies(account, acquisition_date, event_date, declared=None):
-    """Whether s112-155 splits this disposal in two.
+    """Return `(applies, reason)`: whether s112-155 splits this disposal.
 
-    Returns `(applies, reason)`. The reason is None when it applies, and otherwise says
-    which condition failed, because "your gain was not split" is not a self-explaining
-    outcome for someone who read about the reform in the paper.
+    Not for a holding wholly on one side of the cutover, a company or super fund, or
+    anyone abroad after 8 May 2012 during ownership. `reason` explains a refusal where
+    one needs explaining, otherwise None.
     """
     if acquisition_date is None or event_date is None:
         return False, None
@@ -96,21 +79,12 @@ def deemed_sale_applies(account, acquisition_date, event_date, declared=None):
 
 
 def deemed_reset_dates(account, declared=None):
-    """Every date on which this account's holdings are deemed to be sold and reacquired.
+    """Dates this account's holdings are deemed sold and reacquired, as `(date, purpose)`,
+    oldest first.
 
-    One mechanism, four provisions. Each of these resets a cost base to market value on a
-    particular day, and the only difference between them is what happens to the gain that
-    falls out:
-
-    * **1 July 2027** (s112-155) -- deferred until the asset is actually sold.
-    * **Leaving Australia** (s104-165) -- taxable then, unless the s104-165(2) choice was
-      made, in which case there is no reset at all and the assets stay in the Australian net.
-    * **Becoming an Australian resident** (s855-45) -- assets that were outside the
-      Australian net are brought in at their market value on that day, so growth from before
-      arrival is never taxed here.
-
-    Returns a list of `(date, purpose)` oldest first. A caller wanting a valuation asks for
-    each of these; nothing here decides what the valuation is used for.
+    * 1 July 2027 (s112-155).
+    * Each departure without an s104-165(2) election (s104-165).
+    * Each return to Australian residency (s855-45).
     """
     if declared is None:
         declared = residency.periods(account)
@@ -133,17 +107,10 @@ def deemed_reset_dates(account, declared=None):
 
 
 def unit_value_at(instrument, day, purpose=PURPOSE_CUTOVER, prefer_recorded=True):
-    """What one unit was worth on a day, and where the figure came from.
+    """Return `(unit value, source)` on `day`, or `(None, None)`.
 
-    Returns `(value, source)`, or `(None, None)`. A valuation recorded against the day is
-    preferred over a closing price, because the user may have had to source one for an
-    unlisted or suspended holding and their answer should not be silently overridden by a
-    stale price.
-
-    `prefer_recorded=False` skips recorded valuations and goes to the market data. It exists
-    for the one caller that is deliberately replacing a valuation: without it, asking what
-    the value is would return the value being replaced, and an overwrite would write back
-    what was already there.
+    A recorded valuation (for `purpose` first, then any) beats that day's closing price.
+    `prefer_recorded=False` uses the closing price only, for callers replacing a valuation.
     """
     from share_dinkum_app.models import InstrumentPriceHistory, InstrumentValuation
 
@@ -171,10 +138,9 @@ def unit_value_at(instrument, day, purpose=PURPOSE_CUTOVER, prefer_recorded=True
 
 
 def scale_for_splits(parcel, day):
-    """Adjust a per-unit value recorded before a share split.
+    """The combined ratio of the instrument's share splits after `day`.
 
-    A valuation is per unit at the time it was taken. If the instrument has split since,
-    today's units are not that unit. The parcel's own multiplier records the ratio.
+    Divide a per-unit value from `day` by this to get a value per current unit.
     """
     from share_dinkum_app.models import ShareSplit
 

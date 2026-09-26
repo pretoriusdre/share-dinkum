@@ -5,10 +5,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_app_receivers(app_name):
-    """
-    Collect all signal receivers from the given app.
-    Returns a list of tuples: (signal, receiver function, sender, dispatch_uid)
-    """
+    """Model signal receivers defined in `app_name`, as `(signal, func, sender, dispatch_uid)`."""
     signals = [post_save, post_delete, pre_save, pre_delete]
     app_receivers = []
 
@@ -27,10 +24,7 @@ def get_app_receivers(app_name):
 
 
 def disconnect_app_signals(app_name):
-    """
-    Disconnects all signal receivers for the given app.
-    Returns a list of tuples for later reconnection.
-    """
+    """Disconnect the app's model signal receivers; returns them for `reconnect_app_signals`."""
     receivers = get_app_receivers(app_name)
     for signal, func, sender, dispatch_uid in receivers:
         signal.disconnect(func, sender=sender, dispatch_uid=dispatch_uid)
@@ -38,8 +32,6 @@ def disconnect_app_signals(app_name):
 
 
 def reconnect_app_signals(receivers):
-    """
-    Reconnects a previously disconnected set of signal receivers.
-    """
+    """Reconnect receivers returned by `disconnect_app_signals`."""
     for signal, func, sender, dispatch_uid in receivers:
         signal.connect(func, sender=sender, dispatch_uid=dispatch_uid)
