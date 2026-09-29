@@ -258,6 +258,18 @@ def _year_still_running(fiscal_year):
     return end_date if end_date and date.today() <= end_date else None
 
 
+def _s115_105_applies(account, event):
+    """Whether the event's discount is governed by s115-105 (a foreign or temporary holder).
+
+    For a disposal, any such day after 8 May 2012 while it was held. For a trust
+    attribution, which has no holding period, the member's status at the year end.
+    """
+    if event.purchase_date is not None and event.sale_date is not None:
+        return residency.has_non_resident_days_after_cutoff(
+            account, event.purchase_date, event.sale_date)
+    return event.residency_status in (residency.FOREIGN, residency.TEMPORARY)
+
+
 def _sales_not_fully_allocated(account, year_name):
     """Sales in the year (every year if None) with units allocated to no parcel."""
     from share_dinkum_app.models import Sell
@@ -394,6 +406,19 @@ def _warnings(account, live_events, all_events, year_name=None):
         warnings.append(
             'These trust statements do not reconcile against themselves, so their attributed '
             f'gains are shown but should not be relied on: {", ".join(unreconciled)}.')
+
+    unsettled = sorted({
+        e.instrument for e in live_events
+        if e.regime == events_module.REGIME_POST_CUTOVER
+        and (e.discount_percentage or 0) > 0
+        and _s115_105_applies(account, e)})
+    if unsettled:
+        warnings.append(
+            'These gains, on or after 1 July 2027, keep a discount apportioned for time as a '
+            'foreign or temporary resident (s115-105, s115-115). Whether that survives the 2027 '
+            'changes is not settled: those sections are unamended, but new s115-100(f) sets 0% '
+            'where no other paragraph applies, which would leave no discount at all. Take '
+            f'advice before relying on these figures: {", ".join(unsettled)}.')
 
     unallocated = _sales_not_fully_allocated(account, year_name)
     if unallocated:

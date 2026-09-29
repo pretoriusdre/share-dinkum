@@ -3,8 +3,11 @@
 * The rate depends on the taxpayer type (s115-10, s115-100): half for an individual or
   trust, a third for a complying super fund, none for a company.
 * It is apportioned for days as a foreign or temporary resident after 8 May 2012
-  (s115-105, s115-115). Via s115-100(c), this apportioned discount continues after
-  1 July 2027.
+  (s115-105, s115-115). Days no residency period covers count as not resident too.
+* From 1 July 2027, Act No. 49 of 2026 ends the 50% for individuals and trusts
+  (s115-100(aa), (ab)) and adds s115-100(f), 0% where no other paragraph applies. Whether
+  a discount apportioned under s115-105 and s115-115, both unamended, survives that is not
+  settled. It is applied here, and the CGT schedule warns that it is unsettled.
 """
 
 from datetime import timedelta
@@ -88,6 +91,9 @@ def apportionment_fraction(account, purchase_date, sale_date, declared=None):
       after 8 May 2012.
     * Bought earlier, abroad on 8 May 2012 (s115-115(6)): resident days after 8 May 2012.
       The s115-115(4) market value election is not implemented.
+
+    A day no residency period covers is not a resident day in any of the three. It used
+    to count as resident in the second case only.
     """
     if purchase_date is None or sale_date is None:
         return Decimal('1')
@@ -106,7 +112,7 @@ def apportionment_fraction(account, purchase_date, sale_date, declared=None):
         counted = residency.resident_days(
             account, purchase_date, sale_date, declared=declared)
     elif residency.status_on(account, cutoff, declared=declared) == residency.RESIDENT:
-        away = residency.non_resident_days(
+        away = residency.days_not_resident(
             account, first_apportionable_day, sale_date, declared=declared)
         counted = total_days - away
     else:
@@ -122,7 +128,7 @@ def discount_percentage(purchase_date, sale_date, account=None, declared=None):
     """The fraction of a gain the discount removes, as a Decimal (0.5 is half).
 
     Zero if not held long enough. Otherwise the taxpayer type's rate, apportioned only if
-    residency is declared and includes days abroad after 8 May 2012.
+    residency is declared and some day after 8 May 2012 was abroad or undeclared.
     """
     if not is_discount_eligible(purchase_date, sale_date):
         return NO_DISCOUNT
@@ -139,8 +145,10 @@ def discount_percentage(purchase_date, sale_date, account=None, declared=None):
     if not declared:
         return rate
 
-    if not residency.has_non_resident_days_after_cutoff(
-            account, purchase_date, sale_date, declared=declared):
+    # Undeclared days count too, so a gap in the history apportions the discount whether or
+    # not some other day was foreign.
+    window_start = max(purchase_date, residency.APPORTIONMENT_START_DATE + timedelta(days=1))
+    if residency.days_not_resident(account, window_start, sale_date, declared=declared) <= 0:
         return rate
 
     return rate * apportionment_fraction(

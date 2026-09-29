@@ -44,6 +44,15 @@ PENDING_S115_105 = (
     'this holder, who was a foreign or temporary resident at some point after 8 May 2012. '
     'The whole gain stays a single gain, with an apportioned discount and no indexation.'
 )
+#: The same refusal, for a holder resident every day since 1 July 2027 (s114-25), whose gain
+#: is therefore indexed, and loses the discount entirely (s115-20).
+PENDING_S115_105_INDEXED = (
+    'No deemed sale on 1 July 2027: s112-155(1)(d) denies it because s115-105 applies to '
+    'this holder, who was a foreign or temporary resident at some point after 8 May 2012. '
+    'Resident every day since 1 July 2027, so the whole cost base is indexed from then '
+    '(s114-25), and a gain on an indexed cost base gets no discount at all (s115-20), '
+    'including on the growth before 2027.'
+)
 
 
 def deemed_sale_applies(account, acquisition_date, event_date, declared=None):

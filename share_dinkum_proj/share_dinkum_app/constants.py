@@ -4,7 +4,7 @@ DEFAULT_CURRENCY = 'AUD'
 CGT_DISCOUNT_RATE = 0.5 # 50% discount
 CGT_DISCOUNT_THRESHOLD_DAYS = 365 # 365 days
 # Treasury Laws Amendment (Tax Reform No. 1) Act 2026, Act No. 49 of 2026. For CGT events
-# on or after this date the 50% discount is replaced for individuals by cost base
+# on or after this date the 50% discount is replaced for individuals and trusts by cost base
 # indexation. The date is the legal boundary and never changes; whether the app implements
 # the post-cutover regime is a separate question.
 CGT_CUTOVER_DATE = date(2027, 7, 1)

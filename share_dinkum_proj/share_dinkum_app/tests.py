@@ -3177,6 +3177,68 @@ class ResidencyInertForResidentsTests(TransactionTestCase):
         self.assertTrue(all(e.tap_status == cgt.tap.NTAP for e in events))
 
 
+class UndeclaredDaysTests(TransactionTestCase):
+    """A day no residency period covers counts as not resident, in every apportionment case.
+
+    It used to depend on which formula the purchase date chose, and on whether some other
+    day happened to be foreign.
+    """
+
+    def setUp(self):
+        self.account = create_account()
+        self.bought, self.sold = date(2010, 1, 1), date(2020, 1, 1)
+        self.total = (self.sold - self.bought).days + 1
+        self.gap = (date(2014, 12, 31) - date(2014, 1, 1)).days + 1
+
+    def _fraction(self, counted):
+        return (Decimal(counted) / Decimal(self.total)).quantize(Decimal('0.00000001'))
+
+    def test_a_gap_counts_against_a_parcel_held_on_8_may_2012(self):
+        declare(self.account, 'RESIDENT', date(2005, 1, 1), date(2013, 12, 31))
+        declare(self.account, 'FOREIGN', date(2015, 1, 1), date(2015, 12, 31))
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        foreign = (date(2015, 12, 31) - date(2015, 1, 1)).days + 1
+
+        self.assertEqual(
+            cgt.apportionment_fraction(self.account, self.bought, self.sold),
+            self._fraction(self.total - self.gap - foreign))
+
+    def test_a_gap_alone_apportions_the_discount(self):
+        declare(self.account, 'RESIDENT', date(2005, 1, 1), date(2013, 12, 31))
+        declare(self.account, 'RESIDENT', date(2015, 1, 1))
+
+        self.assertEqual(
+            cgt.discount_percentage(self.bought, self.sold, account=self.account),
+            Decimal('0.5') * self._fraction(self.total - self.gap))
+
+    def test_a_complete_history_is_unaffected(self):
+        declare(self.account, 'RESIDENT', date(2005, 1, 1))
+        self.assertEqual(
+            cgt.discount_percentage(self.bought, self.sold, account=self.account),
+            Decimal('0.5'))
+
+
+class ResidencyCoverageTests(TransactionTestCase):
+    """What the residency history leaves out is reported rather than assumed."""
+
+    def setUp(self):
+        self.account = create_account()
+        Buy.objects.create(
+            account=self.account, instrument=create_instrument(account=self.account),
+            date=date(2015, 1, 5), quantity=Decimal('100'),
+            unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def test_a_history_ending_before_today_is_reported(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2020, 12, 31))
+        problems = cgt.residency.coverage_problems(self.account)
+        self.assertTrue(any('only up to 2020-12-31' in p for p in problems), problems)
+
+    def test_an_open_ended_history_is_not(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        self.assertEqual(cgt.residency.coverage_problems(self.account), [])
+
+
 class DiscountApportionmentTests(TransactionTestCase):
     """s115-115 apportionment in each of its three cases."""
 
@@ -3619,6 +3681,34 @@ class IndexationEligibilityTests(TransactionTestCase):
         self.assertFalse(cgt.is_indexation_eligible(
             self.account, date(2020, 1, 15), date(2030, 1, 15)))
 
+    def test_a_company_or_super_fund_is_not_indexed(self):
+        """s110-36(1A) indexes only for Australian resident individuals and trusts."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        for taxpayer_type in ('COMPANY', 'SMSF'):
+            self.account.taxpayer_type = taxpayer_type
+            self.account.save()
+            self.assertFalse(cgt.is_indexation_eligible(
+                self.account, date(2020, 1, 15), date(2030, 1, 15)), taxpayer_type)
+
+    def test_a_trust_is_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        self.account.taxpayer_type = 'TRUST'
+        self.account.save()
+        self.assertTrue(cgt.is_indexation_eligible(
+            self.account, date(2020, 1, 15), date(2030, 1, 15)))
+
+    def test_a_super_fund_keeps_its_third_after_the_cutover(self):
+        """s115-100(b) is unchanged, so a complying fund's gain is discounted, not indexed."""
+        data = create_cutover_portfolio(suffix='smsf')
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        data['account'].taxpayer_type = 'SMSF'
+        enable_2027_regime(self, data['account'])
+
+        event = cgt.disposal_events(data['account'])[0]
+
+        self.assertEqual(event.discount_percentage, Decimal(1) / Decimal(3))
+        self.assertEqual(event.method, cgt.events.METHOD_DISCOUNT)
+
 
 def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix=''):
     """A parcel bought well before the cutover and sold well after it.
@@ -3799,6 +3889,25 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
     def test_the_report_explains_it_rather_than_leaving_it_to_be_discovered(self):
         event = cgt.disposal_events(self.account)[0]
         self.assertIn('s115-105 applies', event.pending_reason)
+
+    def test_the_explanation_says_what_was_done(self):
+        """Indexed with no discount, not the apportioned discount the other case gets."""
+        reason = cgt.disposal_events(self.account)[0].pending_reason
+        self.assertIn('indexed from then', reason)
+        self.assertNotIn('no indexation', reason)
+
+    def test_returning_after_the_cutover_keeps_an_apportioned_discount_instead(self):
+        """Not resident every day since 1 July 2027, so s114-25 denies indexation."""
+        data = create_cutover_portfolio(suffix='late')
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1), date(2014, 12, 31))
+        declare(data['account'], 'FOREIGN', date(2015, 1, 1), date(2027, 12, 31))
+        declare(data['account'], 'RESIDENT', date(2028, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        event = cgt.disposal_events(data['account'])[0]
+
+        self.assertGreater(event.discount_percentage, Decimal('0'))
+        self.assertIn('no indexation', event.pending_reason)
 
     def test_they_are_worse_off_than_if_they_had_never_left(self):
         """A returned expatriate is worse off than if they had never left."""
@@ -4052,6 +4161,48 @@ class CapitalGainScheduleTests(TransactionTestCase):
         instrument.save()
         cleared = ' '.join(cgt.build_schedule(self.account, 'FY2023/24').warnings)
         self.assertNotIn('the only reason their gains are disregarded', cleared)
+
+
+class UnsettledForeignResidentDiscountTests(TransactionTestCase):
+    """The Act leaves open whether a discount apportioned under s115-115 survives 2027.
+
+    s115-100(aa) ends the 50% for events from 1 July 2027 and new (f) sets 0% where nothing
+    else applies, but s115-105 and s115-115 are unamended. The schedule applies the
+    apportioned discount and says it is unsettled.
+    """
+
+    def _warnings(self, *periods, regime=False):
+        data = create_cutover_portfolio()  # bought 15 January 2020, sold 20 August 2028
+        for status, start, end, i1 in periods:
+            declare(data['account'], status, start, end, i1=i1)
+        if regime:
+            enable_2027_regime(self, data['account'])
+        return cgt.build_schedule(data['account'], 'FY2028/29').warnings
+
+    def _flagged(self, warnings):
+        return [w for w in warnings if 's115-100(f)' in w]
+
+    def test_a_foreign_residents_sale_after_the_cutover_is_flagged(self):
+        flagged = self._flagged(self._warnings(
+            ('RESIDENT', date(2010, 1, 1), date(2021, 6, 30), None),
+            ('FOREIGN', date(2021, 7, 1), None, True)))
+        self.assertEqual(len(flagged), 1)
+        self.assertIn('CUT', flagged[0])
+
+    def test_it_is_flagged_whether_or_not_the_2027_regime_is_modelled(self):
+        self.assertTrue(self._flagged(self._warnings(
+            ('RESIDENT', date(2010, 1, 1), date(2021, 6, 30), None),
+            ('FOREIGN', date(2021, 7, 1), None, True), regime=True)))
+
+    def test_a_resident_throughout_is_not_flagged(self):
+        self.assertFalse(self._flagged(self._warnings(
+            ('RESIDENT', date(2010, 1, 1), None, None))))
+
+    def test_a_disregarded_gain_is_not_flagged(self):
+        """No election, so the parcel is not TAP and its gain is disregarded (s855-10)."""
+        self.assertFalse(self._flagged(self._warnings(
+            ('RESIDENT', date(2010, 1, 1), date(2021, 6, 30), None),
+            ('FOREIGN', date(2021, 7, 1), None, None))))
 
 
 class StatutoryLossOrderingTests(TransactionTestCase):

@@ -113,6 +113,16 @@ def undeclared_days(account, start, end, declared=None):
     return days_by_status(account, start, end, declared=declared).get(None, 0)
 
 
+def days_not_resident(account, start, end, declared=None):
+    """Days in [start, end] not known to be Australian resident: foreign, temporary or
+    undeclared.
+
+    What the discount apportionment counts against, so a gap in the history reduces the
+    discount rather than being taken as residency.
+    """
+    return _inclusive_days(start, end) - resident_days(account, start, end, declared=declared)
+
+
 def has_non_resident_days_after_cutoff(account, start, end, declared=None):
     """The s115-105(2)(e) test: any foreign or temporary day in [start, end] after 8 May 2012.
 
@@ -139,8 +149,8 @@ def first_departure(account, declared=None):
 def coverage_problems(account, declared=None):
     """Problems with the saved residency history, as sentences; empty if none or undeclared.
 
-    Checks for gaps, an open-ended period followed by another, and a start after the
-    earliest buy. Needed because imports skip `ResidencyPeriod.clean()`.
+    Checks for gaps, an open-ended period followed by another, a start after the earliest
+    buy, and an end before today. Needed because imports skip `ResidencyPeriod.clean()`.
     """
     from share_dinkum_app.models import Buy
 
@@ -163,5 +173,12 @@ def coverage_problems(account, declared=None):
         problems.append(
             f'Residency is declared only from {declared[0].start_date.isoformat()}, but the '
             f'earliest purchase was on {earliest_buy.date.isoformat()}.')
+
+    last = declared[-1]
+    if last.end_date is not None and last.end_date < date.today():
+        problems.append(
+            f'Residency is declared only up to {last.end_date.isoformat()}. The days since '
+            f'count as not resident: they deny indexation and reduce the discount. Add a '
+            f'period for where you have been resident since.')
 
     return problems

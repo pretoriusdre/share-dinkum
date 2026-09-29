@@ -347,6 +347,10 @@ def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
     except indexation_module.IndexationDataUnavailable as exc:
         return replace(whole, gain_category=category, pending_reason=str(exc))
 
+    if reason == cutover_module.PENDING_S115_105:
+        # That message describes the other outcome, an apportioned discount unindexed.
+        reason = cutover_module.PENDING_S115_105_INDEXED
+
     gain, cost_base_used = _outcome(
         whole.net_proceeds, _money(whole.cost_base * factor), whole.cost_base)
     return replace(
@@ -422,7 +426,7 @@ def _split_events(whole, buy, sell, market_value, indexation_eligible):
         gross_gain=post_gain if post_gain.amount > 0 else _zero_like(post_gain),
         gross_loss=-post_gain if post_gain.amount < 0 else _zero_like(post_gain),
         # The reacquisition is on the cutover, so the asset is a post-cutover asset and
-        # s115-100 leaves it no discount whether or not indexation was available.
+        # s115-100(aa) and (f) leave it no discount whether or not indexation was available.
         method=METHOD_OTHER,
         discount_percentage=Decimal('0'),
         indexation_factor=factor,

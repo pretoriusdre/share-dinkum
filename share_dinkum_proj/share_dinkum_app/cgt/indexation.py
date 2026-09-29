@@ -12,7 +12,8 @@ A missing CPI quarter raises `IndexationDataUnavailable` rather than guessing.
 
 from decimal import Decimal, ROUND_HALF_UP
 
-from share_dinkum_app.cgt import residency
+from share_dinkum_app.choices import TaxpayerType
+from share_dinkum_app.cgt import discount, residency
 from share_dinkum_app.constants import (
     CGT_CUTOVER_DATE,
     CGT_INDEXATION_FIRST_QUARTER,
@@ -61,9 +62,15 @@ def is_indexation_eligible(account, acquisition_date, event_date, declared=None)
     to the event.
 
     Any foreign, temporary or undeclared day denies it outright. False for events before
-    the cutover or with no residency declared.
+    the cutover, with no residency declared, or for a company or super fund.
     """
     if event_date is None or event_date < CGT_CUTOVER_DATE:
+        return False
+
+    if discount.taxpayer_type_of(account) in (TaxpayerType.COMPANY, TaxpayerType.SMSF):
+        # s110-36(1A) indexes only for Australian resident individuals and trusts. A company
+        # never had the discount it replaces, and a complying super fund keeps its third
+        # (s115-100(b), unamended).
         return False
 
     if declared is None:
