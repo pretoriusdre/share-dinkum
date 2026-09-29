@@ -4958,7 +4958,8 @@ class FullBackupButtonTests(TransactionTestCase):
 
         self.assertIn('load back into an empty portfolio', export)
         self.assertIn('does not contain them', export)
-        self.assertIn('restore it by copying it back', full)
+        self.assertIn('complete database', full)
+        self.assertIn('attached documents', full)
         self.assertNotIn('This is your backup', export)
 
 
