@@ -500,6 +500,40 @@ def delete_file_on_change(sender, instance, **kwargs):
         old_file.delete(save=False)
 
 
+@receiver(pre_save)
+def attach_exchange_rate(sender, instance, raw=False, **kwargs):
+    """Give a foreign-currency record its exchange rate before it is saved.
+
+    This has to happen before post_save: the parcel, sell allocations and cost base
+    allocations are built from the record by post_save handlers, and they would otherwise
+    see its amounts unconverted.
+    """
+    if raw or not isinstance(instance, BaseModel) or not hasattr(instance, 'exchange_rate'):
+        return
+
+    currency_val = None
+    for attr_name in dir(instance):
+        if attr_name.endswith('_currency'):
+            try:
+                val = getattr(instance, attr_name, None)
+                if (
+                    val and
+                    val != instance.account.currency and not
+                    getattr(instance, 'exchange_rate', None)
+                ):
+                    currency_val = val
+                    break
+            except AttributeError:
+                continue
+
+    if currency_val:
+        instance.exchange_rate = ExchangeRate.get_or_create(
+            account=instance.account,
+            convert_from=currency_val,
+            convert_to=instance.account.currency,
+            exchange_date=getattr(instance, 'date', None),
+        )
+
 
 @receiver(post_save)
 def persist_safe_properties(sender, instance, created, **kwargs):
@@ -515,35 +549,6 @@ def persist_safe_properties(sender, instance, created, **kwargs):
         return
 
     updated_fields = []
-
-    needs_exchange_rate = False
-    currency_val = None
-    if hasattr(instance, 'exchange_rate'):
-        for attr_name in dir(instance):
-            if attr_name.endswith('_currency'):
-                try:
-                    val = getattr(instance, attr_name, None)
-                    if (
-                        val and
-                        val != instance.account.currency and not
-                        getattr(instance, 'exchange_rate', None)
-                    ):
-                        needs_exchange_rate = True
-                        currency_val = val
-                        break
-                except AttributeError:
-                    continue
-
-    if needs_exchange_rate:
-        exchange_rate_obj = ExchangeRate.get_or_create(
-            account=instance.account,
-            convert_from=currency_val,
-            convert_to=instance.account.currency,
-            exchange_date=getattr(instance, 'date', None),
-        )
-        instance.exchange_rate = exchange_rate_obj
-        updated_fields.append('exchange_rate')
-
 
     for attr_name in dir(instance):
         

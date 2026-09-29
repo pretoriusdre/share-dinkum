@@ -751,6 +751,124 @@ class BuyAndParcelSignalsTests(TransactionTestCase):
         self.assertEqual(parcels.first().parcel_quantity, Decimal('100'))
 
 
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class ForeignCurrencyTradeTests(TransactionTestCase):
+    """A foreign-currency trade has its rate before anything built from it is worked out.
+
+    The parcel and the sell allocations are created by post_save signals. If the rate is
+    attached after them, they see the trade unconverted: the parcel stores its cost base in
+    USD, and a MIN_CGT sell subtracts an AUD cost base from USD proceeds.
+    """
+
+    def _usd_buy(self, account, instrument):
+        return Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(Decimal('50'), 'USD'),
+            total_brokerage=Money(Decimal('10'), 'USD'),
+        )
+
+    def test_buy_parcel_cost_base_is_converted(self, mock_get_rate):
+        account = create_account()
+        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        buy = self._usd_buy(account, instrument)
+
+        self.assertIsNotNone(buy.exchange_rate)
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(str(parcel.calculated_total_cost_base.currency), 'AUD')
+        # (100 x 50 + 10) USD x 1.5
+        self.assertEqual(parcel.calculated_total_cost_base.amount, Decimal('7515'))
+
+    def test_min_cgt_sell_allocates_in_account_currency(self, mock_get_rate):
+        account = create_account()
+        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        self._usd_buy(account, instrument)
+
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2025, 3, 10),
+            quantity=Decimal('40'), unit_price=Money(Decimal('60'), 'USD'),
+            total_brokerage=Money(Decimal('10'), 'USD'), strategy='MIN_CGT',
+        )
+
+        allocation = sell.sale_allocation.get(is_active=True)
+        self.assertEqual(allocation.quantity, Decimal('40'))
+        self.assertEqual(str(allocation.calculated_total_capital_gain.currency), 'AUD')
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class RepairForeignCurrencyFiguresTests(TransactionTestCase):
+    """Figures left unconverted before 0.3.0: the dashboard warns, and the command repairs them."""
+
+    def setUp(self):
+        from share_dinkum_app.dashboard import _unconverted_figures_warning
+        self._warning = _unconverted_figures_warning
+
+    def _portfolio(self):
+        account = create_account()
+        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(Decimal('50'), 'USD'),
+            total_brokerage=Money(Decimal('10'), 'USD'),
+        )
+        return account, instrument, buy
+
+    def _unconvert(self, buy):
+        """Put the buy's parcel back as the bug left it, its cost base labelled USD."""
+        Parcel.objects.filter(buy=buy).update(calculated_total_cost_base_currency='USD')
+
+    def test_a_converted_portfolio_is_left_alone(self, mock_get_rate):
+        account, _, _ = self._portfolio()
+        self.assertIsNone(self._warning(account))
+
+    def test_an_unconverted_parcel_is_warned_about(self, mock_get_rate):
+        account, _, buy = self._portfolio()
+        self._unconvert(buy)
+
+        warning = self._warning(account)
+        self.assertIn('1 parcel(s)', warning)
+        self.assertIn('repair_foreign_currency_figures', warning)
+
+    def test_the_command_recalculates_the_parcel_and_clears_the_warning(self, mock_get_rate):
+        account, _, buy = self._portfolio()
+        self._unconvert(buy)
+
+        call_command('repair_foreign_currency_figures', stdout=io.StringIO())
+
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(str(parcel.calculated_total_cost_base.currency), 'AUD')
+        self.assertEqual(parcel.calculated_total_cost_base.amount, Decimal('7515'))
+        self.assertIsNone(self._warning(account))
+
+    def test_a_dry_run_changes_nothing(self, mock_get_rate):
+        account, _, buy = self._portfolio()
+        self._unconvert(buy)
+        out = io.StringIO()
+
+        call_command('repair_foreign_currency_figures', '--dry-run', stdout=out)
+
+        self.assertIn('would recalculate 1 parcel(s)', out.getvalue())
+        self.assertEqual(Parcel.with_unconverted_cost_base(account).count(), 1)
+
+    def test_an_unconverted_adjustment_is_listed_but_not_changed(self, mock_get_rate):
+        """Re-allocating would spread the adjustment again, so that is left to the operator."""
+        account, instrument, _ = self._portfolio()
+        adjustment = CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(Decimal('100'), 'USD'),
+        )
+        allocations = CostBaseAdjustmentAllocation.objects.filter(cost_base_adjustment=adjustment)
+        allocations.update(cost_base_increase_currency='USD')
+
+        self.assertIn('1 cost base adjustment(s)', self._warning(account))
+
+        out = io.StringIO()
+        call_command('repair_foreign_currency_figures', stdout=out)
+
+        self.assertIn('Delete each one and enter it again', out.getvalue())
+        self.assertEqual(
+            set(allocations.values_list('cost_base_increase_currency', flat=True)), {'USD'})
+
+
 class SellAllocationTests(TransactionTestCase):
     """Test Sell with strategy creates allocations and parcel bifurcation."""
 

@@ -77,6 +77,11 @@ To upgrade, stop the server and run `uv run update`.
 
 ### Fixed
 
+- **Foreign-currency trades get their exchange rate before anything is built from them.**
+  Previously the rate was attached last, which led to the cost base on foreign trades not being converted
+  to the account's base currency. If the dashboard warns about this, run `uv run dev repair_foreign_currency_figures`.
+  That command recalculates the affected parcels, and lists any adjustments that need deleting and entering again.
+
 - **Backups go to one place: `~/share-dinkum-backups/main/`**, for `uv run update`, the notebook's
   `backup()` and the dashboard. Previously two folders in two layouts, and only the notebook's was
   pruned.

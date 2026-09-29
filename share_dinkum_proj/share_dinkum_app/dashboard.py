@@ -34,6 +34,7 @@ from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.models import (
     Buy,
     CGTReturnSnapshot,
+    CostBaseAdjustment,
     CurrentExchangeRate,
     DataExport,
     Distribution,
@@ -42,6 +43,7 @@ from share_dinkum_app.models import (
     FiscalYear,
     Instrument,
     InstrumentPriceHistory,
+    Parcel,
     ResidencyPeriod,
     Sell,
 )
@@ -146,6 +148,36 @@ def _tax_settings_warning(account):
         f'if it is wrong, every discounted gain is wrong. Set it on the account, and add '
         f'your residency periods.'
     )
+
+
+def _unconverted_figures_warning(account):
+    """A warning if figures were left unconverted by the bug fixed in 0.3.0, else None.
+
+    See the `repair_foreign_currency_figures` command, which clears it.
+    """
+    if account is None:
+        return None
+
+    currency = str(account.currency)
+    command = 'uv run dev repair_foreign_currency_figures'
+    adjustments = CostBaseAdjustment.with_unconverted_allocations(account).count()
+    if adjustments:
+        return (
+            f'{adjustments} cost base adjustment(s) in {account.description} were allocated '
+            f'without being converted to {currency}, so the cost base of those parcels, and any '
+            f'gain on them, is wrong. Run `{command}` to list them; each must be deleted and '
+            f'entered again.'
+        )
+
+    parcels = Parcel.with_unconverted_cost_base(account).count()
+    if parcels:
+        return (
+            f'{parcels} parcel(s) in {account.description} have their cost base stored in a '
+            f'currency other than {currency}. Capital gains and reports are not affected, only '
+            f'the stored figure shown in the parcel list and in exports. Run `{command}` to '
+            f'recalculate them.'
+        )
+    return None
 
 
 def prepare_dashboard_context(request, context):
@@ -515,6 +547,7 @@ def prepare_dashboard_context(request, context):
             'dashboard_account': account,
             'dashboard_currency': dashboard_currency,
             'tax_settings_warning': _tax_settings_warning(account),
+            'unconverted_figures_warning': _unconverted_figures_warning(account),
             # The buttons, and the state that says whether pressing one is worth it. Only
             # offered where there is a portfolio to act on; every action needs an account.
             'dashboard_action_groups': action_groups(account) if account else [],

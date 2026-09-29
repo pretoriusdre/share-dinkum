@@ -237,6 +237,12 @@
                 </ul>
             {% endif %}
 
+            {% if unconverted_figures_warning %}
+                <ul class="messagelist">
+                    <li class="warning">{{ unconverted_figures_warning }}</li>
+                </ul>
+            {% endif %}
+
             {% if dashboard_message %}
                 <ul class="messagelist">
                     <li class="{{ dashboard_message_level|default:'info' }}">{{ dashboard_message }}</li>

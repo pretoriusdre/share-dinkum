@@ -1150,6 +1150,21 @@ class Parcel(BaseModel):
 
         return self.total_cost_base / self.parcel_quantity
 
+    @classmethod
+    def with_unconverted_cost_base(cls, account):
+        """Active parcels whose stored cost base is not in the account's currency.
+
+        Left by a bug fixed in 0.3.0: a parcel was built before its foreign-currency buy had
+        an exchange rate. Reports read the live figures and were right; only the stored copy
+        was wrong. Saving the parcel again recalculates it. A zero cost base is ignored,
+        since its currency changes nothing.
+        """
+        return (
+            cls.objects.filter(account=account, deactivation_date__isnull=True)
+            .exclude(calculated_total_cost_base_currency=str(account.currency))
+            .exclude(calculated_total_cost_base=Decimal('0'))
+        )
+
     def market_value_at(self, day, purpose='CUTOVER_2027'):
         """This parcel's market value on `day`, for a deemed disposal.
 
@@ -1376,6 +1391,23 @@ class CostBaseAdjustment(BaseModel):
         choices=AllocationMethod.choices,
         default=AllocationMethod.QTY_HELD,
     )
+
+    @classmethod
+    def with_unconverted_allocations(cls, account):
+        """Adjustments allocated to parcels in a currency other than the account's.
+
+        Left by a bug fixed in 0.3.0: a foreign-currency adjustment was allocated before it
+        had an exchange rate, and `Parcel.total_adjustments` then counts the foreign amount
+        as the account's currency. That is a wrong cost base, not just a wrong stored copy.
+        It is not repaired automatically, because re-allocating spreads the adjustment over
+        the parcels again; deleting it and entering it again does that deliberately.
+        """
+        stale = CostBaseAdjustmentAllocation.objects.filter(
+            account=account, deactivation_date__isnull=True,
+        ).exclude(
+            cost_base_increase_currency=str(account.currency),
+        ).exclude(cost_base_increase=Decimal('0'))
+        return cls.objects.filter(id__in=stale.values('cost_base_adjustment_id'))
 
     def get_description(self):
         return f'{self.pk} | {self.financial_year_end_date} | Adjustment of {self.instrument.name} | Cost base increase = {self.cost_base_increase}'
