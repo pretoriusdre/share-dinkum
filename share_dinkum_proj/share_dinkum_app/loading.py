@@ -1,6 +1,7 @@
 import pandas as pd
 
 from datetime import date, datetime
+from decimal import Decimal
 import shutil
 import sqlite3
 from tqdm import tqdm
@@ -9,15 +10,17 @@ from pathlib import Path
 from django.apps import apps
 from django.db.models import DecimalField, FileField
 from django.db import connections, transaction
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.conf import settings
 from django.core.management import call_command
 
 
+from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
 import share_dinkum_app
-from share_dinkum_app import backup as backup_module, excelinterface
+from share_dinkum_app import backup as backup_module, excelinterface, recalculate
+from share_dinkum_app.choices import SellStrategy
 from share_dinkum_app import yfinanceinterface
 from django.db import models
 
@@ -62,6 +65,96 @@ def restore_blank_text_defaults(df, model):
         df[col] = df[col].apply(lambda v: blank_value if v is None else v)
 
     return df
+
+
+def normalise_legacy_id(value):
+    """A legacy id as text. Excel gives a number, and a float if its column has a blank."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, Decimal) and value == value.to_integral_value():
+        return str(int(value))
+    return str(value)
+
+
+def normalise_choice(model, field, value):
+    """The stored key for a choice given as its key, its label, or either in another case."""
+    if not isinstance(value, str):
+        return value
+    choices = list(field.flatchoices)
+    if any(value == key for key, _ in choices):
+        return value
+    folded = value.strip().casefold()
+    for key, label in choices:
+        if folded in (str(key).casefold(), str(label).casefold()):
+            return key
+    listed = ', '.join(str(key) for key, _ in choices[:12]) + (', ...' if len(choices) > 12 else '')
+    raise ValueError(
+        f'{model.__name__} {field.name} cannot be "{value}". It must be one of: {listed}.')
+
+
+def normalise_date(model, field, value):
+    """A date from a date, a datetime, or text such as 2024-07-01."""
+    if value is None:
+        return None
+    try:
+        return field.to_python(value)
+    except ValidationError as exc:
+        raise ValueError(
+            f'{model.__name__} {field.name} cannot read "{value}" as a date.') from exc
+
+
+def normalise_cells(df, model):
+    """Legacy ids as text, choices as their keys and dates as dates. Repeated ids refused.
+
+    An unrecognised choice used to be stored as typed: a strategy of "fifo" matched no
+    branch and took parcels in no particular order.
+    """
+    for column in df.columns:
+        if column == 'legacy_id' or column.startswith('lookup_legacy'):
+            df[column] = df[column].apply(normalise_legacy_id)
+            continue
+        try:
+            field = model._meta.get_field(column)
+        except FieldDoesNotExist:
+            continue
+        if field.is_relation:
+            continue
+        if field.choices:
+            df[column] = df[column].apply(lambda v, f=field: normalise_choice(model, f, v))
+        elif isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
+            df[column] = df[column].apply(lambda v, f=field: normalise_date(model, f, v))
+
+    if 'legacy_id' in df.columns:
+        ids = df['legacy_id'].dropna()
+        repeated = sorted(set(ids[ids.duplicated()]))
+        if repeated:
+            raise ValueError(
+                f'{model.__name__} has more than one row with legacy_id '
+                f'{", ".join(repeated)}. Rows are matched to records by it, so each needs its '
+                f'own; otherwise the later row overwrites the earlier one.')
+    return df
+
+
+def fill_blank_currencies(model, record, blank_columns):
+    """Give a new record's money the instrument's currency where the file leaves it blank.
+
+    The column default is AUD, so a US dollar price with no currency was taken as dollars
+    Australian.
+    """
+    instrument = record.get('instrument')
+    if instrument is None and record.get('instrument_id'):
+        instrument = app_models.Instrument.objects.filter(pk=record['instrument_id']).first()
+    if instrument is None:
+        return
+    for field in model._meta.fields:
+        if not isinstance(field, MoneyField):
+            continue
+        currency_column = f'{field.name}_currency'
+        if field.name in record and (
+                currency_column in blank_columns or currency_column not in record):
+            record[currency_column] = str(instrument.currency)
 
 
 def model_to_queryset(model, account=None):
@@ -186,10 +279,25 @@ class DataLoader():
         return model_load_order.values()
     
 
+    #: From an import template these are loaded as one timeline in date order, not table by
+    #: table. See `load_timeline`.
+    TIMELINE_TABLES = ('Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment')
+
+    def is_template(self):
+        """Whether the app derives parcels and allocations from this file (an import template).
+
+        An export carries them already, and says so with a `_creation_handled` column.
+        """
+        return not any(
+            df is not None and '_creation_handled' in df.columns
+            for df in self.mapping.values())
+
     def load_all_tables(self):
         """Load every table in the file in one transaction, so a failure loads nothing."""
 
         model_load_order = self.get_model_load_order()
+        template = self.is_template()
+        self._had_rows = self._models_with_rows()
 
         with transaction.atomic():
             for model in model_load_order:
@@ -197,6 +305,17 @@ class DataLoader():
 
                 if table_name in ['LogEntry']:
                     continue  # Skip loading LogEntry as ContentType as a name property, not field. Hard to loookup by name.
+
+                if table_name == 'DataExport':
+                    # An export lists its own DataExport row, without its file, and the files
+                    # of earlier ones, which a load does not bring. Loaded, the first deleted
+                    # the stored export and started a new one mid-load.
+                    continue
+
+                if template and table_name in self.TIMELINE_TABLES:
+                    if table_name == 'Sell':
+                        self.load_timeline()
+                    continue
 
                 df = self.mapping.get(table_name)
                 if df is not None:
@@ -214,10 +333,124 @@ class DataLoader():
                             'The Account row in this file did not load, so there is no '
                             'portfolio to attach the rest of it to.')
                     logger.info('Restoring into portfolio %s', self.account)
+                    self._had_rows = self._models_with_rows()
 
+            if not template and self.account is not None:
+                # An export's derived rows arrive already handled, so the saves that would
+                # have kept the stored figures current (an instrument's holding, a parcel's
+                # sold flag) ran before the rows they count had loaded.
+                recalculate.account(self.account)
+
+    @staticmethod
+    def _matched_only_by_legacy_id(model):
+        """Whether a row of `model` without an id can be matched to a record only by legacy_id."""
+        names = {field.name for field in model._meta.fields}
+        return ('legacy_id' in names and 'account' in names
+                and not any(getattr(c, 'fields', None) for c in model._meta.constraints))
+
+    def _models_with_rows(self):
+        """Models matched only by legacy_id that already had records in the account."""
+        if self.account is None:
+            return set()
+        return {
+            model for model in self.get_model_load_order()
+            if self._matched_only_by_legacy_id(model)
+            and model.objects.filter(account=self.account).exists()
+        }
+
+    def load_timeline(self):
+        """Load sales (each with its pinned allocations), splits and adjustments in date order.
+
+        Each is worked out from the holding as it stood on its date: a sale after a split has
+        to find the split parcels, and a sale before it the parcels as they were. Loaded
+        table by table, every sale was allocated before any split, in row order, and a
+        "minimise capital gain" sale ranked parcels before their adjustments existed.
+        """
+        prepared = {}
+        for name in self.TIMELINE_TABLES:
+            df = self.mapping.get(name)
+            if df is not None and not df.empty:
+                model = apps.get_model('share_dinkum_app', name)
+                prepared[name] = (model, *self.prepare_table(model, df))
+
+        self.check_pinned_allocations(prepared)
+
+        # On one date: a split first, since a sale on its ex-date is in post-split units, and
+        # an adjustment last, since it is spread over the year's holdings.
+        events = []
+        for rank, name, date_column in ((0, 'ShareSplit', 'date'), (1, 'Sell', 'date'),
+                                        (2, 'CostBaseAdjustment', 'financial_year_end_date')):
+            if name not in prepared:
+                continue
+            _, df, _ = prepared[name]
+            for position, (index, row) in enumerate(df.iterrows()):
+                events.append((row.get(date_column) or date.min, rank, position, name, index))
+        events.sort(key=lambda event: event[:3])
+
+        pinned, loose = {}, []
+        if 'SellAllocation' in prepared:
+            _, allocations, _ = prepared['SellAllocation']
+            sells_in_file = set()
+            if 'Sell' in prepared and 'legacy_id' in prepared['Sell'][1].columns:
+                sells_in_file = set(prepared['Sell'][1]['legacy_id'].dropna())
+            for index, row in allocations.iterrows():
+                sell = row.get('lookup_legacy_sell')
+                if sell in sells_in_file:
+                    pinned.setdefault(sell, []).append(index)
+                else:
+                    loose.append(index)
+
+        def load(name, indexes):
+            model, df, blank = prepared[name]
+            logger.info('Loading %s %s row(s)', len(indexes), name)
+            self.load_rows(model, df.loc[indexes], blank.loc[indexes])
+
+        for _, _, _, name, index in events:
+            load(name, [index])
+            if name == 'Sell':
+                legacy_id = prepared['Sell'][1].at[index, 'legacy_id'] \
+                    if 'legacy_id' in prepared['Sell'][1].columns else None
+                if legacy_id in pinned:
+                    load('SellAllocation', pinned[legacy_id])
+        if loose:
+            load('SellAllocation', loose)
+
+    def check_pinned_allocations(self, prepared):
+        """Refuse allocation rows for a sale that would also be allocated automatically."""
+        if 'SellAllocation' not in prepared:
+            return
+        _, allocations, _ = prepared['SellAllocation']
+        if 'lookup_legacy_sell' not in allocations.columns:
+            return
+
+        strategies = {}
+        if 'Sell' in prepared and 'legacy_id' in prepared['Sell'][1].columns:
+            sells = prepared['Sell'][1]
+            for _, row in sells.iterrows():
+                strategies[row['legacy_id']] = row.get('strategy') or SellStrategy.MIN_CGT
+
+        for legacy_id in allocations['lookup_legacy_sell'].dropna().unique():
+            strategy = strategies.get(legacy_id)
+            if strategy is None:
+                strategy = app_models.Sell.objects.filter(
+                    account=self.account, legacy_id=legacy_id,
+                ).values_list('strategy', flat=True).first()
+            if strategy is not None and strategy != SellStrategy.MANUAL:
+                raise ValueError(
+                    f'The file allocates sale "{legacy_id}" to parcels itself, but that sale\'s '
+                    f'strategy is {strategy}, which allocates it automatically as well. Set its '
+                    f'strategy to MANUAL.')
 
     def load_table_to_model(self, model, df):
+        df, blank = self.prepare_table(model, df)
+        self.load_rows(model, df, blank)
 
+    def prepare_table(self, model, df):
+        """The table's columns converted for `model`, and which cells were blank.
+
+        Blank cells are remembered because the blank text defaults below fill them in, and a
+        blank cell must not overwrite a stored value when a row is loaded again.
+        """
         df = df.copy()
         
         # Legacy data import template has a column 'copy_from_path' which is used to load files.
@@ -311,13 +544,20 @@ class DataLoader():
         # died asking a float for its `.name`.
         df = df.astype(object).where(pd.notna(df), None)
 
+        df = normalise_cells(df, model)
+        blank = df.isnull()
         df = restore_blank_text_defaults(df, model)
+        return df, blank
+
+    def load_rows(self, model, df, blank):
+        """Create or update one record per row of a table from `prepare_table`."""
 
         model_has_account = 'account' in [f.name for f in model._meta.fields]
 
         for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
+            blank_columns = {column for column in df.columns if blank.at[index, column]}
             if model_has_account:
                 record['account_id'] = self.account.id
             id = record.pop('id', None)
@@ -352,6 +592,12 @@ class DataLoader():
 
             if existing is not None:
                 for field, value in record.items():
+                    # A blank cell is "no change", not "clear it": the file is usually the
+                    # one first loaded, and what was added in the admin since (a document,
+                    # notes, a confirmed legal form) is not in it. A blank `file` used to
+                    # delete the attached document.
+                    if field in blank_columns:
+                        continue
                     setattr(existing, field, value)
                 context = ('Updating existing object' if id
                            else 'Updating existing object matched on its unique fields')
@@ -362,6 +608,14 @@ class DataLoader():
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
             else:
+                if (not record.get('legacy_id') and model in self._had_rows
+                        and self._matched_only_by_legacy_id(model)):
+                    raise ValueError(
+                        f'{model.__name__} row {index + 1} has no legacy_id, and "{self.account}" '
+                        f'already has {model.__name__} records, so it cannot be told apart from '
+                        f'them: loading it would add it again rather than update it. Give every '
+                        f'{model.__name__} row a legacy_id.')
+                fill_blank_currencies(model, record, blank_columns)
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object without provided ID")
 
@@ -379,8 +633,9 @@ class DataLoader():
         raise ValueError(
             f'{model.__name__} {obj.id} already belongs to the portfolio "{existing_account}", so it'
             f' cannot be loaded into "{self.account}". Loading an export into a different portfolio'
-            ' would move those records out of the original one rather than copying them. Remove the'
-            ' id column from the file to load them as new records instead.'
+            ' would move those records out of the original one rather than copying them. To copy'
+            ' them, enter them in an import template (uv run dev make_import_template): an export'
+            ' also links its rows to each other by id, so removing its id column is not enough.'
         )
 
 
@@ -395,6 +650,11 @@ class DataLoader():
         model_field_names = {field.name for field in model._meta.fields}
         if legacy_id and 'legacy_id' in model_field_names and 'account_id' in record:
             existing = model.objects.filter(account_id=record['account_id'], legacy_id=legacy_id).first()
+            if existing is None and str(legacy_id).isdigit():
+                # Stored by an earlier load as "1001.0", before numeric ids were read as text.
+                # Matched, it is updated to the plain form.
+                existing = model.objects.filter(
+                    account_id=record['account_id'], legacy_id=f'{legacy_id}.0').first()
             if existing is not None:
                 return existing
 

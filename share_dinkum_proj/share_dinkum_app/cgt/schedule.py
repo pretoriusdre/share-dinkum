@@ -99,7 +99,12 @@ def _spend(pool, gains):
 
 
 def _carried_forward_into(account, fiscal_year, zero):
-    """Total carried-forward losses from years before `fiscal_year` (all years if None)."""
+    """Carried-forward losses still available to `fiscal_year` (every recorded loss if None).
+
+    A recorded loss becomes available the year after it was made, less whatever the years
+    in between used. Each of those years is built in turn with the pool as it then stood,
+    so a loss applied once is not applied again.
+    """
     from share_dinkum_app.models import CapitalLossCarryForward, FiscalYear
 
     rows = CapitalLossCarryForward.objects.filter(account=account, is_active=True)
@@ -107,10 +112,33 @@ def _carried_forward_into(account, fiscal_year, zero):
     year = fiscal_year
     if year is not None and not hasattr(year, 'start_year'):
         year = FiscalYear.objects.filter(name=str(year)).first()
-    if year is not None:
-        rows = rows.filter(fiscal_year__start_year__lt=year.start_year)
+    if year is None:
+        return sum((row.amount for row in rows), zero)
 
-    return sum((row.amount for row in rows.select_related('fiscal_year')), zero)
+    rows = list(
+        rows.filter(fiscal_year__start_year__lt=year.start_year)
+        .select_related('fiscal_year')
+        .order_by('fiscal_year__start_year'))
+    if not rows:
+        return zero
+
+    # Only years with a FiscalYear row can hold events, so the rest use nothing.
+    years_between = FiscalYear.objects.filter(
+        fiscal_year_type=year.fiscal_year_type,
+        start_year__gt=rows[0].fiscal_year.start_year,
+        start_year__lt=year.start_year,
+    ).order_by('start_year')
+
+    pool = zero
+    pending = list(rows)
+    for between in years_between:
+        while pending and pending[0].fiscal_year.start_year < between.start_year:
+            pool += pending.pop(0).amount
+        pool -= build(account, between, prior_year_losses=pool).prior_year_losses_applied
+
+    for row in pending:
+        pool += row.amount
+    return pool
 
 
 def build(account, fiscal_year, prior_year_losses=None):
@@ -228,6 +256,16 @@ def _year_still_running(fiscal_year):
 
     end_date = year.end_date
     return end_date if end_date and date.today() <= end_date else None
+
+
+def _sales_not_fully_allocated(account, year_name):
+    """Sales in the year (every year if None) with units allocated to no parcel."""
+    from share_dinkum_app.models import Sell
+
+    sales = Sell.with_unallocated_quantity(account)
+    if year_name is not None:
+        sales = sales.filter(calculated_fiscal_year__name=year_name)
+    return list(sales)
 
 
 def _statements_disagreeing_on_cost_base(account, year_name):
@@ -356,6 +394,18 @@ def _warnings(account, live_events, all_events, year_name=None):
         warnings.append(
             'These trust statements do not reconcile against themselves, so their attributed '
             f'gains are shown but should not be relied on: {", ".join(unreconciled)}.')
+
+    unallocated = _sales_not_fully_allocated(account, year_name)
+    if unallocated:
+        detail = '; '.join(
+            f'{s.instrument.name} on {s.date:%d %B %Y} '
+            f'({(s.quantity - s.allocated).normalize():f} of {s.quantity.normalize():f} units)'
+            for s in unallocated)
+        warnings.append(
+            'These sales have units not allocated to any parcel, so the gain on those units '
+            f'is missing from this schedule: {detail}. The usual causes are a sale larger '
+            'than the holding, a sale dated before its purchase, or a MANUAL sale with no '
+            'sell allocations entered.')
 
     for reason in sorted({e.pending_reason for e in live_events if e.pending_reason}):
         warnings.append(reason)

@@ -1,6 +1,7 @@
 # Standard library imports
 from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
+import bisect
 import copy
 import json
 
@@ -341,10 +342,69 @@ class BaseModel(models.Model):
         model_name = self._meta.model_name
         return reverse(f'admin:{app_label}_{model_name}_change', args=[str(self.id)])
     
+    #: Fields other records were worked out from when this one was entered: a buy's quantity
+    #: for its parcel, a split's ratio for the parcels it split. Nothing works them out
+    #: again, so once the record has been handled they cannot be changed.
+    STRUCTURAL_FIELDS = ()
+
+    def structural_changes(self):
+        """Names of the structural fields this unsaved state would change; [] if none."""
+        if not self.STRUCTURAL_FIELDS or self._state.adding or self.pk is None:
+            return []
+        fields = [self._meta.get_field(name) for name in self.STRUCTURAL_FIELDS]
+        stored = type(self).objects.filter(pk=self.pk).values(
+            '_creation_handled', *[field.attname for field in fields]).first()
+        if stored is None or not stored['_creation_handled']:
+            # Still being created: its own handlers set these (an allocation is re-pointed
+            # at the parcel split off for it).
+            return []
+        return [
+            field.name for field in fields
+            if field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
+        ]
+
+    def _structural_change_message(self, changed):
+        names = ', '.join(str(self._meta.get_field(name).verbose_name) for name in changed)
+        return (
+            f'The {names} of this {self._meta.verbose_name} cannot be changed: other records '
+            f'were worked out from it when it was entered, and nothing works them out again. '
+            f'Delete it and enter it again.')
+
+    def chronology_problem(self):
+        """Why this new record would be applied out of date order, or None.
+
+        Parcels are worked out event by event as records are entered, so an event dated
+        before one already applied (a buy before a split) would miss it.
+        """
+        return None
+
+    def _is_new_event(self):
+        # A row from an export arrives already handled, with what it derived beside it.
+        return self._state.adding and not getattr(self, '_creation_handled', False)
+
+    def clean(self):
+        super().clean()
+        changed = self.structural_changes()
+        if changed:
+            raise ValidationError(self._structural_change_message(changed))
+        if self._is_new_event():
+            problem = self.chronology_problem()
+            if problem:
+                raise ValidationError(problem)
+
     def save(self, *args, **kwargs):
         user = kwargs.pop('user', None)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or set(update_fields) & set(self.STRUCTURAL_FIELDS):
+            changed = self.structural_changes()
+            if changed:
+                raise ValueError(self._structural_change_message(changed))
+        if self._is_new_event():
+            problem = self.chronology_problem()
+            if problem:
+                raise ValueError(problem)
         super().save(*args, **kwargs)
-                
+
     def __str__(self):
         return f'{self.description}'
 
@@ -490,62 +550,92 @@ class ExchangeRate(AbstractExchangeRate):
     date = models.DateField()
     is_continuous_history = models.BooleanField(default=False, editable=False)
 
+    #: The rate could not be fetched, so this one stands in: the nearest known rate, or 1.0
+    #: if there was none. Fetched again the next time it is asked for, and replaced by the
+    #: history refresh, instead of being trusted for good.
+    is_placeholder = models.BooleanField(default=False, editable=False)
+
     @classmethod
     def get_or_create(cls, account, convert_from, convert_to, exchange_date):
-        try:
-            return cls.objects.get(
-                account=account,
-                convert_from=convert_from,
-                convert_to=convert_to,
-                date=exchange_date
-            )
-        except cls.DoesNotExist:
-            # Ensure the record is created if it does not exist
-            obj, created = cls.objects.get_or_create(
+        obj = cls.objects.filter(
+            account=account,
+            convert_from=convert_from,
+            convert_to=convert_to,
+            date=exchange_date
+        ).first()
+        if obj is not None and not obj.is_placeholder:
+            return obj
+
+        if obj is None:
+            obj, _created = cls.objects.get_or_create(
                 account=account,
                 convert_from=convert_from,
                 convert_to=convert_to,
                 date=exchange_date,
                 defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
-            if created:
-                field = cls._meta.get_field('exchange_rate_multiplier')
-                fetched_rate = yfinanceinterface.get_exchange_rate(
-                    convert_from=convert_from,
-                    convert_to=convert_to,
-                    exchange_date=exchange_date,
-                )
-                if fetched_rate is not None:
-                    obj.exchange_rate_multiplier = convert_to_decimal_field(fetched_rate, field)
-                    obj.save(update_fields=['exchange_rate_multiplier'])
-                elif convert_from != convert_to:
-                    # A failed cross-currency fetch must NOT keep the 1.0 default - that
-                    # relabels foreign amounts as base currency (e.g. USD shown as AUD).
-                    # Fall back to the most recent known rate for this pair instead.
-                    fallback = cls.objects.filter(
-                        account=account,
-                        convert_from=convert_from,
-                        convert_to=convert_to,
-                    ).exclude(pk=obj.pk).order_by('-date').first()
-                    if fallback is not None:
-                        obj.exchange_rate_multiplier = fallback.exchange_rate_multiplier
-                        obj.save(update_fields=['exchange_rate_multiplier'])
-                        logger.warning(
-                            "Could not fetch exchange rate for %s to %s on %s; using most "
-                            "recent known rate from %s (%s).",
-                            convert_from, convert_to, exchange_date,
-                            fallback.date, fallback.exchange_rate_multiplier,
-                        )
-                    else:
-                        logger.error(
-                            "Could not fetch exchange rate for %s to %s on %s and no prior "
-                            "rate exists; leaving multiplier at 1.0. Figures for this currency "
-                            "will be unconverted until a rate is available.",
-                            convert_from, convert_to, exchange_date,
-                        )
 
-            obj.update_current()
-            return obj
+        field = cls._meta.get_field('exchange_rate_multiplier')
+        fetched_rate = yfinanceinterface.get_exchange_rate(
+            convert_from=convert_from,
+            convert_to=convert_to,
+            exchange_date=exchange_date,
+        )
+        if fetched_rate is not None:
+            obj.replace_placeholder(convert_to_decimal_field(fetched_rate, field))
+        elif obj.is_placeholder:
+            logger.warning(
+                "Still could not fetch exchange rate for %s to %s on %s; keeping the stand-in "
+                "rate %s.", convert_from, convert_to, exchange_date, obj.exchange_rate_multiplier)
+        elif convert_from != convert_to:
+            # A failed cross-currency fetch must NOT keep the 1.0 default - that
+            # relabels foreign amounts as base currency (e.g. USD shown as AUD).
+            # Stand in the nearest known rate, earlier first, and mark it so the real
+            # rate replaces it once it can be fetched.
+            fallback = cls.nearest_known(account, convert_from, convert_to, exchange_date,
+                                         exclude=obj.pk)
+            obj.is_placeholder = True
+            if fallback is not None:
+                obj.exchange_rate_multiplier = fallback.exchange_rate_multiplier
+                logger.warning(
+                    "Could not fetch exchange rate for %s to %s on %s; standing in the "
+                    "nearest known rate, from %s (%s).",
+                    convert_from, convert_to, exchange_date,
+                    fallback.date, fallback.exchange_rate_multiplier,
+                )
+            else:
+                logger.error(
+                    "Could not fetch exchange rate for %s to %s on %s and no other "
+                    "rate exists; leaving multiplier at 1.0. Figures for this currency "
+                    "will be unconverted until a rate is available.",
+                    convert_from, convert_to, exchange_date,
+                )
+            obj.save(update_fields=['exchange_rate_multiplier', 'is_placeholder'])
+
+        obj.update_current()
+        return obj
+
+    @classmethod
+    def nearest_known(cls, account, convert_from, convert_to, exchange_date, exclude=None):
+        """The fetched rate for the pair nearest `exchange_date`, preferring an earlier one."""
+        known = cls.objects.filter(
+            account=account, convert_from=convert_from, convert_to=convert_to,
+            is_placeholder=False,
+        ).exclude(pk=exclude)
+        return (
+            known.filter(date__lte=exchange_date).order_by('-date').first()
+            or known.filter(date__gt=exchange_date).order_by('date').first()
+        )
+
+    def replace_placeholder(self, multiplier):
+        """Set the real rate, recalculating what was converted at the stand-in, if it was one."""
+        was_placeholder = self.is_placeholder
+        self.exchange_rate_multiplier = multiplier
+        self.is_placeholder = False
+        self.save(update_fields=['exchange_rate_multiplier', 'is_placeholder'])
+        if was_placeholder:
+            from share_dinkum_app import recalculate
+            recalculate.after_rate_change(self)
         
     @classmethod
     def update_exchange_rate_history(cls, account, convert_from, convert_to):
@@ -591,6 +681,18 @@ class ExchangeRate(AbstractExchangeRate):
             # Use bulk_create with `ignore_conflicts=True` to avoid duplicate errors
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
+
+                # A conflict keeps the existing row, which is right for a fetched rate but not
+                # for a stand-in: replace those with the history's rate for that day, or the
+                # last trading day before it.
+                history = sorted(zip(price_history['date'], price_history['exchange_rate_multiplier']))
+                history_dates = [day for day, _ in history]
+                for placeholder in ExchangeRate.objects.filter(
+                        account=account, convert_from=convert_from, convert_to=convert_to,
+                        is_placeholder=True):
+                    index = bisect.bisect_right(history_dates, placeholder.date) - 1
+                    if index >= 0 and (placeholder.date - history_dates[index]).days <= 7:
+                        placeholder.replace_placeholder(history[index][1])
 
             if not price_history.empty:
                 latest_row = price_history.loc[price_history['date'].idxmax()]
@@ -786,12 +888,13 @@ class Instrument(BaseModel):
         )
 
         if not current_rate:
-            logger.error(f'No exchange rate available for {self.currency} to {self.account.currency}')
-            logger.error(f'Instrument: {self}, Account: {self.account}, Currency: {self.currency}')
-            
-            raise ValueError(
-                f"No exchange rate available for {self.currency} to {self.account.currency}"
-            )
+            # Unknown rather than an error: raising here failed every save of the instrument,
+            # and so every trade in it, whenever the rate could not be fetched (offline).
+            logger.error(
+                'No exchange rate available for %s to %s, so the value of %s in %s is unknown '
+                'until one can be fetched.', self.currency, self.account.currency, self,
+                self.account.currency)
+            return None
 
         converted_value = current_rate.apply(self.value_held)
         assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
@@ -991,12 +1094,37 @@ class Trade(BaseModel):
     def __str__(self):
         return f'{self.description}'
 
+    STRUCTURAL_FIELDS = (
+        'instrument', 'date', 'quantity', 'unit_price_currency', 'total_brokerage_currency')
+
+    #: Can be corrected after the trade is entered. A change is carried to its parcels and
+    #: allocations, whose stored figures would otherwise keep the old price.
+    REPRICING_FIELDS = ('unit_price', 'total_brokerage', 'exchange_rate')
+
+    def _repriced(self, update_fields):
+        if self._state.adding or self.pk is None:
+            return False
+        if update_fields is not None and not set(update_fields) & set(self.REPRICING_FIELDS):
+            return False
+        fields = [self._meta.get_field(name) for name in self.REPRICING_FIELDS]
+        stored = type(self).objects.filter(pk=self.pk).values(
+            '_creation_handled', *[field.attname for field in fields]).first()
+        if stored is None or not stored['_creation_handled']:
+            return False
+        return any(
+            field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
+            for field in fields)
+
     def save(self, *args, **kwargs):
+        repriced = self._repriced(kwargs.get('update_fields'))
         if self.is_active:
             self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price} / unit'
         else:
             self.description = 'INACTIVE'
         super().save(*args, **kwargs)
+        if repriced:
+            from share_dinkum_app import recalculate
+            recalculate.derived_from(self)
 
 
 class Buy(Trade):
@@ -1012,6 +1140,21 @@ class Buy(Trade):
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
 
+    def chronology_problem(self):
+        if not self.instrument_id or not self.date:
+            return None
+        # A split reaches buys dated on or before it.
+        split = ShareSplit.objects.filter(
+            account_id=self.account_id, instrument_id=self.instrument_id,
+            _creation_handled=True, date__gte=self.date,
+        ).order_by('date').first()
+        if split is None:
+            return None
+        return (
+            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
+            f'this buy is dated before it, so it would not be split with the rest. Delete the '
+            f'split, enter this buy, then enter the split again.')
+
 
 class Sell(Trade):
     MODEL_DESCRIPTION = 'Sales of shares.'
@@ -1023,6 +1166,8 @@ class Sell(Trade):
         choices=SellStrategy.choices,
         default=SellStrategy.MIN_CGT,
     )
+
+    STRUCTURAL_FIELDS = Trade.STRUCTURAL_FIELDS + ('strategy',)
 
     calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
@@ -1043,7 +1188,25 @@ class Sell(Trade):
     def unallocated_quantity(self):
         allocated_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return (self.quantity or 0 ) - allocated_quantity
-    
+
+    @classmethod
+    def with_unallocated_quantity(cls, account):
+        """Sales with units no parcel was allocated to, annotated with `allocated`.
+
+        Gains are worked out per allocation, so those units are in no gain at all: a sale
+        larger than the holding, one dated before its purchase, or a MANUAL sale never
+        allocated.
+        """
+        return (
+            cls.objects.filter(account=account, is_active=True)
+            .annotate(allocated=Coalesce(
+                Sum('sale_allocation__quantity', filter=Q(sale_allocation__is_active=True)),
+                Decimal('0')))
+            .filter(quantity__gt=F('allocated'))
+            .select_related('instrument')
+            .order_by('date')
+        )
+
     def clean(self):
         super().clean()
         # Ensure an exchange rate is provided for cross-currency sells
@@ -1051,6 +1214,21 @@ class Sell(Trade):
             raise ValidationError(
                 "Exchange rate is required when instrument currency differs from account currency."
             )
+
+    def chronology_problem(self):
+        if not self.instrument_id or not self.date:
+            return None
+        # A sale on a split's own date is in post-split units, so only a later split matters.
+        split = ShareSplit.objects.filter(
+            account_id=self.account_id, instrument_id=self.instrument_id,
+            _creation_handled=True, date__gt=self.date, affected_parcels__isnull=False,
+        ).order_by('date').first()
+        if split is None:
+            return None
+        return (
+            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
+            f'this sale is dated before it, so it would be matched against the split parcels. '
+            f'Delete the split, enter this sale, then enter the split again.')
 
 
 class Parcel(BaseModel):
@@ -1067,7 +1245,9 @@ class Parcel(BaseModel):
         editable=False
         )
     parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False)
-    cumulative_split_multiplier = models.DecimalField(max_digits=16, decimal_places=4, editable=False, default=Decimal('1.0'))
+    #: Ten places, since a consolidation's ratio rarely terminates: at four, 1-for-3 stored
+    #: 0.3333 and every unit price divided by it came out 0.01% high.
+    cumulative_split_multiplier = models.DecimalField(max_digits=22, decimal_places=10, editable=False, default=Decimal('1.0'))
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
     sale_date = models.DateField(null=True, editable=False)
@@ -1183,13 +1363,28 @@ class Parcel(BaseModel):
         # multiplied the unit count and divided the value, so the recorded figure has to be
         # brought forward to today's units before it is multiplied out.
         multiplier = cutover.scale_for_splits(self, day)
-        return (unit_value / multiplier) * self.parcel_quantity, source
+        value = (unit_value / multiplier) * self.parcel_quantity
+
+        # Price history is quoted in the instrument's currency, and a recorded valuation may
+        # be too. The cost base it is compared with is in the account's.
+        account_currency = str(self.account.currency)
+        if str(value.currency) != account_currency:
+            rate = ExchangeRate.get_or_create(
+                account=self.account, convert_from=str(value.currency),
+                convert_to=account_currency, exchange_date=day)
+            value = rate.apply(value)
+        return value, source
 
     def split_or_consolidate(self, multiplier, date):
+        """Replace this parcel with one of `multiplier` times the units, carrying its adjustments.
+
+        Pass the exact ratio (`ShareSplit.ratio`), not the rounded `split_multiplier`: a
+        1-for-3 consolidation of 3,000 units then gives 1,000 rather than 999.999.
+        """
         assert multiplier > 0
         assert self.is_active
 
-        new_parcel_message = f'This parcel was created by splitting parcel {self.pk} by multiplier {multiplier}'
+        new_parcel_message = f'This parcel was created by splitting parcel {self.pk} by multiplier {multiplier:.6g}'
 
         with transaction.atomic():
             # Create target parcel
@@ -1197,14 +1392,22 @@ class Parcel(BaseModel):
             parcel_target.pk = None # Make a new instance
             parcel_target.activation_date = date # Set new activation date
             parcel_target.parent_parcel = self
-            parcel_target.parcel_quantity *= multiplier
-            parcel_target.cumulative_split_multiplier *= multiplier
+            parcel_target.parcel_quantity = convert_to_decimal_field(
+                self.parcel_quantity * multiplier, self._meta.get_field('parcel_quantity'))
+            parcel_target.cumulative_split_multiplier = convert_to_decimal_field(
+                self.cumulative_split_multiplier * multiplier,
+                self._meta.get_field('cumulative_split_multiplier'))
             parcel_target.save()
             parcel_target.log_event(new_parcel_message)
 
+            # The adjustments go with the units. Left behind on this parcel, which is about to
+            # be deactivated, they would drop out of the cost base without a trace.
+            for allocation in self.cost_base_adjustment_allocation.filter(is_active=True):
+                allocation.move_to(parcel_target, date=date)
+
             # Update old parcel
-            self.log_event(f'This parcel was split with multipler {multiplier}, then marked as INACTIVE. New parcel is {parcel_target.pk}.')
-            
+            self.log_event(f'This parcel was split with multipler {multiplier:.6g}, then marked as INACTIVE. New parcel is {parcel_target.pk}.')
+
             # This sets is_active = False for the old parcel
             self.deactivation_date = date
 
@@ -1213,9 +1416,15 @@ class Parcel(BaseModel):
         return parcel_target
 
     def bifurcate(self, quantity, date):
-        assert quantity > 0, "Quantity to bifurcate (split) must be greater than zero"
-        assert quantity <= self.parcel_quantity, "Quantity to bifurcate (split) must be less than the available quantity"
-        assert self.is_active
+        # Errors rather than asserts: they name the parcel, and survive `python -O`.
+        if quantity <= 0:
+            raise ValueError(f'Cannot split {quantity} units off parcel {self.pk}: the quantity must be more than zero.')
+        if quantity > self.parcel_quantity:
+            raise ValueError(
+                f'Cannot split {quantity} units off parcel {self.pk} (bought {self.buy.date}): '
+                f'it only holds {self.parcel_quantity}.')
+        if not self.is_active:
+            raise ValueError(f'Cannot split parcel {self.pk}: it was replaced on {self.deactivation_date}.')
 
         if quantity == self.parcel_quantity:
             # No need to bifurcate.
@@ -1290,6 +1499,8 @@ class SellAllocation(BaseModel):
     sell = models.ForeignKey(Sell, related_name='sale_allocation', on_delete=models.PROTECT)
     quantity = models.DecimalField(max_digits=16, decimal_places=4)
 
+    STRUCTURAL_FIELDS = ('parcel', 'sell', 'quantity')
+
     calculated_sale_date = models.DateField(null=True, blank=True, editable=False)
     
     @safe_property
@@ -1316,7 +1527,65 @@ class SellAllocation(BaseModel):
         # Note, a parcel is always fully consumed by a sell allocation due to the bifurcation process, therefore can just use parcel.total_cost_base rather than unit cost base and qty. This avoids rounding issues
         return (self.sell.proceeds * self.quantity / self.sell.quantity) - self.parcel.total_cost_base
 
+    def allocation_problems(self):
+        """Why this new allocation cannot be made, as messages; empty if it can.
+
+        Checked before saving, since saving splits the parcel. Without it a sold parcel
+        could be sold again, and the holding would go negative.
+        """
+        if not self.parcel_id or not self.sell_id or self.quantity is None:
+            return []
+
+        def units(value):
+            return f'{Decimal(value).normalize():f}'
+
+        parcel, sell = self.parcel, self.sell
+        buy = parcel.buy
+        problems = []
+        if self.quantity <= 0:
+            problems.append(f'The quantity must be more than zero, not {units(self.quantity)}.')
+        if parcel.deactivation_date is not None:
+            problems.append(
+                f'The parcel bought on {buy.date} was replaced on {parcel.deactivation_date} '
+                f'(split, or partly sold), so allocate from the parcel that replaced it.')
+        if buy.instrument_id != sell.instrument_id:
+            problems.append(
+                f'The parcel is {buy.instrument.name} but the sale is {sell.instrument.name}.')
+        if buy.date > sell.date:
+            problems.append(
+                f'The parcel was bought on {buy.date}, after the sale on {sell.date}.')
+
+        others = SellAllocation.objects.filter(is_active=True).exclude(pk=self.pk)
+        sold = others.filter(parcel=parcel).aggregate(total=Sum('quantity'))['total'] or 0
+        unsold = parcel.parcel_quantity - sold
+        if self.quantity > unsold:
+            problems.append(
+                f'Only {units(unsold)} units of the parcel bought on {buy.date} are unsold, '
+                f'not {units(self.quantity)}.')
+        allocated = others.filter(sell=sell).aggregate(total=Sum('quantity'))['total'] or 0
+        if allocated + self.quantity > sell.quantity:
+            problems.append(
+                f'The sale on {sell.date} is for {units(sell.quantity)} units and '
+                f'{units(allocated)} are already allocated, so {units(self.quantity)} more is '
+                f'too many.')
+        return problems
+
+    def _is_new_allocation(self):
+        # A row from an export arrives already handled: its parcel is the sold one.
+        return self._state.adding and not self._creation_handled
+
+    def clean(self):
+        super().clean()
+        if self._is_new_allocation():
+            problems = self.allocation_problems()
+            if problems:
+                raise ValidationError(problems)
+
     def save(self, *args, **kwargs):
+        if self._is_new_allocation():
+            problems = self.allocation_problems()
+            if problems:
+                raise ValueError(' '.join(problems))
         if self.is_active:
             self.description = f'{self.sell.date} {self.sell.instrument.name} | {self.quantity}'
         else:
@@ -1335,12 +1604,48 @@ class ShareSplit(BaseModel):
     affected_parcels = models.ManyToManyField(Parcel, editable=False)
     _creation_handled = models.BooleanField(default=False, editable=False)
 
+    STRUCTURAL_FIELDS = ('instrument', 'date', 'quantity_before', 'quantity_after')
+
     calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
     def split_multiplier(self):
         multiplier = self.quantity_after / self.quantity_before
         return multiplier.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
+
+    @property
+    def ratio(self):
+        """`quantity_after / quantity_before` unrounded, for applying the split to parcels."""
+        return Decimal(self.quantity_after) / Decimal(self.quantity_before)
+
+    def chronology_problem(self):
+        if not self.instrument_id or not self.date:
+            return None
+        sold_later = SellAllocation.objects.filter(
+            account_id=self.account_id, is_active=True,
+            sell__instrument_id=self.instrument_id, sell__date__gt=self.date,
+            parcel__buy__date__lte=self.date,
+        ).select_related('sell').order_by('sell__date').first()
+        if sold_later is None:
+            return None
+        return (
+            f'The sale of {self.instrument.name} on {sold_later.sell.date} has already been '
+            f'allocated, and this split is dated before it, so that sale was worked out in '
+            f'pre-split units. Delete that sale, enter the split, then enter the sale again.')
+
+    def deletion_blocker(self):
+        """Why this split cannot be deleted, or None if it can.
+
+        Deleting reverses the split on the parcels it created. Once one of those has been
+        sold or split again, its units are in post-split terms elsewhere too, and reversing
+        only part of the history would leave the holding inconsistent.
+        """
+        if self.affected_parcels.filter(deactivation_date__isnull=False).exists():
+            return (
+                f'The split of {self.instrument.name} on {self.date} cannot be deleted: parcels '
+                f'it created have since been sold or split again. Delete those sales or later '
+                f'splits first.')
+        return None
 
     calculated_affected_parcels = models.TextField(null=True, blank=True, editable=False)
     
@@ -1391,6 +1696,11 @@ class CostBaseAdjustment(BaseModel):
         choices=AllocationMethod.choices,
         default=AllocationMethod.QTY_HELD,
     )
+
+    #: Spread across parcels once, when it is entered, so none of these can change after.
+    STRUCTURAL_FIELDS = (
+        'instrument', 'financial_year_end_date', 'cost_base_increase',
+        'cost_base_increase_currency', 'allocation_method')
 
     @classmethod
     def with_unconverted_allocations(cls, account):
@@ -1475,9 +1785,26 @@ class CostBaseAdjustmentAllocation(BaseModel):
             # Update old parcel
             self.log_event(f'This allocation was split into {allocation_target.pk} and {allocation_remainder.pk}, then marked as INACTIVE')
             self.deactivation_date = date
-            self.save()        
-        return
-    
+            self.save()
+        return allocation_target, allocation_remainder
+
+    def move_to(self, parcel, date):
+        """Carry this allocation whole to `parcel`, which replaced its own on `date`.
+
+        For a share split, where one parcel becomes one other. Returns the new allocation.
+        """
+        with transaction.atomic():
+            moved = copy.copy(self) # create a shallow copy
+            moved.pk = None
+            moved.activation_date = date
+            moved.parcel = parcel
+            moved.save()
+            moved.log_event(f'This CostBaseAdjustmentAllocation was moved from {self.pk} when parcel {self.parcel_id} was replaced by {parcel.pk}.')
+            self.log_event(f'This allocation was moved to {moved.pk}, then marked as INACTIVE')
+            self.deactivation_date = date
+            self.save()
+        return moved
+
 
     def save(self, *args, **kwargs):
         self.is_active = self.deactivation_date is None
@@ -1862,6 +2189,10 @@ class AttributionComponent(BaseModel):
         return f'{self.statement.instrument.name} | {self.get_component_display()} | {self.amount}'
 
 
+class LodgedSnapshotError(ValueError):
+    """A capture would replace a snapshot marked as lodged, which records what was filed."""
+
+
 class CGTReturnSnapshot(BaseModel):
     """A fiscal year's capital gains figures as they stood at a point in time.
 
@@ -1923,10 +2254,19 @@ class CGTReturnSnapshot(BaseModel):
     def capture(cls, account, fiscal_year, taken_at=None, basis='LEGACY', is_lodged=False):
         """Snapshot the realised capital gains for one fiscal year.
 
-        A second capture on the same day replaces that day's snapshot.
+        A second capture on the same day replaces that day's snapshot, unless it is marked as
+        lodged: that raises LodgedSnapshotError, since those are the figures that were filed.
         """
         from share_dinkum_app.reports import RealisedCapitalGainReport
         from share_dinkum_app import version as version_module
+
+        taken_at = taken_at or date.today()
+        if cls.objects.filter(account=account, fiscal_year=fiscal_year, taken_at=taken_at,
+                              is_lodged=True).exists():
+            raise LodgedSnapshotError(
+                f'The {fiscal_year.name} snapshot taken on {taken_at} is marked as lodged, so '
+                f'it was kept rather than replaced. Untick "is lodged" on it first to replace '
+                f'it.')
 
         df = RealisedCapitalGainReport(account=account).generate()
         if not df.empty:
@@ -1936,7 +2276,7 @@ class CGTReturnSnapshot(BaseModel):
             snapshot, _created = cls.objects.update_or_create(
                 account=account,
                 fiscal_year=fiscal_year,
-                taken_at=taken_at or date.today(),
+                taken_at=taken_at,
                 defaults={
                     'basis': basis,
                     'engine_version': getattr(version_module, '__version__', ''),

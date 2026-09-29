@@ -7,7 +7,8 @@ or changing tax settings. `CGTBasisChangeReport` then shows what moved.
 from django.core.management.base import BaseCommand, CommandError
 
 from share_dinkum_app import cgt
-from share_dinkum_app.models import Account, CGTReturnSnapshot, FiscalYear, Sell
+from share_dinkum_app.models import (
+    Account, CGTReturnSnapshot, FiscalYear, LodgedSnapshotError, Sell)
 
 
 class Command(BaseCommand):
@@ -48,23 +49,30 @@ class Command(BaseCommand):
                 '  Residency is not declared, so these figures assume an Australian resident '
                 'throughout and a flat 50% discount. They are recorded as such.')
 
+        recorded = 0
         for fiscal_year in years:
             if options['dry_run']:
                 self.stdout.write(f'  would capture {fiscal_year.name} on basis {basis}')
+                recorded += 1
                 continue
 
-            snapshot = CGTReturnSnapshot.capture(
-                account=account,
-                fiscal_year=fiscal_year,
-                basis=basis,
-                is_lodged=options['lodged'],
-            )
+            try:
+                snapshot = CGTReturnSnapshot.capture(
+                    account=account,
+                    fiscal_year=fiscal_year,
+                    basis=basis,
+                    is_lodged=options['lodged'],
+                )
+            except LodgedSnapshotError as exc:
+                self.stdout.write(self.style.WARNING(f'  {exc}'))
+                continue
+            recorded += 1
             self.stdout.write(
                 f'  {fiscal_year.name}: {len(snapshot.rows)} disposal(s), '
                 f'net {snapshot.totals.get("total_capital_gain")}')
 
         verb = 'would record' if options['dry_run'] else 'recorded'
-        self.stdout.write(self.style.SUCCESS(f'  {verb} {len(years)} year(s).'))
+        self.stdout.write(self.style.SUCCESS(f'  {verb} {recorded} year(s).'))
 
     def _years(self, account, wanted):
         """The named fiscal year, or every year with a sale."""

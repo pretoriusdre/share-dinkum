@@ -37,7 +37,6 @@ SOURCE_ATTRIBUTION = 'trust_attribution'
 #: TAP status values, re-exported from cgt.tap for reports.
 TAP = tap_module.TAP
 NTAP = tap_module.NTAP
-TAP_MIXED = tap_module.TAP_MIXED
 
 #: The gain is eligible for the CGT discount.
 METHOD_DISCOUNT = 'discount'
@@ -492,36 +491,7 @@ def _attribution_events(statement, account=None, declared=None):
         discount_basis=residency_module.basis(account, declared=declared),
     )
 
-    discounted_tap = statement.component_total('DISCOUNTED_TAP')
-    discounted_ntap = statement.component_total('DISCOUNTED_NTAP')
-    discounted = discounted_tap + discounted_ntap
-    if discounted:
-        grossed_up = _money(Money(discounted * 2, instrument.currency))
-        status = _tap_status(discounted_tap, discounted_ntap)
-        disregarded, reason = tap_module.disregard_attribution(
-            account, status, event_date, declared=declared)
-        events.append(CGTEvent(
-            **common,
-            capital_gain=grossed_up,
-            gross_gain=grossed_up,
-            gross_loss=zero,
-            method=METHOD_DISCOUNT,
-            # The member applies their own discount percentage, not the trust's. For a
-            # foreign resident member that is an apportioned one, and the trust has no way
-            # of knowing it -- which is exactly why the statement's figure is grossed up
-            # first rather than carried through.
-            discount_percentage=_attributed_discount_percentage(account, declared),
-            tap_status=status,
-            is_disregarded=disregarded,
-            disregard_reason=reason,
-        ))
-
-    other_tap = statement.component_total('OTHER_TAP')
-    other_ntap = statement.component_total('OTHER_NTAP')
-    other = other_tap + other_ntap
-    if other:
-        amount = _money(Money(other, instrument.currency))
-        status = _tap_status(other_tap, other_ntap)
+    def attributed(amount, status, method, discount_percentage):
         disregarded, reason = tap_module.disregard_attribution(
             account, status, event_date, declared=declared)
         events.append(CGTEvent(
@@ -529,12 +499,33 @@ def _attribution_events(statement, account=None, declared=None):
             capital_gain=amount,
             gross_gain=amount,
             gross_loss=zero,
-            method=METHOD_OTHER,
-            discount_percentage=Decimal('0'),
+            method=method,
+            discount_percentage=discount_percentage,
             tap_status=status,
             is_disregarded=disregarded,
             disregard_reason=reason,
         ))
+
+    # The TAP and NTAP parts are separate events, because the statement states each and a
+    # foreign resident member disregards only the NTAP part (s855-40(2)). As one event, the
+    # NTAP part of a mixed statement was taxed with the TAP part.
+    for status, component in ((TAP, 'DISCOUNTED_TAP'), (NTAP, 'DISCOUNTED_NTAP')):
+        discounted = statement.component_total(component)
+        if discounted:
+            attributed(
+                _money(Money(discounted * 2, instrument.currency)), status, METHOD_DISCOUNT,
+                # The member applies their own discount percentage, not the trust's. For a
+                # foreign resident member that is an apportioned one, and the trust has no
+                # way of knowing it -- which is exactly why the statement's figure is grossed
+                # up first rather than carried through.
+                _attributed_discount_percentage(account, declared))
+
+    for status, component in ((TAP, 'OTHER_TAP'), (NTAP, 'OTHER_NTAP')):
+        other = statement.component_total(component)
+        if other:
+            attributed(
+                _money(Money(other, instrument.currency)), status, METHOD_OTHER,
+                Decimal('0'))
 
     return events
 
@@ -547,17 +538,6 @@ def _attributed_discount_percentage(account, declared):
     disregarded (s855-40(2)).
     """
     return discount_module.base_rate(account)
-
-
-def _tap_status(tap_amount, ntap_amount):
-    """TAP, NTAP, mixed or None, from the trust's TAP and NTAP amounts."""
-    if tap_amount and ntap_amount:
-        return TAP_MIXED
-    if tap_amount:
-        return TAP
-    if ntap_amount:
-        return NTAP
-    return None
 
 
 def attribution_events(account, fiscal_year=None):

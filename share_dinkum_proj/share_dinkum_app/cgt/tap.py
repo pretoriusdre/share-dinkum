@@ -7,11 +7,12 @@ TAP status is worked out per parcel, not per instrument: the s104-165(3) deeming
 only to parcels held on departure.
 """
 
+from datetime import timedelta
+
 from share_dinkum_app.cgt import classification, residency
 
 TAP = 'TAP'
 NTAP = 'NTAP'
-TAP_MIXED = 'mixed'
 
 #: Residency is undeclared, so TAP status is unknown. Never treated as TAP or NTAP.
 TAP_UNKNOWN = None
@@ -35,32 +36,52 @@ def instrument_tap_status(instrument):
     return None
 
 
+def _absences(declared):
+    """Runs of back-to-back non-resident periods, as `(start, end, election made)`.
+
+    One departure can be recorded as several periods, say FOREIGN then TEMPORARY, or split
+    where an election was noted. The election is made once, on leaving, so it covers the
+    whole run until residency resumes.
+    """
+    absences = []
+    for period in sorted(declared, key=lambda p: p.start_date):
+        if period.status == residency.RESIDENT:
+            continue
+        previous = absences[-1] if absences else None
+        if (previous is not None and previous[1] is not None
+                and period.start_date == previous[1] + timedelta(days=1)):
+            absences[-1] = (previous[0], period.end_date,
+                            previous[2] or bool(period.i1_election_made))
+        else:
+            absences.append(
+                (period.start_date, period.end_date, bool(period.i1_election_made)))
+    return absences
+
+
 def i1_deeming_applies(account, acquisition_date, event_date, declared=None):
     """Whether s104-165(3) deems this parcel TAP.
 
-    True if some non-resident period with an I1 election began after the acquisition and
-    covers the sale: the parcel was held on departure and sold before residency resumed.
+    True if some absence with an I1 election began after the acquisition and covers the
+    sale: the parcel was held on departure and sold before residency resumed.
     """
     if acquisition_date is None or event_date is None:
         return False
     if declared is None:
         declared = residency.periods(account)
 
-    for period in declared:
-        if period.status == residency.RESIDENT:
+    for start_date, end_date, election_made in _absences(declared):
+        if not election_made:
             continue
-        if not period.i1_election_made:
-            continue
-        if acquisition_date >= period.start_date:
+        if acquisition_date >= start_date:
             # Acquired after the departure, so never owned at the I1 moment.
             continue
-        if event_date < period.start_date:
+        if event_date < start_date:
             # Sold before the departure, so it was not owned at the I1 moment either. The
             # deeming reaches what you still held when you left, not everything you ever
             # bought beforehand -- and for a disposal while still resident the question does
             # not arise at all, since a resident is taxed on the gain either way.
             continue
-        if period.end_date is not None and event_date > period.end_date:
+        if end_date is not None and event_date > end_date:
             # Residency resumed before the sale, so the deeming has already lapsed.
             continue
         return True
@@ -119,7 +140,7 @@ def disregard_attribution(account, tap_status, event_date, declared=None):
     """Return `(is_disregarded, reason)` for a trust-attributed gain (s855-40(2), s276-55).
 
     Disregarded only if NTAP and the member was a foreign or temporary resident on the event
-    date. TAP_MIXED is never disregarded.
+    date.
     """
     if tap_status != NTAP:
         return False, None

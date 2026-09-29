@@ -5,7 +5,7 @@ import threading
 from django.apps import apps
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.base import ContentFile
-from django.db.models.signals import pre_save, post_save, post_delete
+from django.db.models.signals import pre_save, post_save, pre_delete, post_delete
 from django.dispatch import receiver
 from django.db import transaction
 from django.db.models import Sum, Q, Max, Min
@@ -156,6 +156,13 @@ def create_sell_allocations(sender, instance, created, **kwargs):
         if quantity_to_allocate <= 0:
             break
 
+    if quantity_to_allocate > 0:
+        # Not an error, since the sale may be recorded before the purchase it draws on, but
+        # until it is allocated the gain on these units is in no report.
+        logger.warning(
+            '%s units of %s had no parcel to be allocated to. Their gain is not reported '
+            'until they are.', quantity_to_allocate, instance)
+
     # mark as handled
     instance._creation_handled = True
     instance.save(update_fields=["_creation_handled"])
@@ -176,12 +183,15 @@ def handle_sell_allocation_creation(sender, instance, created, **kwargs):
         quantity=instance.quantity, date=instance.sell.date
     )
     allocated_parcel.sale_date = instance.sell.date
-    allocated_parcel.save()
 
     # assign new parcel to allocation
     instance.parcel = allocated_parcel
     instance._creation_handled = True
     instance.save(update_fields=["parcel", "_creation_handled"])
+
+    # Saved after the allocation points at it, so its stored figures count the sale. Saved
+    # before, it recorded itself as unsold, and nothing saved it again.
+    allocated_parcel.save()
 
     # update related sell totals
     instance.sell.save()
@@ -192,7 +202,12 @@ def handle_sell_allocation_deletion(sender, instance, **kwargs):
 
     assert isinstance(instance, SellAllocation)
 
-    instance.parcel.save()
+    parcel = instance.parcel
+    if not parcel.sale_allocation.filter(is_active=True).exists():
+        # Unsold again. A sale date left behind would have a later cost base adjustment
+        # weight the parcel as if it had been sold that day.
+        parcel.sale_date = None
+    parcel.save()
     instance.sell.save()
 
 
@@ -347,7 +362,7 @@ def handle_share_split(sender, instance, created, **kwargs):
     logger.debug('Splitting parcels as a result of %s', instance)
 
     with transaction.atomic():
-        multiplier = instance.split_multiplier
+        multiplier = instance.ratio
 
         for parcel in Parcel.objects.filter(
             account=instance.account,
@@ -368,28 +383,30 @@ def handle_share_split(sender, instance, created, **kwargs):
         instance.instrument.save() # Recalculate totals
 
 
-@receiver(post_delete, sender=ShareSplit)
+@receiver(pre_delete, sender=ShareSplit)
 def remove_share_split(sender, instance, **kwargs):
+    """Reverse the split on the parcels it created, before the split is deleted.
 
+    A pre_delete, because by post_delete the `affected_parcels` rows are already gone. Only
+    those parcels are reversed: going by date would also reverse parcels the split never
+    touched. Refused once any of them has been sold or split again.
+    """
     assert isinstance(instance, ShareSplit)
-    
-    logger.debug('Removing the applied share split %s', instance)
-    
-    with transaction.atomic():
-        multiplier = instance.split_multiplier
-        reciprocal_multiplier = 1 / multiplier
 
-        for parcel in Parcel.objects.filter(
-            account=instance.account,
-            deactivation_date__isnull=True,
-            buy__instrument=instance.instrument,
-            buy__date__lte=instance.date
-        ):
-            if not parcel.is_sold:
-                new_parcel = parcel.split_or_consolidate(
-                    multiplier=reciprocal_multiplier,
-                    date=instance.date
-                )
+    blocker = instance.deletion_blocker()
+    if blocker:
+        raise ValueError(blocker)
+
+    logger.debug('Removing the applied share split %s', instance)
+
+    with transaction.atomic():
+        reciprocal_multiplier = 1 / instance.ratio
+
+        for parcel in instance.affected_parcels.all():
+            parcel.split_or_consolidate(
+                multiplier=reciprocal_multiplier,
+                date=instance.date
+            )
 
         instance.instrument.save() # Recalculate totals
 
@@ -451,6 +468,9 @@ def generate_export_file(sender, instance, created, **kwargs):
 
             if 'account' in [f.name for f in model._meta.get_fields()]:
                 queryset = loading.model_to_queryset(model=model, account=instance.account)
+            elif model is Account:
+                # Only this portfolio: a file naming several cannot be restored on its own.
+                queryset = loading.model_to_queryset(model=model).filter(pk=instance.account_id)
             else:
                 queryset = loading.model_to_queryset(model=model)
             
@@ -474,18 +494,34 @@ def generate_export_file(sender, instance, created, **kwargs):
 
 
 
+def _delete_file_after_commit(field_file):
+    """Delete a stored file once the surrounding transaction commits.
+
+    Deleting it straight away lost the document whenever the change was then rolled back
+    (a failed import, say): the row went back to naming a file that was gone.
+    """
+    storage, name = field_file.storage, field_file.name
+    transaction.on_commit(lambda: storage.delete(name))
+
+
+def _has_file_field(model):
+    return any(field.name == 'file' for field in model._meta.fields)
+
+
 @receiver(post_delete)
 def delete_file_on_delete(sender, instance, **kwargs):
     """Delete a deleted instance's `file`, for any model with a field of that name."""
     file_field = getattr(instance, 'file', None)
-    if file_field:
-        file_field.delete(save=False)
+    if file_field and _has_file_field(sender):
+        _delete_file_after_commit(file_field)
 
 
 @receiver(pre_save)
 def delete_file_on_change(sender, instance, **kwargs):
     """Delete the old `file` when a saved instance's `file` changes."""
-    if not instance.pk:
+    if not _has_file_field(sender):
+        return
+    if not instance.pk or instance._state.adding:
         return  # New instance, nothing to delete
 
     try:
@@ -497,7 +533,7 @@ def delete_file_on_change(sender, instance, **kwargs):
     new_file = getattr(instance, 'file', None)
 
     if old_file and old_file != new_file:
-        old_file.delete(save=False)
+        _delete_file_after_commit(old_file)
 
 
 @receiver(pre_save)
@@ -551,10 +587,6 @@ def persist_safe_properties(sender, instance, created, **kwargs):
     updated_fields = []
 
     for attr_name in dir(instance):
-        
-        if attr_name  == 'value_held_converted':
-            value = getattr(instance, attr_name)
-
         attr = getattr(type(instance), attr_name, None)
         try:
             val = getattr(instance, attr_name, None)

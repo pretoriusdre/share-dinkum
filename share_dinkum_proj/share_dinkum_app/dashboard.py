@@ -29,12 +29,11 @@ from django.views.decorators.http import require_POST
 
 from djmoney.money import Money
 
-from share_dinkum_app import cgt, version
+from share_dinkum_app import cgt, data_checks, version
 from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.models import (
     Buy,
     CGTReturnSnapshot,
-    CostBaseAdjustment,
     CurrentExchangeRate,
     DataExport,
     Distribution,
@@ -43,7 +42,7 @@ from share_dinkum_app.models import (
     FiscalYear,
     Instrument,
     InstrumentPriceHistory,
-    Parcel,
+    LodgedSnapshotError,
     ResidencyPeriod,
     Sell,
 )
@@ -150,34 +149,28 @@ def _tax_settings_warning(account):
     )
 
 
-def _unconverted_figures_warning(account):
-    """A warning if figures were left unconverted by the bug fixed in 0.3.0, else None.
+def _data_check_warning(account):
+    """A warning listing what `data_checks` found in the portfolio, else None.
 
-    See the `repair_foreign_currency_figures` command, which clears it.
+    Cleared by the `repair_portfolio_data` command, or, for what needs a person, by fixing
+    the records it lists.
     """
     if account is None:
         return None
+    findings = data_checks.run(account)
+    if not findings:
+        return None
 
-    currency = str(account.currency)
-    command = 'uv run dev repair_foreign_currency_figures'
-    adjustments = CostBaseAdjustment.with_unconverted_allocations(account).count()
-    if adjustments:
-        return (
-            f'{adjustments} cost base adjustment(s) in {account.description} were allocated '
-            f'without being converted to {currency}, so the cost base of those parcels, and any '
-            f'gain on them, is wrong. Run `{command}` to list them; each must be deleted and '
-            f'entered again.'
-        )
-
-    parcels = Parcel.with_unconverted_cost_base(account).count()
-    if parcels:
-        return (
-            f'{parcels} parcel(s) in {account.description} have their cost base stored in a '
-            f'currency other than {currency}. Capital gains and reports are not affected, only '
-            f'the stored figure shown in the parcel list and in exports. Run `{command}` to '
-            f'recalculate them.'
-        )
-    return None
+    affects_gains = any(finding.affects_gains for finding in findings)
+    consequence = (
+        'Some capital gains are wrong until these are dealt with.' if affects_gains else
+        'Capital gains and reports are not affected, only the stored figures shown in the '
+        'admin lists and exports.')
+    return (
+        f'{account.description} has '
+        f'{"; ".join(finding.summary for finding in findings)}. {consequence} Run '
+        f'`{data_checks.COMMAND}` to repair what it can and list the rest.'
+    )
 
 
 def prepare_dashboard_context(request, context):
@@ -547,7 +540,7 @@ def prepare_dashboard_context(request, context):
             'dashboard_account': account,
             'dashboard_currency': dashboard_currency,
             'tax_settings_warning': _tax_settings_warning(account),
-            'unconverted_figures_warning': _unconverted_figures_warning(account),
+            'data_check_warning': _data_check_warning(account),
             # The buttons, and the state that says whether pressing one is worth it. Only
             # offered where there is a portfolio to act on; every action needs an account.
             'dashboard_action_groups': action_groups(account) if account else [],
@@ -667,17 +660,26 @@ def capture_snapshot_view(request):
         return redirect(dashboard_url)
 
     basis = cgt.residency_basis(account)
+    recorded = []
     try:
         for fiscal_year in fiscal_years:
-            CGTReturnSnapshot.capture(
-                account=account, fiscal_year=fiscal_year, basis=basis)
+            try:
+                CGTReturnSnapshot.capture(
+                    account=account, fiscal_year=fiscal_year, basis=basis)
+            except LodgedSnapshotError as exc:
+                messages.info(request, str(exc))
+                continue
+            recorded.append(fiscal_year)
     except Exception as exc:
         logger.warning(
             'Snapshot capture failed for %s: %s', account, exc, exc_info=True)
         messages.error(request, f'Could not record the figures: {exc}')
         return redirect(dashboard_url)
 
-    names = ', '.join(fiscal_year.name for fiscal_year in fiscal_years)
+    if not recorded:
+        return redirect(dashboard_url)
+
+    names = ', '.join(fiscal_year.name for fiscal_year in recorded)
     note = (
         ' These assume an Australian resident throughout and a flat 50% discount, because '
         'residency has not been declared.'

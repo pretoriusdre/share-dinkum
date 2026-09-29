@@ -75,12 +75,52 @@ To upgrade, stop the server and run `uv run update`.
   artefacts (e.g. `2019.106200000001099999999996` for `2019.1062`). Snapshots are stored unrounded
   and compared at four places, so existing snapshots still match.
 
+- **Records other records were worked out from cannot be changed after they are entered**: a buy
+  or sell's instrument, date, quantity or currencies, a sell's strategy, a split's ratio, an
+  adjustment's amount, an allocation's parcel or quantity. Previously the change was accepted and
+  silently ignored by the parcels. Delete the record and enter it again. Price, brokerage and
+  exchange rate corrections are still allowed, and now reach the parcels and gains.
+
+- **A trade or split entered out of date order is refused**: a buy or sale dated before a split
+  already applied, or a split dated before a sale already allocated.
+
+- **Import templates load sales, splits and adjustments in date order**, each sale followed by its
+  own sell allocations. Previously every sale was allocated before any split loaded, in row order.
+
+- **Loading a file again**:
+  - A blank cell leaves the stored value alone, rather than clearing it. A blank `file` used to
+    delete the attached document.
+  - A transaction row with no `legacy_id` is refused once the portfolio has rows of that kind, since
+    it would be added a second time. The same `legacy_id` on two rows of a sheet is refused.
+  - A strategy or other choice may be given by its label or in any case (`fifo`); anything else is
+    refused rather than stored as typed.
+  - A blank trade currency is the instrument's, not AUD. A numeric `legacy_id` no longer gains `.0`.
+  - An export's own DataExport rows are not loaded, and an export holds only its own portfolio.
+
 ### Fixed
 
 - **Foreign-currency trades get their exchange rate before anything is built from them.**
   Previously the rate was attached last, which led to the cost base on foreign trades not being converted
-  to the account's base currency. If the dashboard warns about this, run `uv run dev repair_foreign_currency_figures`.
-  That command recalculates the affected parcels, and lists any adjustments that need deleting and entering again.
+  to the account's base currency.
+
+- **Run `uv run dev repair_portfolio_data` if the dashboard says so.** It recalculates stored figures,
+  carries adjustments a share split left behind to the parcels that replaced them, fetches exchange
+  rates that could not be fetched, and lists what needs fixing by hand. `--dry-run` only reports.
+
+- **A share split keeps the AMIT adjustments already allocated to a parcel.** They were left on the
+  replaced parcel and dropped out of the cost base.
+
+- **Deleting a share split reverses only the parcels it created**, and is refused once any of them
+  has been sold or split again.
+
+- **Sales with units allocated to no parcel are reported** on the CGT schedule and the dashboard.
+  The gain on those units was in no report.
+
+- **A parcel cannot be allocated to sales for more than it holds**, nor to a sale of another
+  instrument or one dated before its purchase.
+
+- **Parcels cannot be deleted in the admin.**
+
 
 - **Backups go to one place: `~/share-dinkum-backups/main/`**, for `uv run update`, the notebook's
   `backup()` and the dashboard. Previously two folders in two layouts, and only the notebook's was

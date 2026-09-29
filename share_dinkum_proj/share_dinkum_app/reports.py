@@ -7,7 +7,7 @@ from share_dinkum_app.models import Sell, Account, Parcel, CurrentExchangeRate, 
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface
-from share_dinkum_app.choices import CGTAssetCategory, CGTBasis
+from share_dinkum_app.choices import CGTAssetCategory
 
 def _key(value):
     """A sell allocation id as text, or None, so snapshot and current keys compare equal."""
@@ -187,6 +187,9 @@ class CGTBasisChangeReport:
         ]
         report_rows = []
 
+        # The basis is a property of the account today, not of the snapshot.
+        current_basis = cgt.residency_basis(self.account)
+
         snapshots = CGTReturnSnapshot.objects.filter(account=self.account, is_active=True)
         if self.fiscal_year is not None:
             snapshots = snapshots.filter(fiscal_year=self.fiscal_year)
@@ -201,10 +204,6 @@ class CGTBasisChangeReport:
             # is the one thing that cannot be quietly wrong about a type.
             snapshot_rows = {
                 _key(row.get('sell_allocation_id')): row for row in snapshot.rows}
-
-            # The basis is a property of the account today, not of the snapshot; until
-            # ResidencyPeriod exists every account computes on the legacy basis.
-            current_basis = CGTBasis.LEGACY
 
             def base_row(allocation_id, status, field, was, now, diff):
                 return {

@@ -117,6 +117,14 @@ class GenericModelAdmin(admin.ModelAdmin):
         obj.save(user=request.user)  # Ensure the user is passed
         super().save_model(request, obj, form, change)
 
+    def has_delete_permission(self, request, obj=None):
+        # A record that knows why it cannot be deleted (a share split whose parcels have
+        # since been sold) hides the button rather than failing on the confirmation page.
+        blocker = getattr(obj, 'deletion_blocker', None)
+        if obj is not None and blocker is not None and blocker():
+            return False
+        return super().has_delete_permission(request, obj)
+
 
     #: Approximate total form fields allowed across a change page's inlines, so saving does not
     #: hit Django's TooManyFieldsSent limit.
@@ -189,10 +197,14 @@ class GenericModelAdmin(admin.ModelAdmin):
     
 
 class GenericModelAdminWithoutAdd(GenericModelAdmin):
+    """For records derived from others (parcels), which are neither added nor deleted by hand.
+
+    Deleting a parcel would remove a holding while the buy that created it remained.
+    """
     def has_add_permission(self, request):
         return False
     def has_delete_permission(self, request, obj=None):
-        return True
+        return False
 
 
 class HiddenModelAdmin(admin.ModelAdmin):

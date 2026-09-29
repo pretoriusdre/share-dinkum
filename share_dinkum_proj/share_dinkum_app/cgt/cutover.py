@@ -148,6 +148,9 @@ def scale_for_splits(parcel, day):
     splits = ShareSplit.objects.filter(
         account=parcel.account, instrument=parcel.buy.instrument,
         date__gt=day, is_active=True)
+    if parcel.sale_date is not None:
+        # A split after the sale never reached the parcel, so its units are still as sold.
+        splits = splits.filter(date__lte=parcel.sale_date)
     for split in splits:
         if split.quantity_before:
             multiplier *= Decimal(split.quantity_after) / Decimal(split.quantity_before)

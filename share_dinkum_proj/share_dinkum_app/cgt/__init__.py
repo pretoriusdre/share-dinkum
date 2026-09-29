@@ -15,6 +15,11 @@ With no residency declared, the flat discount applies and reports say so.
 Not implemented (flagged or raised, not guessed): the s112-185 apportioning method (a
 straddling disposal needs a market valuation), Subdivision 26-155 quarantining, the
 s115-115(4) election, and the s119-10(2) minimum tax gap amount.
+
+Not implemented and not flagged: CGT event I1 on departure without a s104-165(2) election,
+the s855-45 market value cost base on becoming a resident, and the pre-CGT exemption for
+assets acquired before 20 September 1985. Valuations for the first two can be recorded, but
+nothing reads them yet.
 """
 
 from share_dinkum_app.cgt.discount import (

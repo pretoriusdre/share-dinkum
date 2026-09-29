@@ -17,7 +17,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from djmoney.money import Money
 
 from share_dinkum_app.constants import DEFAULT_CURRENCY, CGT_DISCOUNT_RATE, CGT_DISCOUNT_THRESHOLD_DAYS
@@ -50,6 +50,7 @@ from share_dinkum_app.models import (
     CPIIndex,
     InstrumentValuation,
     CapitalLossCarryForward,
+    LodgedSnapshotError,
 )
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
@@ -680,6 +681,60 @@ class ExchangeRateTests(TestCase):
         self.assertEqual(rate.exchange_rate_multiplier, Decimal('1.55'))
         mock_get_rate.assert_called_once()
 
+    def test_a_rate_that_could_not_be_fetched_is_fetched_again_later(self, mock_get_rate):
+        acc = create_account()
+        mock_get_rate.return_value = None
+        stand_in = ExchangeRate.get_or_create(
+            account=acc, convert_from='USD', convert_to='AUD', exchange_date=date(2015, 3, 2))
+        self.assertTrue(stand_in.is_placeholder)
+
+        mock_get_rate.return_value = Decimal('1.3')
+        rate = ExchangeRate.get_or_create(
+            account=acc, convert_from='USD', convert_to='AUD', exchange_date=date(2015, 3, 2))
+
+        self.assertEqual(rate.pk, stand_in.pk)
+        self.assertEqual(rate.exchange_rate_multiplier, Decimal('1.3'))
+        self.assertFalse(rate.is_placeholder)
+
+    def test_a_stand_in_rate_comes_from_the_nearest_earlier_date(self, mock_get_rate):
+        acc = create_account()
+        create_exchange_rate(acc, 'USD', 'AUD', rate=Decimal('1.1'), exchange_date=date(2015, 1, 2))
+        create_exchange_rate(acc, 'USD', 'AUD', rate=Decimal('1.6'), exchange_date=date(2025, 1, 2))
+        mock_get_rate.return_value = None
+
+        rate = ExchangeRate.get_or_create(
+            account=acc, convert_from='USD', convert_to='AUD', exchange_date=date(2015, 3, 2))
+
+        self.assertEqual(rate.exchange_rate_multiplier, Decimal('1.1'))
+        self.assertTrue(rate.is_placeholder)
+
+    def test_the_history_refresh_replaces_a_stand_in_rate(self, mock_get_rate):
+        acc = create_account()
+        mock_get_rate.return_value = Decimal('1.5')
+        inst = create_instrument(account=acc, name='AAPL', currency='USD')
+        mock_get_rate.return_value = None
+        buy = Buy.objects.create(
+            account=acc, instrument=inst, date=date(2024, 1, 15), quantity=Decimal('10'),
+            unit_price=Money(100, 'USD'), total_brokerage=Money(0, 'USD'),
+        )
+        self.assertTrue(buy.exchange_rate.is_placeholder)
+
+        history = pd.DataFrame([{
+            'convert_from': 'USD', 'convert_to': 'AUD', 'date': date(2024, 1, 15),
+            'exchange_rate_multiplier': Decimal('1.4'), 'is_continuous_history': True,
+        }])
+        with patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate_history',
+                   return_value=history):
+            ExchangeRate.update_exchange_rate_history(
+                account=acc, convert_from='USD', convert_to='AUD')
+
+        buy.refresh_from_db()
+        self.assertFalse(buy.exchange_rate.is_placeholder)
+        self.assertEqual(buy.exchange_rate.exchange_rate_multiplier, Decimal('1.4'))
+        self.assertEqual(buy.calculated_unit_price_converted.amount, Decimal('140'))
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.calculated_total_cost_base.amount, Decimal('1400'))
+
 
 # =============================================================================
 # Models: Market, Instrument
@@ -724,6 +779,12 @@ class InstrumentTests(TestCase):
     def test_value_held_no_price_is_zero(self):
         inst = create_instrument()
         self.assertEqual(inst.value_held.amount, 0)
+
+    @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=None)
+    def test_a_foreign_instrument_can_be_added_offline(self, mock_get_rate):
+        """With no rate to be had, its converted value is unknown rather than an error."""
+        inst = create_instrument(name='AAPL', currency='USD')
+        self.assertIsNone(inst.value_held_converted)
 
 
 # =============================================================================
@@ -795,20 +856,20 @@ class ForeignCurrencyTradeTests(TransactionTestCase):
 
 
 @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
-class RepairForeignCurrencyFiguresTests(TransactionTestCase):
-    """Figures left unconverted before 0.3.0: the dashboard warns, and the command repairs them."""
+class RepairPortfolioDataTests(TransactionTestCase):
+    """Records left wrong by bugs fixed in 0.3.0: the dashboard warns, the command repairs."""
 
     def setUp(self):
-        from share_dinkum_app.dashboard import _unconverted_figures_warning
-        self._warning = _unconverted_figures_warning
+        from share_dinkum_app.dashboard import _data_check_warning
+        self._warning = _data_check_warning
 
-    def _portfolio(self):
+    def _portfolio(self, currency='USD'):
         account = create_account()
-        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        instrument = create_instrument(account=account, name='IBIT', currency=currency)
         buy = Buy.objects.create(
             account=account, instrument=instrument, date=date(2024, 1, 10),
-            quantity=Decimal('100'), unit_price=Money(Decimal('50'), 'USD'),
-            total_brokerage=Money(Decimal('10'), 'USD'),
+            quantity=Decimal('100'), unit_price=Money(Decimal('50'), currency),
+            total_brokerage=Money(Decimal('10'), currency),
         )
         return account, instrument, buy
 
@@ -816,7 +877,12 @@ class RepairForeignCurrencyFiguresTests(TransactionTestCase):
         """Put the buy's parcel back as the bug left it, its cost base labelled USD."""
         Parcel.objects.filter(buy=buy).update(calculated_total_cost_base_currency='USD')
 
-    def test_a_converted_portfolio_is_left_alone(self, mock_get_rate):
+    def _repair(self, *args):
+        out = io.StringIO()
+        call_command('repair_portfolio_data', *args, stdout=out)
+        return out.getvalue()
+
+    def test_a_clean_portfolio_is_left_alone(self, mock_get_rate):
         account, _, _ = self._portfolio()
         self.assertIsNone(self._warning(account))
 
@@ -825,29 +891,104 @@ class RepairForeignCurrencyFiguresTests(TransactionTestCase):
         self._unconvert(buy)
 
         warning = self._warning(account)
-        self.assertIn('1 parcel(s)', warning)
-        self.assertIn('repair_foreign_currency_figures', warning)
+        self.assertIn('1 parcel(s) with their cost base stored in a currency', warning)
+        self.assertIn('repair_portfolio_data', warning)
+        self.assertIn('not affected', warning)
 
     def test_the_command_recalculates_the_parcel_and_clears_the_warning(self, mock_get_rate):
         account, _, buy = self._portfolio()
         self._unconvert(buy)
 
-        call_command('repair_foreign_currency_figures', stdout=io.StringIO())
+        self._repair()
 
         parcel = Parcel.objects.get(buy=buy)
         self.assertEqual(str(parcel.calculated_total_cost_base.currency), 'AUD')
         self.assertEqual(parcel.calculated_total_cost_base.amount, Decimal('7515'))
         self.assertIsNone(self._warning(account))
 
+    def test_a_stale_sold_flag_is_recalculated(self, mock_get_rate):
+        account, instrument, _ = self._portfolio(currency='AUD')
+        Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 6, 1),
+            quantity=Decimal('40'), unit_price=Money(60, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        Parcel.objects.filter(sale_date__isnull=False).update(calculated_is_sold=False)
+        self.assertIn('stored sold flag', self._warning(account))
+
+        self._repair()
+
+        self.assertTrue(Parcel.objects.get(sale_date__isnull=False).calculated_is_sold)
+        self.assertIsNone(self._warning(account))
+
+    def test_an_adjustment_left_behind_by_a_split_is_carried_forward(self, mock_get_rate):
+        """As the bug left it: on the replaced parcel, and on none of its descendants."""
+        account, instrument, buy = self._portfolio(currency='AUD')
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'),
+        )
+        ShareSplit.objects.create(
+            account=account, instrument=instrument, date=date(2024, 9, 1),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+        Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 12, 1),
+            quantity=Decimal('50'), unit_price=Money(30, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        # Undo what split_or_consolidate now does, to recreate what the bug left.
+        original = Parcel.objects.get(buy=buy, parent_parcel__isnull=True)
+        for allocation in CostBaseAdjustmentAllocation.objects.filter(account=account):
+            if allocation.parcel_id == original.pk:
+                CostBaseAdjustmentAllocation.objects.filter(pk=allocation.pk).update(
+                    deactivation_date=None, is_active=True)
+            else:
+                CostBaseAdjustmentAllocation.objects.filter(pk=allocation.pk).delete()
+        self.assertIn('left behind by a share split', self._warning(account))
+
+        out = self._repair()
+
+        self.assertIn('carried 1 cost base adjustment allocation(s)', out)
+        held = Parcel.objects.filter(buy=buy, deactivation_date__isnull=True)
+        self.assertEqual(held.count(), 2)  # 50 sold and 150 held, of 200 after the split
+        self.assertEqual(sum(p.total_adjustments.amount for p in held), Decimal('50'))
+        self.assertIsNone(self._warning(account))
+
+    def test_a_stand_in_rate_is_fetched_again(self, mock_get_rate):
+        account, _, buy = self._portfolio()
+        ExchangeRate.objects.filter(pk=buy.exchange_rate_id).update(
+            is_placeholder=True, exchange_rate_multiplier=Decimal('1'))
+        self.assertIn('standing in', self._warning(account))
+
+        out = self._repair()
+
+        self.assertIn('fetched 1 exchange rate(s)', out)
+        buy.refresh_from_db()
+        self.assertEqual(buy.calculated_unit_price_converted.amount, Decimal('75'))
+
     def test_a_dry_run_changes_nothing(self, mock_get_rate):
         account, _, buy = self._portfolio()
         self._unconvert(buy)
-        out = io.StringIO()
 
-        call_command('repair_foreign_currency_figures', '--dry-run', stdout=out)
+        out = self._repair('--dry-run')
 
-        self.assertIn('would recalculate 1 parcel(s)', out.getvalue())
+        self.assertIn('1 parcel(s) with their cost base stored in a currency', out)
+        self.assertIn('would repair', out)
         self.assertEqual(Parcel.with_unconverted_cost_base(account).count(), 1)
+
+    def test_sales_needing_a_person_are_listed(self, mock_get_rate):
+        account, instrument, _ = self._portfolio(currency='AUD')
+        Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 6, 1),
+            quantity=Decimal('150'), unit_price=Money(60, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self.assertIn('capital gains are wrong', self._warning(account))
+
+        out = self._repair()
+
+        self.assertIn('IBIT on 2024-06-01: 50 of 150 units', out)
 
     def test_an_unconverted_adjustment_is_listed_but_not_changed(self, mock_get_rate):
         """Re-allocating would spread the adjustment again, so that is left to the operator."""
@@ -859,12 +1000,12 @@ class RepairForeignCurrencyFiguresTests(TransactionTestCase):
         allocations = CostBaseAdjustmentAllocation.objects.filter(cost_base_adjustment=adjustment)
         allocations.update(cost_base_increase_currency='USD')
 
-        self.assertIn('1 cost base adjustment(s)', self._warning(account))
+        self.assertIn(
+            '1 cost base adjustment(s) allocated without being converted', self._warning(account))
 
-        out = io.StringIO()
-        call_command('repair_foreign_currency_figures', stdout=out)
+        out = self._repair()
 
-        self.assertIn('Delete each one and enter it again', out.getvalue())
+        self.assertIn('Delete each one and enter it again', out)
         self.assertEqual(
             set(allocations.values_list('cost_base_increase_currency', flat=True)), {'USD'})
 
@@ -928,6 +1069,80 @@ class SellAllocationTests(TransactionTestCase):
         allocations = SellAllocation.objects.filter(sell=sell)
         self.assertEqual(allocations.count(), 0)
 
+    def _manual_sale(self, quantity='100', on=date(2024, 3, 1), instrument_name='BHP'):
+        account = create_account()
+        instrument = create_instrument(account=account, name=instrument_name)
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 5),
+            quantity=Decimal('100'), unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=on, quantity=Decimal(quantity),
+            unit_price=Money(55, 'AUD'), total_brokerage=Money(0, 'AUD'), strategy='MANUAL',
+        )
+        return account, instrument, Parcel.objects.get(buy=buy), sell
+
+    def _refused(self, account, parcel, sell, quantity, expected):
+        allocation = SellAllocation(
+            account=account, parcel=parcel, sell=sell, quantity=Decimal(quantity))
+        with self.assertRaisesMessage(ValidationError, expected):
+            allocation.full_clean()
+        with self.assertRaisesMessage(ValueError, expected):
+            SellAllocation.objects.create(
+                account=account, parcel=parcel, sell=sell, quantity=Decimal(quantity))
+
+    def test_a_sold_parcel_cannot_be_allocated_again(self):
+        account, instrument, parcel, first = self._manual_sale()
+        SellAllocation.objects.create(
+            account=account, parcel=parcel, sell=first, quantity=Decimal('100'))
+        second = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 4, 1),
+            quantity=Decimal('100'), unit_price=Money(55, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='MANUAL',
+        )
+
+        self._refused(account, Parcel.objects.get(pk=parcel.pk), second, '100', 'unsold')
+        self.assertEqual(Instrument.objects.get(pk=instrument.pk).quantity_held, Decimal('0'))
+
+    def test_a_parcel_of_another_instrument_is_refused(self):
+        account, _, parcel, _ = self._manual_sale()
+        other = create_instrument(
+            account=account, market=parcel.buy.instrument.market, name='RIO')
+        sell = Sell.objects.create(
+            account=account, instrument=other, date=date(2024, 3, 1), quantity=Decimal('10'),
+            unit_price=Money(55, 'AUD'), total_brokerage=Money(0, 'AUD'), strategy='MANUAL',
+        )
+        self._refused(account, parcel, sell, '10', 'RIO')
+
+    def test_a_parcel_bought_after_the_sale_is_refused(self):
+        account, _, parcel, sell = self._manual_sale(on=date(2024, 1, 2))
+        self._refused(account, parcel, sell, '10', 'after the sale')
+
+    def test_allocations_cannot_add_up_to_more_than_the_sale(self):
+        account, _, parcel, sell = self._manual_sale(quantity='40')
+        self._refused(account, parcel, sell, '50', 'too many')
+
+    def test_the_sold_part_of_a_parcel_is_stored_as_sold(self):
+        """The parcel split off for a partial sale records itself as sold, not as held."""
+        account, _, parcel, sell = self._manual_sale(quantity='40')
+        allocation = SellAllocation.objects.create(
+            account=account, parcel=parcel, sell=sell, quantity=Decimal('40'))
+
+        sold = Parcel.objects.get(pk=allocation.parcel_id)
+        self.assertTrue(sold.calculated_is_sold)
+        self.assertEqual(sold.calculated_remaining_quantity, Decimal('0'))
+
+    def test_deleting_an_allocation_clears_the_parcels_sale_date(self):
+        """Otherwise a later adjustment weights the parcel as if it were sold that day."""
+        account, _, parcel, sell = self._manual_sale(quantity='40')
+        allocation = SellAllocation.objects.create(
+            account=account, parcel=parcel, sell=sell, quantity=Decimal('40'))
+        sold_id = allocation.parcel_id
+
+        allocation.delete()
+
+        self.assertIsNone(Parcel.objects.get(pk=sold_id).sale_date)
+
 
 class ParcelTests(TransactionTestCase):
     """Tests for Parcel model methods (bifurcate, split, cost base)."""
@@ -984,6 +1199,294 @@ class ShareSplitTests(TransactionTestCase):
             date=date(2024, 3, 1),
         )
         self.assertEqual(ss.split_multiplier, Decimal('3'))
+
+    def _holding(self, quantity='100', price='10'):
+        account = create_account()
+        instrument = create_instrument(account=account, name='SPL')
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2021, 8, 1),
+            quantity=Decimal(quantity), unit_price=Money(Decimal(price), 'AUD'),
+            total_brokerage=Money(0, 'AUD'),
+        )
+        return account, instrument, buy
+
+    def _split(self, account, instrument, before, after, on=date(2023, 1, 1)):
+        return ShareSplit.objects.create(
+            account=account, instrument=instrument, date=on,
+            quantity_before=Decimal(before), quantity_after=Decimal(after),
+        )
+
+    def _active_parcel(self, buy):
+        return Parcel.objects.get(buy=buy, deactivation_date__isnull=True)
+
+    def test_a_split_keeps_the_adjustments_already_allocated(self):
+        account, instrument, buy = self._holding()
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2022, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'),
+        )
+
+        self._split(account, instrument, '1', '2')
+
+        parcel = self._active_parcel(buy)
+        self.assertEqual(parcel.parcel_quantity, Decimal('200'))
+        self.assertEqual(parcel.total_adjustments.amount, Decimal('50'))
+        self.assertEqual(parcel.total_cost_base.amount, Decimal('1050'))
+
+    def test_a_one_for_three_consolidation_is_exact(self):
+        account, instrument, buy = self._holding(quantity='3000', price='1')
+
+        self._split(account, instrument, '3', '1')
+
+        parcel = self._active_parcel(buy)
+        self.assertEqual(parcel.parcel_quantity, Decimal('1000'))
+        self.assertEqual(
+            parcel.total_cost_base.amount.quantize(Decimal('0.01')), Decimal('3000.00'))
+
+    def test_deleting_a_split_restores_the_parcels_it_split(self):
+        account, instrument, buy = self._holding()
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2022, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'),
+        )
+        split = self._split(account, instrument, '1', '3')
+
+        split.delete()
+
+        parcel = self._active_parcel(buy)
+        self.assertEqual(parcel.parcel_quantity, Decimal('100'))
+        self.assertEqual(parcel.total_cost_base.amount, Decimal('1050'))
+
+    def test_a_split_whose_parcels_have_since_been_sold_cannot_be_deleted(self):
+        """Reversing it would leave the sale in post-split units against pre-split parcels."""
+        account, instrument, buy = self._holding()
+        split = self._split(account, instrument, '1', '2')
+        Sell.objects.create(
+            account=account, instrument=instrument, date=date(2023, 6, 1),
+            quantity=Decimal('50'), unit_price=Money(Decimal('8'), 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+
+        with self.assertRaises(ValueError):
+            split.delete()
+
+        self.assertTrue(ShareSplit.objects.filter(pk=split.pk).exists())
+        self.assertEqual(Instrument.objects.get(pk=instrument.pk).quantity_held, Decimal('150'))
+
+
+class StructuralEditTests(TransactionTestCase):
+    """What other records were derived from cannot be changed; prices can be corrected."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        self.buy = Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 5),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(10, 'AUD'),
+        )
+
+    def _refused(self, record, **changes):
+        for name, value in changes.items():
+            setattr(record, name, value)
+        with self.assertRaisesMessage(ValidationError, 'Delete it and enter it again'):
+            record.full_clean()
+        with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):
+            record.save()
+
+    def test_a_buys_quantity_cannot_be_changed(self):
+        self._refused(self.buy, quantity=Decimal('200'))
+        self.assertEqual(Parcel.objects.get(buy=self.buy).parcel_quantity, Decimal('100'))
+
+    def test_a_buys_date_cannot_be_changed(self):
+        self._refused(self.buy, date=date(2024, 2, 5))
+
+    def test_a_sells_quantity_cannot_be_changed(self):
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 6, 1),
+            quantity=Decimal('40'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self._refused(sell, quantity=Decimal('50'))
+
+    def test_an_allocations_quantity_cannot_be_changed(self):
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 6, 1),
+            quantity=Decimal('40'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self._refused(sell.sale_allocation.get(), quantity=Decimal('30'))
+
+    def test_a_splits_ratio_cannot_be_changed(self):
+        split = ShareSplit.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 3, 1),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+        self._refused(split, quantity_after=Decimal('3'))
+
+    def test_an_adjustments_amount_cannot_be_changed(self):
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=date(2024, 6, 30), cost_base_increase=Money(50, 'AUD'),
+        )
+        self._refused(adjustment, cost_base_increase=Money(80, 'AUD'))
+
+    def test_saving_without_a_change_is_allowed(self):
+        self.buy.notes = 'contract note filed'
+        self.buy.full_clean()
+        self.buy.save()
+
+    def test_a_corrected_price_reaches_the_parcel_and_the_gain(self):
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 6, 1),
+            quantity=Decimal('40'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+
+        self.buy.unit_price = Money(11, 'AUD')
+        self.buy.save()
+
+        held = Parcel.objects.get(buy=self.buy, deactivation_date__isnull=True, sale_date__isnull=True)
+        # 60 units at $11 plus 60% of the $10 brokerage.
+        self.assertEqual(held.calculated_total_cost_base.amount, Decimal('666'))
+        allocation = sell.sale_allocation.get()
+        # 40 x $12 less (40 x $11 + 40% of $10).
+        self.assertEqual(allocation.calculated_total_capital_gain.amount, Decimal('36'))
+
+
+class OutOfOrderEntryTests(TransactionTestCase):
+    """Entered by hand after a split, a trade dated before it would miss the split."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2020, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _split(self, on=date(2021, 1, 1)):
+        return ShareSplit.objects.create(
+            account=self.account, instrument=self.instrument, date=on,
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+
+    def _refused(self, record):
+        with self.assertRaisesMessage(ValidationError, 'split'):
+            record.full_clean()
+        with self.assertRaisesMessage(ValueError, 'split'):
+            record.save()
+
+    def test_a_sale_dated_before_an_applied_split_is_refused(self):
+        self._split()
+        self._refused(Sell(
+            account=self.account, instrument=self.instrument, date=date(2020, 6, 1),
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO'))
+
+    def test_a_buy_dated_before_an_applied_split_is_refused(self):
+        self._split()
+        self._refused(Buy(
+            account=self.account, instrument=self.instrument, date=date(2020, 6, 1),
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'), total_brokerage=Money(0, 'AUD')))
+
+    def test_a_split_dated_before_an_allocated_sale_is_refused(self):
+        Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2022, 1, 1),
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self._refused(ShareSplit(
+            account=self.account, instrument=self.instrument, date=date(2021, 1, 1),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2')))
+
+    def test_trades_after_a_split_are_fine(self):
+        self._split()
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2021, 6, 1),
+            quantity=Decimal('10'), unit_price=Money(6, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2022, 1, 1),
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self.assertEqual(
+            Instrument.objects.get(pk=self.instrument.pk).quantity_held, Decimal('160'))
+
+
+class AttachedDocumentTests(TransactionTestCase):
+    """A document is deleted only once the change that replaced or removed it commits."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from django.test import override_settings
+        self.ContentFile = ContentFile
+        media = override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+        media.enable()
+        self.addCleanup(media.disable)
+
+        account = create_account()
+        self.buy = Buy.objects.create(
+            account=account, instrument=create_instrument(account=account),
+            date=date(2024, 1, 5), quantity=Decimal('100'),
+            unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        self.buy.file.save('contract.pdf', ContentFile(b'original'))
+        self.original = Path(self.buy.file.path)
+
+    def test_a_rolled_back_replacement_keeps_the_original(self):
+        with self.assertRaises(RuntimeError):
+            with transaction.atomic():
+                self.buy.file.save('replacement.pdf', self.ContentFile(b'new'))
+                raise RuntimeError('the import failed after this row')
+
+        self.assertTrue(self.original.exists())
+
+    def test_a_committed_replacement_removes_the_original(self):
+        self.buy.file.save('replacement.pdf', self.ContentFile(b'new'))
+        self.assertFalse(self.original.exists())
+
+
+class AdminDeletePermissionTests(TransactionTestCase):
+    """Records the admin must not delete: parcels, and splits that can no longer be reversed."""
+
+    def _request(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = AppUser.objects.create_superuser('root', 'root@example.com', 'x')
+        return request
+
+    def test_parcels_cannot_be_deleted(self):
+        account = create_account()
+        Buy.objects.create(
+            account=account, instrument=create_instrument(account=account),
+            date=date(2024, 1, 5), quantity=Decimal('100'),
+            unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        parcel = Parcel.objects.get()
+        self.assertFalse(admin.site._registry[Parcel].has_delete_permission(self._request(), parcel))
+
+    def test_a_split_that_cannot_be_reversed_has_no_delete_button(self):
+        account = create_account()
+        instrument = create_instrument(account=account)
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 5),
+            quantity=Decimal('100'), unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        split = ShareSplit.objects.create(
+            account=account, instrument=instrument, date=date(2024, 3, 1),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+        split_admin = admin.site._registry[ShareSplit]
+        request = self._request()
+        self.assertTrue(split_admin.has_delete_permission(request, split))
+
+        Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 6, 1),
+            quantity=Decimal('50'), unit_price=Money(55, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        self.assertFalse(split_admin.has_delete_permission(request, split))
 
 
 # =============================================================================
@@ -1742,12 +2245,13 @@ class AttributionStatementTests(TransactionTestCase):
         self.assertEqual(events['other'].discount_percentage, Decimal('0'))
 
     def test_the_tap_split_is_preserved(self):
-        """Mixed TAP and NTAP discounted gains keep a mixed TAP status."""
+        """TAP and NTAP discounted gains become one event each, as the statement states them."""
         self._component('DISCOUNTED_TAP', '30.00')
         self._component('DISCOUNTED_NTAP', '70.00')
-        event = cgt.attribution_events(self.account)[0]
-        self.assertEqual(event.capital_gain.amount, Decimal('200.00'))
-        self.assertEqual(event.tap_status, 'mixed')
+        events = cgt.attribution_events(self.account)
+        self.assertEqual(
+            [(e.tap_status, e.capital_gain.amount) for e in events],
+            [('TAP', Decimal('60.00')), ('NTAP', Decimal('140.00'))])
 
     def test_a_statement_with_no_capital_gains_produces_no_events(self):
         self._component('FOREIGN_SOURCE_INCOME', '1000.00')
@@ -2056,6 +2560,18 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.fy2024 = FiscalYear.objects.get(
             fiscal_year_type=self.account.fiscal_year_type, start_year=2023)
 
+    def test_the_current_basis_is_the_accounts_basis_today(self):
+        """A snapshot on the legacy basis, compared after residency is declared."""
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        CGTReturnSnapshotRow.objects.filter(snapshot=snapshot).update(
+            capital_gain=Decimal('1'))
+        declare(self.account, 'RESIDENT', date(2000, 1, 1))
+
+        df = CGTBasisChangeReport(account=self.account).generate()
+
+        self.assertEqual(set(df['snapshot_basis']), {cgt.BASIS_LEGACY})
+        self.assertEqual(set(df['current_basis']), {cgt.BASIS_DIVISION_115})
+
     def test_no_change_produces_no_rows(self):
         CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         df = CGTBasisChangeReport(account=self.account).generate()
@@ -2330,7 +2846,8 @@ class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
         self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 1)
         self.assertEqual(Parcel.objects.filter(account=self.account_a).count(), 1)
 
-    def test_a_row_with_no_legacy_id_is_always_added(self):
+    def test_a_row_with_no_legacy_id_is_refused_the_second_time(self):
+        """It cannot be matched to the record it made, so it would be added again."""
         buy = {
             'instrument__name': 'BHP',
             'date': date(2023, 7, 1),
@@ -2343,9 +2860,13 @@ class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
         self.build_workbook(self.workbook, buys=[buy])
 
         loading.DataLoader(account=self.account_a, input_file=self.workbook)
-        loading.DataLoader(account=self.account_a, input_file=self.workbook)
+        with self.assertRaisesMessage(ValueError, 'legacy_id'):
+            loading.DataLoader(account=self.account_a, input_file=self.workbook)
 
-        self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 2)
+        self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 1)
+        # Another portfolio has none yet, so there it is simply added.
+        loading.DataLoader(account=self.account_b, input_file=self.workbook)
+        self.assertEqual(Buy.objects.filter(account=self.account_b).count(), 1)
 
     def test_records_are_not_moved_between_portfolios(self):
         self.build_workbook(self.workbook)
@@ -2943,19 +3464,20 @@ class AttributionDisregardTests(TransactionTestCase):
         self.assertFalse(cgt.attribution_events(self.account)[0].is_disregarded)
 
     def test_the_two_halves_of_a_mixed_statement_are_treated_separately(self):
-        """A mixed TAP/NTAP discounted attribution is not disregarded."""
+        """s855-40(2): a foreign resident's NTAP part is disregarded, the TAP part is not.
+
+        The statement states each amount, so nothing is apportioned on a guessed ratio.
+        """
         self._component('DISCOUNTED_TAP', '100.00')
         self._component('DISCOUNTED_NTAP', '900.00')
         self._component('OTHER_NTAP', '50.00')
         declare(self.account, 'FOREIGN', date(2010, 1, 1))
         events = cgt.attribution_events(self.account)
-        self.assertEqual(len(events), 2)
-        discounted, other = events
-        # The discounted row mixes both, so it is not disregarded on a guessed ratio.
-        self.assertEqual(discounted.tap_status, cgt.tap.TAP_MIXED)
-        self.assertFalse(discounted.is_disregarded)
-        self.assertEqual(other.tap_status, cgt.tap.NTAP)
-        self.assertTrue(other.is_disregarded)
+        self.assertEqual(
+            [(e.method, e.tap_status, e.capital_gain.amount, e.is_disregarded) for e in events],
+            [('discount', cgt.tap.TAP, Decimal('200.00'), False),
+             ('discount', cgt.tap.NTAP, Decimal('1800.00'), True),
+             ('other', cgt.tap.NTAP, Decimal('50.00'), True)])
 
 
 class TaxSettingsBannerTests(TransactionTestCase):
@@ -3192,6 +3714,29 @@ class DeemedSaleSplitTests(TransactionTestCase):
         deferred = cgt.disposal_events(data['account'])[0]
         self.assertEqual(deferred.method, cgt.events.METHOD_DISCOUNT)
         self.assertEqual(deferred.discount_percentage, Decimal('0.5'))
+
+    @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate',
+           return_value=Decimal('1.5'))
+    def test_a_foreign_valuation_is_converted_at_the_cutover_rate(self, mock_get_rate):
+        """A valuation in another currency is converted, not subtracted from an AUD cost base."""
+        InstrumentValuation.objects.filter(account=self.account).update(
+            unit_value=Decimal('10.00'), unit_value_currency='USD')
+
+        deferred = self._events()[0]
+
+        # 1,000 units at US$10, converted at 1.5.
+        self.assertEqual(deferred.net_proceeds, Money(Decimal('15000.00'), 'AUD'))
+
+    def test_a_split_after_the_sale_does_not_scale_the_cutover_value(self):
+        """The parcel was sold before the split, so its units never changed."""
+        ShareSplit.objects.create(
+            account=self.account, instrument=self.data['instrument'], date=date(2029, 1, 1),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+
+        deferred = self._events()[0]
+
+        self.assertEqual(deferred.net_proceeds, Money(Decimal('15000.00'), 'AUD'))
 
     def test_without_a_valuation_the_disposal_is_not_split(self):
         InstrumentValuation.objects.all().delete()
@@ -3782,11 +4327,12 @@ class ExportRoundTripTests(TransactionTestCase):
         return destination
 
     def _wipe(self):
-        """Empty every table, in reverse load order."""
-        for model in reversed(list(loading.DataLoader.get_model_load_order())):
-            model.objects.all().delete()
-        DataExport.objects.all().delete()
-        AppUser.objects.all().delete()
+        """Empty every table, as `DataLoader.clear_all_data` does.
+
+        Not by deleting each model: deleting a share split reverses it, and one whose
+        parcels were since sold refuses.
+        """
+        call_command('flush', interactive=False, verbosity=0)
         self.assertEqual(Account.objects.count(), 0)
 
     def test_an_export_restores_into_an_empty_database(self):
@@ -3883,6 +4429,49 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(Sell.objects.filter(account=account).count(), 2)
         self.assertEqual(ResidencyPeriod.objects.filter(account=account).count(), 1)
         self.assertEqual(AppUser.objects.count(), 1)
+
+    def test_reloading_an_export_keeps_the_stored_export(self):
+        """The file lists its own DataExport row, without a file; that row is not loaded."""
+        account = create_golden_master_portfolio()['account']
+        path = self._export(account)
+
+        loading.DataLoader(account=account, input_file=path)
+
+        self.assertTrue(path.exists())
+        self.assertEqual(DataExport.objects.filter(account=account).count(), 1)
+
+    def test_an_export_holds_only_its_own_portfolio(self):
+        """Another portfolio's Account row would stop the file being restored on its own."""
+        account = create_golden_master_portfolio()['account']
+        create_account(owner=create_user('other'), description='Other',
+                       fy_type=account.fiscal_year_type)
+
+        tables = excelinterface.get_all_tables_in_excel(self._export(account))
+
+        self.assertEqual(list(tables['Account']['id']), [str(account.id)])
+
+    def test_a_restore_recalculates_the_stored_figures(self):
+        """Saved as their rows loaded, before the parcels they count were there."""
+        data = create_golden_master_portfolio()
+        path = self._detached_export(data['account'])
+        self._wipe()
+
+        loading.DataLoader(input_file=path)
+
+        instrument = Instrument.objects.get(name='GMT')
+        self.assertEqual(instrument.calculated_quantity_held, instrument.quantity_held)
+        self.assertGreater(instrument.calculated_quantity_held, 0)
+        for parcel in Parcel.objects.filter(deactivation_date__isnull=True):
+            self.assertEqual(parcel.calculated_is_sold, parcel.is_sold)
+
+    def test_loading_an_export_into_another_portfolio_points_to_a_template(self):
+        """Removing the id column, as once advised, pointed copied rows at the original's."""
+        account = create_golden_master_portfolio()['account']
+        other = create_account(owner=create_user('other'), description='Other',
+                               fy_type=account.fiscal_year_type)
+
+        with self.assertRaisesMessage(ValueError, 'make_import_template'):
+            loading.DataLoader(account=other, input_file=self._export(account))
 
     def test_a_blank_text_column_loads_as_empty_rather_than_failing(self):
         """A blank email loads as an empty string, not NULL."""
@@ -4261,6 +4850,34 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
         self.assertFalse(
             CGTReturnSnapshot.objects.filter(account=self.account, is_lodged=True).exists())
 
+    def test_a_lodged_snapshot_taken_the_same_day_is_kept(self):
+        """The button records the other years, and leaves the lodged figures as filed."""
+        lodged = CGTReturnSnapshot.capture(
+            account=self.account, fiscal_year=FiscalYear.objects.get(name='FY2023/24'),
+            is_lodged=True)
+        CGTReturnSnapshotRow.objects.filter(snapshot=lodged).update(
+            capital_gain=Decimal('1234'))
+
+        response = self.client.post(self.url, follow=True)
+
+        lodged.refresh_from_db()
+        self.assertTrue(lodged.is_lodged)
+        self.assertEqual(
+            list(lodged.captured_rows.values_list('capital_gain', flat=True)),
+            [Decimal('1234')])
+        self.assertTrue(CGTReturnSnapshot.objects.filter(
+            account=self.account, fiscal_year__name='FY2024/25').exists())
+        self.assertContains(response, 'marked as lodged')
+
+    def test_capturing_over_a_lodged_snapshot_is_refused(self):
+        fiscal_year = FiscalYear.objects.get(name='FY2023/24')
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=fiscal_year, is_lodged=True)
+
+        with self.assertRaises(LodgedSnapshotError):
+            CGTReturnSnapshot.capture(account=self.account, fiscal_year=fiscal_year)
+
+        self.assertTrue(CGTReturnSnapshot.objects.get(fiscal_year=fiscal_year).is_lodged)
+
     def test_the_basis_is_recorded_with_the_figures(self):
         self.client.post(self.url)
         self.assertTrue(
@@ -4603,6 +5220,181 @@ class ManualAllocationImportTests(TransactionTestCase):
         with self.assertRaises(Exception) as caught:
             loading.DataLoader(account=self.account, input_file=path)
         self.assertIn('B002', str(caught.exception))
+
+
+def import_buy(legacy_id, day, quantity='100', price='10', **extra):
+    return {
+        'legacy_id': legacy_id, 'instrument__name': 'BHP', 'date': day,
+        'quantity': Decimal(quantity), 'unit_price': Decimal(price),
+        'unit_price_currency': 'AUD', 'total_brokerage': Decimal('0'),
+        'total_brokerage_currency': 'AUD', **extra,
+    }
+
+
+def import_sell(legacy_id, day, quantity, strategy='FIFO', price='20', **extra):
+    return {
+        'legacy_id': legacy_id, 'instrument__name': 'BHP', 'date': day,
+        'quantity': Decimal(quantity), 'unit_price': Decimal(price),
+        'unit_price_currency': 'AUD', 'total_brokerage': Decimal('0'),
+        'total_brokerage_currency': 'AUD', 'strategy': strategy, **extra,
+    }
+
+
+def import_split(legacy_id, day, before='1', after='2'):
+    return {
+        'legacy_id': legacy_id, 'instrument__name': 'BHP', 'date': day,
+        'quantity_before': Decimal(before), 'quantity_after': Decimal(after),
+    }
+
+
+class ImportIntegrityTests(TransactionTestCase):
+    """What an import file can and cannot do to a portfolio."""
+
+    def setUp(self):
+        self.account = create_account()
+
+    def _file(self, instruments=None, **tables):
+        path = Path(tempfile.mkdtemp()) / 'import.xlsx'
+        generator = excelinterface.ExcelGen(title='Import')
+        generator.add_table(
+            pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]), table_name='Market')
+        generator.add_table(
+            pd.DataFrame(instruments or [
+                {'name': 'BHP', 'currency': 'AUD', 'market__code': 'ASX'}]),
+            table_name='Instrument')
+        for name, rows in tables.items():
+            generator.add_table(pd.DataFrame(rows), table_name=name)
+        generator.save(path)
+        return path
+
+    def _load(self, **tables):
+        loading.DataLoader(account=self.account, input_file=self._file(**tables))
+
+    def _held(self):
+        return Instrument.objects.get(account=self.account, name='BHP').quantity_held
+
+    # --- Date order ---
+
+    def test_a_sale_after_a_split_is_allocated_in_post_split_units(self):
+        self._load(
+            Buy=[import_buy('B1', date(2020, 1, 10))],
+            ShareSplit=[import_split('X1', date(2021, 1, 1))],
+            Sell=[import_sell('S1', date(2022, 1, 1), '150')],
+        )
+        self.assertEqual(self._held(), Decimal('50'))
+        self.assertFalse(Sell.with_unallocated_quantity(self.account).exists())
+
+    def test_a_sale_before_a_split_is_allocated_before_it(self):
+        self._load(
+            Buy=[import_buy('B1', date(2020, 1, 10))],
+            ShareSplit=[import_split('X1', date(2021, 1, 1))],
+            Sell=[import_sell('S1', date(2020, 6, 1), '50')],
+        )
+        self.assertEqual(self._held(), Decimal('100'))
+
+    def test_sales_are_allocated_in_date_order_not_row_order(self):
+        self._load(
+            Buy=[import_buy('B1', date(2020, 1, 10), price='5'),
+                 import_buy('B2', date(2021, 1, 10), price='9')],
+            Sell=[import_sell('S2', date(2023, 1, 1), '100'),
+                  import_sell('S1', date(2022, 1, 1), '100')],
+        )
+        first = Sell.objects.get(account=self.account, legacy_id='S1')
+        self.assertEqual(first.sale_allocation.get().parcel.buy.legacy_id, 'B1')
+
+    def test_a_pinned_allocation_follows_its_sale_across_a_split(self):
+        self._load(
+            Buy=[import_buy('B1', date(2020, 1, 10))],
+            ShareSplit=[import_split('X1', date(2021, 1, 1))],
+            Sell=[import_sell('S1', date(2022, 1, 1), '200', strategy='MANUAL')],
+            SellAllocation=[{'legacy_id': 'A1', 'lookup_legacy_buy': 'B1',
+                             'lookup_legacy_sell': 'S1', 'quantity': Decimal('200')}],
+        )
+        self.assertEqual(self._held(), Decimal('0'))
+
+    # --- Pinned allocations ---
+
+    def test_pinned_allocations_need_a_manual_sale(self):
+        with self.assertRaisesMessage(ValueError, 'MANUAL'):
+            self._load(
+                Buy=[import_buy('B1', date(2020, 1, 10))],
+                Sell=[import_sell('S1', date(2022, 1, 1), '50')],
+                SellAllocation=[{'legacy_id': 'A1', 'lookup_legacy_buy': 'B1',
+                                 'lookup_legacy_sell': 'S1', 'quantity': Decimal('50')}],
+            )
+        self.assertFalse(Sell.objects.filter(account=self.account).exists())
+
+    # --- Loading again ---
+
+    def test_a_blank_cell_leaves_the_stored_value_alone(self):
+        buys = [import_buy('B1', date(2020, 1, 10), notes=None),
+                import_buy('B2', date(2020, 1, 11), notes='from the file')]
+        self._load(Buy=buys)
+        Buy.objects.filter(legacy_id='B1').update(notes='added in the admin')
+
+        self._load(Buy=buys)
+
+        self.assertEqual(Buy.objects.get(legacy_id='B1').notes, 'added in the admin')
+
+    def test_a_row_without_a_legacy_id_is_refused_once_the_portfolio_has_rows(self):
+        """Loading it again would add it a second time rather than update it."""
+        buys = [import_buy(None, date(2020, 1, 10))]
+        self._load(Buy=buys)
+
+        with self.assertRaisesMessage(ValueError, 'legacy_id'):
+            self._load(Buy=buys)
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 1)
+
+    def test_a_legacy_id_used_twice_in_a_sheet_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'B1'):
+            self._load(Buy=[import_buy('B1', date(2020, 1, 10)),
+                            import_buy('B1', date(2021, 1, 10))])
+
+    def test_a_changed_quantity_on_a_second_load_is_refused(self):
+        self._load(Buy=[import_buy('B1', date(2020, 1, 10))])
+        with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):
+            self._load(Buy=[import_buy('B1', date(2020, 1, 10), quantity='200')])
+
+    # --- Cell values ---
+
+    def test_a_strategy_may_be_given_by_its_label_or_in_lower_case(self):
+        self._load(
+            Buy=[import_buy('B1', date(2020, 1, 10))],
+            Sell=[import_sell('S1', date(2022, 1, 1), '10', strategy='First-in, First-out'),
+                  import_sell('S2', date(2022, 1, 2), '10', strategy='lifo')],
+        )
+        self.assertEqual(
+            dict(Sell.objects.values_list('legacy_id', 'strategy')),
+            {'S1': 'FIFO', 'S2': 'LIFO'})
+
+    def test_an_unknown_strategy_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'first in'):
+            self._load(
+                Buy=[import_buy('B1', date(2020, 1, 10))],
+                Sell=[import_sell('S1', date(2022, 1, 1), '10', strategy='first in')],
+            )
+
+    def test_a_numeric_legacy_id_does_not_gain_a_decimal_point(self):
+        """A blank in the column makes pandas read the rest as floats."""
+        self._load(Buy=[import_buy(1001, date(2020, 1, 10)),
+                        import_buy(None, date(2020, 1, 11))])
+        self.assertTrue(Buy.objects.filter(legacy_id='1001').exists())
+
+    @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate',
+           return_value=Decimal('1.5'))
+    def test_a_blank_currency_is_the_instruments(self, mock_get_rate):
+        self._load(
+            instruments=[{'name': 'BHP', 'currency': 'USD', 'market__code': 'ASX'}],
+            Buy=[import_buy('B1', date(2020, 1, 10),
+                            unit_price_currency=None, total_brokerage_currency=None)],
+        )
+        buy = Buy.objects.get(legacy_id='B1')
+        self.assertEqual(str(buy.unit_price.currency), 'USD')
+        self.assertEqual(str(buy.total_brokerage.currency), 'USD')
+
+    def test_a_date_typed_as_text_is_read_as_a_date(self):
+        self._load(Buy=[import_buy('B1', '2020-01-10')])
+        self.assertEqual(Buy.objects.get(legacy_id='B1').date, date(2020, 1, 10))
 
 
 class LegalFormSourceTests(TransactionTestCase):
@@ -5658,6 +6450,34 @@ class VocabularyPortfolioTests(TransactionTestCase):
         self.assertNotIn('AU_LISTED_SHARES', categories)
 
 
+class ConsecutiveAbsenceTests(TransactionTestCase):
+    """s104-165(3): back-to-back non-resident periods are one absence for the I1 election."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        declare(self.account, 'RESIDENT', date(2000, 1, 1), date(2021, 6, 30))
+
+    def _status(self, sold, acquired=date(2015, 1, 1)):
+        return cgt.parcel_tap_status(self.account, self.instrument, acquired, sold)
+
+    def test_the_election_carries_into_a_second_period_of_the_same_absence(self):
+        declare(self.account, 'FOREIGN', date(2021, 7, 1), date(2023, 12, 31), i1=True)
+        declare(self.account, 'TEMPORARY', date(2024, 1, 1))
+        self.assertEqual(self._status(date(2025, 1, 1)), cgt.tap.TAP)
+
+    def test_an_election_recorded_on_a_later_period_covers_the_whole_absence(self):
+        declare(self.account, 'FOREIGN', date(2021, 7, 1), date(2023, 12, 31))
+        declare(self.account, 'FOREIGN', date(2024, 1, 1), i1=True)
+        self.assertEqual(self._status(date(2022, 1, 1)), cgt.tap.TAP)
+
+    def test_a_return_to_residency_ends_the_absence(self):
+        declare(self.account, 'FOREIGN', date(2021, 7, 1), date(2022, 12, 31), i1=True)
+        declare(self.account, 'RESIDENT', date(2023, 1, 1), date(2023, 12, 31))
+        declare(self.account, 'FOREIGN', date(2024, 1, 1))
+        self.assertEqual(self._status(date(2025, 1, 1)), cgt.tap.NTAP)
+
+
 class PreDepartureDisposalTests(TransactionTestCase):
     """A sale made before departure is outside the I1 deeming."""
 
@@ -5694,6 +6514,42 @@ class PreDepartureDisposalTests(TransactionTestCase):
 
     def test_a_sale_the_day_before_departure_is_outside_it(self):
         self.assertEqual(self._status(date(2015, 1, 1), date(2021, 6, 30)), cgt.tap.NTAP)
+
+
+class UnallocatedSaleWarningTests(TransactionTestCase):
+    """Units of a sale no parcel was found for are not in any gain, so the schedule says so."""
+
+    def _oversold(self):
+        account = create_account()
+        instrument = create_instrument(account=account, name='OVR')
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2023, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(5, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2023, 9, 1),
+            quantity=Decimal('150'), unit_price=Money(10, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        return account, sell
+
+    def test_a_sale_larger_than_the_holding_is_listed(self):
+        account, sell = self._oversold()
+
+        self.assertEqual(list(Sell.with_unallocated_quantity(account)), [sell])
+        warnings = cgt.build_schedule(account, 'FY2023/24').warnings
+        self.assertTrue(
+            any('not allocated to any parcel' in w and 'OVR' in w and '(50 of 150 units)' in w
+                for w in warnings), warnings)
+
+    def test_the_warning_belongs_to_the_year_of_the_sale(self):
+        account, _ = self._oversold()
+        warnings = cgt.build_schedule(account, 'FY2022/23').warnings
+        self.assertFalse(any('not allocated to any parcel' in w for w in warnings))
+
+    def test_a_fully_allocated_sale_is_not_listed(self):
+        account = create_golden_master_portfolio()['account']
+        self.assertFalse(Sell.with_unallocated_quantity(account).exists())
 
 
 class CarryForwardYearScopeTests(TransactionTestCase):
@@ -5747,3 +6603,29 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         schedule = cgt.build_schedule(
             self.account, self.earlier, prior_year_losses=Money(Decimal('1000'), 'AUD'))
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
+
+    def _record_before_the_gain_year(self, amount):
+        older = FiscalYear.objects.filter(start_year__lt=self.earlier.start_year).first()
+        if older is None:
+            self.skipTest('no earlier fiscal year in the fixture')
+        self._record(older, amount)
+
+    def test_a_loss_used_up_in_one_year_is_not_applied_again_the_next(self):
+        """The FY2023/24 gain absorbs the whole loss, so none of it reaches FY2024/25."""
+        self._record_before_the_gain_year('1000')
+
+        later = cgt.build_schedule(self.account, self.later)
+
+        self.assertEqual(later.losses_carried_forward.amount, Decimal('1568.6881'))
+
+    def test_only_what_is_left_of_a_loss_rolls_on(self):
+        """A loss larger than the FY2023/24 gain carries only its remainder into FY2024/25."""
+        self._record_before_the_gain_year('5000')
+
+        earlier = cgt.build_schedule(self.account, self.earlier)
+        later = cgt.build_schedule(self.account, self.later)
+
+        self.assertEqual(earlier.prior_year_losses_applied.amount, Decimal('4401.3617'))
+        self.assertEqual(
+            later.losses_carried_forward.amount,
+            Decimal('1568.6881') + Decimal('5000') - Decimal('4401.3617'))
