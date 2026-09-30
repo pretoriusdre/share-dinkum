@@ -1,7 +1,10 @@
 # Standard library imports
 from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
+import bisect
 import copy
+import json
+from typing import Any, cast
 
 # Django imports
 from django.db import models, transaction
@@ -10,8 +13,9 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.urls import reverse
-from django.db.models import Sum, F, Q
+from django.db.models import Sum, F, Q, QuerySet
 from django.db.models.functions import Coalesce
 from django.forms.models import model_to_dict
 
@@ -26,6 +30,20 @@ from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.choices import (
+    AllocationMethod,
+    AttributionComponent as AttributionComponentType,
+    CGTAssetCategory,
+    CGTBasis,
+    DividendType,
+    LegalForm,
+    LegalFormSource,
+    ResidencyStatus,
+    SellStrategy,
+    TaxpayerType,
+    ValuationPurpose,
+    ValuationSource,
+)
 from share_dinkum_app.constants import DEFAULT_CURRENCY
 
 
@@ -36,6 +54,16 @@ from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid impo
 import logging
 logger = logging.getLogger(__name__)
 
+# Annotations use this, not `date`: many models below have a `date` field, which would shadow
+# the class in a method signature evaluated inside the class body.
+Date = date
+
+
+def validate_positive(value: Any) -> None:
+    """More than zero. Parcels are multiplied and divided by these quantities."""
+    if value is not None and value <= 0:
+        raise ValidationError(f'This must be more than zero, not {value}.')
+
 
 
 
@@ -45,16 +73,14 @@ class AppUser(AbstractUser):
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
 
     @property
-    def visible_account(self):
-        """The portfolio this user sees: the default they chose, else the first one they created.
+    def visible_account(self) -> 'Account | None':
+        """The user's default portfolio, else the first one they created.
 
-        The dashboard and the local auto-login both need this answer, and they have to agree: if
-        auto-login picks a user on one basis and the dashboard resolves a portfolio on another, you
-        get signed in to an account whose data you cannot see.
+        Shared by the dashboard and auto-login so both resolve the same portfolio.
         """
         return self.default_account or Account.objects.filter(owner=self).order_by('created_at').first()
 
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         update_fields = kwargs.get('update_fields', None)
 
         # Only modify first_name/last_name if not using update_fields
@@ -71,13 +97,8 @@ class FiscalYearType(models.Model):
     start_month = models.IntegerField(default=7) # July
     start_day = models.IntegerField(default=1) # 1st (Australia)
 
-    def classify_date(self, input_date):
-        """
-        Get or create a FiscalYear based on an arbitrary date.
-
-        :param input_date: A date within the fiscal year.
-        :return: A tuple of (FiscalYear instance, created (True if created, False if retrieved)).
-        """
+    def classify_date(self, input_date: Date) -> tuple['FiscalYear', bool]:
+        """Get or create the FiscalYear containing `input_date`. Returns `(fiscal_year, created)`."""
 
         # Compute the fiscal start date for the given arbitrary date
         fiscal_start_date = date(input_date.year, self.start_month, self.start_day)
@@ -97,10 +118,10 @@ class FiscalYearType(models.Model):
         return (fiscal_year, created)
     
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.description
     
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         user = kwargs.pop('user', None)
         super().save(*args, **kwargs)
 
@@ -120,15 +141,15 @@ class FiscalYear(models.Model):
 
     name = models.CharField(max_length=9, null=True, blank=True, editable=False)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name or ''
        
     @safe_property
-    def start_date(self):
+    def start_date(self) -> date:
         return date(self.start_year, self.fiscal_year_type.start_month, self.fiscal_year_type.start_day)
 
     @safe_property
-    def end_date(self):
+    def end_date(self) -> date:
         next_start_year = self.start_year + 1
         next_start = date(next_start_year,
                         self.fiscal_year_type.start_month,
@@ -136,13 +157,13 @@ class FiscalYear(models.Model):
         return next_start - timedelta(days=1)
 
 
-    def get_name(self):
+    def get_name(self) -> str:
         if self.fiscal_year_type.start_month == 1:
             return f'{self.start_year}'
         else:
             return f'FY{self.start_year}/{str(self.start_year + 1)[2:]}'
         
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         self.name = self.get_name()
         user = kwargs.pop('user', None)
         super().save(*args, **kwargs)
@@ -167,52 +188,88 @@ class Account(models.Model):
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT)
     update_price_history = models.BooleanField(default=False)
 
-    def __str__(self):
+
+    #: Sets the CGT discount: half for an individual or trust, a third for a complying super
+    #: fund, none for a company. Undeclared by default rather than guessed.
+    taxpayer_type = models.CharField(
+        max_length=11, choices=TaxpayerType.choices, default=TaxpayerType.UNDECLARED,
+        help_text='Who owns this portfolio for tax purposes.')
+
+    #: When set, silences the dashboard's tax settings warning.
+    tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    #: Whether disposals from 1 July 2027 are worked out under the 2027 regime. Earlier
+    #: disposals are unaffected.
+    model_2027_regime = models.BooleanField(
+        default=False,
+        help_text='Model the 2027 capital gains changes for disposals from 1 July 2027. '
+                  'Nothing before that date changes.')
+
+    def __str__(self) -> str:
         return f'{self.description} | {self.currency}'
 
     calculated_portfolio_value_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, default_currency=DEFAULT_CURRENCY)
 
     @safe_property
-    def portfolio_value_converted(self):
+    def portfolio_value_converted(self) -> Money:
         return Instrument.objects.filter(account=self, is_active=True).aggregate(models.Sum('calculated_value_held_converted'))['calculated_value_held_converted__sum'] or Money(0, self.currency)
 
-    def update_all_price_history(self):
-        """
-        Update price history for instruments held in this account.
+    #: Days to keep fetching a sold instrument that has no price on or after its last sale.
+    #: A delisted security never gets one, so without a limit it is fetched forever.
+    POST_SALE_PRICE_GRACE_DAYS = 7
 
-        Instruments with an open position are always refreshed. Instruments that have been fully
-        sold continue to refresh until at least one data point exists after their final sell date.
+    def update_all_price_history(self) -> None:
+        """Update price history for this account's instruments.
+
+        Open positions are always refreshed. A fully sold instrument is refreshed until it has
+        a price on or after its last sale, or until `POST_SALE_PRICE_GRACE_DAYS` after the
+        later of the sale date and the day the sale was recorded.
         """
         instruments = Instrument.objects.filter(account=self, is_active=True)
+        today = date.today()
 
         for instrument in instruments:
             if instrument.quantity_held > 0:
                 instrument.update_price_history()
                 continue
 
-            last_sell_date = (
+            last_sell = (
                 Sell.objects.filter(account=self, instrument=instrument)
                 .order_by('-date')
-                .values_list('date', flat=True)
                 .first()
             )
 
-            if not last_sell_date:
+            if last_sell is None:
                 continue
 
             has_history_after_sell = InstrumentPriceHistory.objects.filter(
                 account=self,
                 instrument=instrument,
-                date__gte=last_sell_date,
+                date__gte=last_sell.date,
             ).exists()
 
             if has_history_after_sell:
                 continue
 
-            instrument.update_price_history(end_date=date.today())
+            # Counted from whichever is later: the sale, or the day the sale was recorded.
+            # The date alone would be wrong for a disposal entered months after the fact --
+            # its window would have closed before the application ever heard of it, and the
+            # price that *is* available would never be fetched. What the grace period is
+            # really measuring is how long we have had the chance to look.
+            recorded_on = last_sell.created_at.date() if last_sell.created_at else last_sell.date
+            give_up_after = max(last_sell.date, recorded_on) + timedelta(
+                days=self.POST_SALE_PRICE_GRACE_DAYS)
+            if today > give_up_after:
+                logger.debug(
+                    'Not looking for a post-sale price for %s: sold %s, recorded %s, and '
+                    'none has appeared. It is most likely no longer quoted.',
+                    instrument, last_sell.date, recorded_on)
+                continue
+
+            instrument.update_price_history(end_date=today)
 
 
-    def update_all_exchange_rate_history(self):
+    def update_all_exchange_rate_history(self) -> None:
 
         convert_to = self.currency
         # Get distinct currencies based on the currency of  unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY) in the Buy model
@@ -243,7 +300,7 @@ class Account(models.Model):
         'calculated_portfolio_value_converted_currency',
     })
 
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         self.calculated_portfolio_value_converted = self.portfolio_value_converted
         self.calculated_portfolio_value_converted_currency = self.currency
 
@@ -275,13 +332,13 @@ class BaseModel(models.Model):
     notes = models.TextField(null=True, blank=True)
 
     @safe_property
-    def associated_logs(self):
+    def associated_logs(self) -> str:
         content_type = ContentType.objects.get_for_model(self)
         log_entries = LogEntry.objects.filter(account=self.account, content_type=content_type, object_id=self.id)
         # Return a list of string representations of the log entries
         return '\n'.join([str(log_entry) for log_entry in log_entries]) 
     
-    def log_event(self, event):
+    def log_event(self, event: str) -> None:
         content_type = ContentType.objects.get_for_model(self)
         LogEntry.objects.create(
             account=self.account,
@@ -291,17 +348,95 @@ class BaseModel(models.Model):
             content_object=self
         )
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         # Redirect stuff to admin
         app_label = self._meta.app_label
         model_name = self._meta.model_name
         return reverse(f'admin:{app_label}_{model_name}_change', args=[str(self.id)])
     
-    def save(self, *args, **kwargs):
+    #: Fields other records were worked out from when this one was entered: a buy's quantity
+    #: for its parcel, a split's ratio for the parcels it split. Nothing works them out
+    #: again, so once the record has been handled they cannot be changed.
+    STRUCTURAL_FIELDS: tuple[str, ...] = ()
+
+    #: Fields that must be more than zero (`validate_positive`). A form checks them; an import
+    #: does not, so a new record is checked again on save. Zero otherwise failed as a division
+    #: by zero deep inside a signal, and a negative made a negative holding.
+    POSITIVE_FIELDS: tuple[str, ...] = ()
+
+    def _not_positive_message(self) -> str | None:
+        """Why this new record cannot be saved because of a POSITIVE_FIELDS value, or None."""
+        for name in self.POSITIVE_FIELDS:
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                field: Any = self._meta.get_field(name)
+                return (f'The {field.verbose_name} of this {self._meta.verbose_name} must be '
+                        f'more than zero, not {value}.')
+        return None
+
+    def structural_changes(self) -> list[str]:
+        """Names of the structural fields this unsaved state would change; [] if none."""
+        if not self.STRUCTURAL_FIELDS or self._state.adding or self.pk is None:
+            return []
+        fields: list[Any] = [self._meta.get_field(name) for name in self.STRUCTURAL_FIELDS]
+        stored = type(self)._default_manager.filter(pk=self.pk).values(
+            '_creation_handled', *[field.attname for field in fields]).first()
+        if stored is None or not stored['_creation_handled']:
+            # Still being created: its own handlers set these (an allocation is re-pointed
+            # at the parcel split off for it).
+            return []
+        return [
+            field.name for field in fields
+            if field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
+        ]
+
+    def _structural_change_message(self, changed: list[str]) -> str:
+        names = ', '.join(str(cast(Any, self._meta.get_field(name)).verbose_name) for name in changed)
+        return (
+            f'The {names} of this {self._meta.verbose_name} cannot be changed: other records '
+            f'were worked out from it when it was entered, and nothing works them out again. '
+            f'Delete it and enter it again.')
+
+    def chronology_problem(self) -> str | None:
+        """Why this new record would be applied out of date order, or None.
+
+        Parcels are worked out event by event as records are entered, so an event dated
+        before one already applied (a buy before a split) would miss it.
+        """
+        return None
+
+    def _is_new_event(self) -> bool:
+        # A row from an export arrives already handled, with what it derived beside it.
+        return self._state.adding and not getattr(self, '_creation_handled', False)
+
+    def clean(self) -> None:
+        super().clean()
+        changed = self.structural_changes()
+        if changed:
+            raise ValidationError(self._structural_change_message(changed))
+        if self._is_new_event():
+            problem = self.chronology_problem()
+            if problem:
+                raise ValidationError(problem)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
         user = kwargs.pop('user', None)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or set(update_fields) & set(self.STRUCTURAL_FIELDS):
+            changed = self.structural_changes()
+            if changed:
+                raise ValueError(self._structural_change_message(changed))
+        if self._state.adding:
+            problem = self._not_positive_message()
+            if problem:
+                raise ValueError(problem)
+        if self._is_new_event():
+            problem = self.chronology_problem()
+            if problem:
+                raise ValueError(problem)
         super().save(*args, **kwargs)
-                
-    def __str__(self):
+
+    def __str__(self) -> str:
         return f'{self.description}'
 
 
@@ -314,7 +449,7 @@ class LogEntry(BaseModel):
     object_id = models.UUIDField()
     content_object = GenericForeignKey('content_type', 'object_id')
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.created_at.isoformat(timespec="seconds")} - ***{(str(self.pk))[-4:]} - {self.event}'
 
 
@@ -332,7 +467,7 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
     convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1.0'))
 
-    def apply(self, money):
+    def apply(self, money: Money) -> Money:
         assert str(money.currency) == str(self.convert_from), (
             f'Invalid exchange rate applied. The convert_from currency {self.convert_from} '
             f'does not match the currency {money.currency}'
@@ -342,19 +477,15 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
 
         return Money(new_amount, str(self.convert_to))
 
-    def update_current(self):
-        """Update or create the CurrentExchangeRate for this historical rate.
-
-        Only the most recent known rate may drive the "current" rate. A backfilled
-        or older row must not clobber a more recent value with a stale figure.
-        """
+    def update_current(self) -> 'CurrentExchangeRate | None':
+        """Copy this rate to CurrentExchangeRate, unless a later-dated rate exists."""
 
         if hasattr(self, 'date'):
-            newer_exists = type(self).objects.filter(
+            newer_exists = type(self)._default_manager.filter(
                 account=self.account,
                 convert_from=self.convert_from,
                 convert_to=self.convert_to,
-                date__gt=self.date,
+                date__gt=self.date,  # type: ignore[misc]  # `date` is on the subclass
             ).exists()
             if newer_exists:
                 return CurrentExchangeRate.objects.filter(
@@ -377,7 +508,7 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
         return current
     
 
-    def __str__(self):
+    def __str__(self) -> str:
 
         exchange_rate_text = f'1 {self.convert_from} = {self.exchange_rate_multiplier} {self.convert_to}'
 
@@ -397,10 +528,11 @@ class CurrentExchangeRate(AbstractExchangeRate):
 
 
     @classmethod
-    def get_or_create(cls, account, convert_from, convert_to, force_refresh=False):
-        """
-        Get the current exchange rate. If missing, stale (>1hr), or force_refresh=True,
-        update history and refresh latest value.
+    def get_or_create(cls, account: 'Account', convert_from: str, convert_to: str,
+                      force_refresh: bool = False) -> 'CurrentExchangeRate | None':
+        """Get the current rate, fetching it if missing, over an hour old, or `force_refresh`.
+
+        Keeps the stored rate if the fetch fails; returns None if there is none.
         """
         obj = cls.objects.filter(
             account=account,
@@ -450,68 +582,113 @@ class ExchangeRate(AbstractExchangeRate):
     date = models.DateField()
     is_continuous_history = models.BooleanField(default=False, editable=False)
 
+    #: The rate could not be fetched, so this one stands in: the nearest known rate, or 1.0
+    #: if there was none. Fetched again the next time it is asked for, and replaced by the
+    #: history refresh, instead of being trusted for good.
+    is_placeholder = models.BooleanField(default=False, editable=False)
+
     @classmethod
-    def get_or_create(cls, account, convert_from, convert_to, exchange_date):
-        try:
-            return cls.objects.get(
-                account=account,
-                convert_from=convert_from,
-                convert_to=convert_to,
-                date=exchange_date
-            )
-        except cls.DoesNotExist:
-            # Ensure the record is created if it does not exist
-            obj, created = cls.objects.get_or_create(
+    def get_or_create(cls, account: 'Account', convert_from: str, convert_to: str,
+                      exchange_date: Date) -> 'ExchangeRate':
+        obj = cls.objects.filter(
+            account=account,
+            convert_from=convert_from,
+            convert_to=convert_to,
+            date=exchange_date
+        ).first()
+        if obj is not None and not obj.is_placeholder:
+            return obj
+
+        if obj is None:
+            obj, _created = cls.objects.get_or_create(
                 account=account,
                 convert_from=convert_from,
                 convert_to=convert_to,
                 date=exchange_date,
                 defaults={'exchange_rate_multiplier' : Decimal('1.0')}
             )
-            if created:
-                field = cls._meta.get_field('exchange_rate_multiplier')
-                fetched_rate = yfinanceinterface.get_exchange_rate(
-                    convert_from=convert_from,
-                    convert_to=convert_to,
-                    exchange_date=exchange_date,
-                )
-                if fetched_rate is not None:
-                    obj.exchange_rate_multiplier = convert_to_decimal_field(fetched_rate, field)
-                    obj.save(update_fields=['exchange_rate_multiplier'])
-                elif convert_from != convert_to:
-                    # A failed cross-currency fetch must NOT keep the 1.0 default - that
-                    # relabels foreign amounts as base currency (e.g. USD shown as AUD).
-                    # Fall back to the most recent known rate for this pair instead.
-                    fallback = cls.objects.filter(
-                        account=account,
-                        convert_from=convert_from,
-                        convert_to=convert_to,
-                    ).exclude(pk=obj.pk).order_by('-date').first()
-                    if fallback is not None:
-                        obj.exchange_rate_multiplier = fallback.exchange_rate_multiplier
-                        obj.save(update_fields=['exchange_rate_multiplier'])
-                        logger.warning(
-                            "Could not fetch exchange rate for %s to %s on %s; using most "
-                            "recent known rate from %s (%s).",
-                            convert_from, convert_to, exchange_date,
-                            fallback.date, fallback.exchange_rate_multiplier,
-                        )
-                    else:
-                        logger.error(
-                            "Could not fetch exchange rate for %s to %s on %s and no prior "
-                            "rate exists; leaving multiplier at 1.0. Figures for this currency "
-                            "will be unconverted until a rate is available.",
-                            convert_from, convert_to, exchange_date,
-                        )
 
-            obj.update_current()
-            return obj
-        
+        field = cls._meta.get_field('exchange_rate_multiplier')
+        fetched_rate = yfinanceinterface.get_exchange_rate(
+            convert_from=convert_from,
+            convert_to=convert_to,
+            exchange_date=exchange_date,
+        )
+        if fetched_rate is not None:
+            obj.replace_placeholder(convert_to_decimal_field(fetched_rate, field))
+        elif obj.is_placeholder:
+            logger.warning(
+                "Still could not fetch exchange rate for %s to %s on %s; keeping the stand-in "
+                "rate %s.", convert_from, convert_to, exchange_date, obj.exchange_rate_multiplier)
+        elif convert_from != convert_to:
+            # A failed cross-currency fetch must NOT keep the 1.0 default - that
+            # relabels foreign amounts as base currency (e.g. USD shown as AUD).
+            # Stand in the nearest known rate, earlier first, and mark it so the real
+            # rate replaces it once it can be fetched.
+            fallback = cls.nearest_known(account, convert_from, convert_to, exchange_date,
+                                         exclude=obj.pk)
+            obj.is_placeholder = True
+            if fallback is not None:
+                obj.exchange_rate_multiplier = fallback.exchange_rate_multiplier
+                logger.warning(
+                    "Could not fetch exchange rate for %s to %s on %s; standing in the "
+                    "nearest known rate, from %s (%s).",
+                    convert_from, convert_to, exchange_date,
+                    fallback.date, fallback.exchange_rate_multiplier,
+                )
+            else:
+                logger.error(
+                    "Could not fetch exchange rate for %s to %s on %s and no other "
+                    "rate exists; leaving multiplier at 1.0. Figures for this currency "
+                    "will be unconverted until a rate is available.",
+                    convert_from, convert_to, exchange_date,
+                )
+            obj.save(update_fields=['exchange_rate_multiplier', 'is_placeholder'])
+
+        obj.update_current()
+        return obj
+
     @classmethod
-    def update_exchange_rate_history(cls, account, convert_from, convert_to):
+    def nearest_known(cls, account: 'Account', convert_from: str, convert_to: str, exchange_date: Date,
+                      exclude: Any = None) -> 'ExchangeRate | None':
+        """The fetched rate for the pair nearest `exchange_date`, preferring an earlier one."""
+        known = cls.objects.filter(
+            account=account, convert_from=convert_from, convert_to=convert_to,
+            is_placeholder=False,
+        ).exclude(pk=exclude)
+        return (
+            known.filter(date__lte=exchange_date).order_by('-date').first()
+            or known.filter(date__gt=exchange_date).order_by('date').first()
+        )
+
+    def replace_placeholder(self, multiplier: Decimal | None) -> None:
+        """Set the real rate, recalculating what was converted at the stand-in, if it was one."""
+        was_placeholder = self.is_placeholder
+        self.exchange_rate_multiplier = cast(Decimal, multiplier)
+        self.is_placeholder = False
+        self.save(update_fields=['exchange_rate_multiplier', 'is_placeholder'])
+        if was_placeholder:
+            from share_dinkum_app import recalculate
+            recalculate.after_rate_change(self)
+
+    def rate_corrected(self) -> None:
+        """Settle a multiplier just changed by hand.
+
+        It is a real rate now, so it stops being a stand-in that the next refresh fetches over,
+        and whatever was converted at the old figure is worked out again.
+        """
+        if self.is_placeholder:
+            self.is_placeholder = False
+            self.save(update_fields=['is_placeholder'])
+        self.update_current()
+        from share_dinkum_app import recalculate
+        recalculate.after_rate_change(self)
+
+    @classmethod
+    def update_exchange_rate_history(cls, account: 'Account', convert_from: str, convert_to: str) -> 'ExchangeRate | None':
 
         if convert_from == convert_to:
-            return
+            return None
         
         start_date = None
 
@@ -525,7 +702,7 @@ class ExchangeRate(AbstractExchangeRate):
             if earliest_buy:
                 start_date = earliest_buy.date
             else:
-                return  # No buys, so no need to fetch exchange rates
+                return None  # No buys, so no need to fetch exchange rates
             
         try:
 
@@ -533,17 +710,17 @@ class ExchangeRate(AbstractExchangeRate):
 
             field = cls._meta.get_field('exchange_rate_multiplier')
             price_history['exchange_rate_multiplier'] = price_history['exchange_rate_multiplier'].apply(
-                lambda val: convert_to_decimal_field(val, field)
+                lambda val: convert_to_decimal_field(val, field)  # type: ignore[arg-type, return-value]
             )
 
-            price_history['account'] = account
-            price_history['id'] = price_history['date'].apply(lambda x : uuid7())
+            price_history['account'] = account  # type: ignore[call-overload]
+            price_history['id'] = price_history['date'].apply(lambda x : uuid7())  # type: ignore[arg-type, return-value]
             
             # Bulk insert/update price history
-            price_history_entries = []
+            price_history_entries: list[ExchangeRate] = []
             for _, row in price_history.iterrows():
                 price_history_entries.append(
-                    ExchangeRate(
+                    ExchangeRate(  # type: ignore[arg-type]
                         **row.to_dict()
                     )
                 )
@@ -552,8 +729,20 @@ class ExchangeRate(AbstractExchangeRate):
             with transaction.atomic():
                 ExchangeRate.objects.bulk_create(price_history_entries, ignore_conflicts=True)
 
+                # A conflict keeps the existing row, which is right for a fetched rate but not
+                # for a stand-in: replace those with the history's rate for that day, or the
+                # last trading day before it.
+                history = sorted(zip(price_history['date'], price_history['exchange_rate_multiplier']))
+                history_dates = [day for day, _ in history]
+                for placeholder in ExchangeRate.objects.filter(
+                        account=account, convert_from=convert_from, convert_to=convert_to,
+                        is_placeholder=True):
+                    index = bisect.bisect_right(history_dates, placeholder.date) - 1
+                    if index >= 0 and (placeholder.date - history_dates[index]).days <= 7:
+                        placeholder.replace_placeholder(history[index][1])
+
             if not price_history.empty:
-                latest_row = price_history.loc[price_history['date'].idxmax()]
+                latest_row = price_history.loc[price_history['date'].idxmax()]  # type: ignore[call-overload]
                 latest_multiplier = convert_to_decimal_field(
                     latest_row['exchange_rate_multiplier'],
                     field
@@ -564,7 +753,7 @@ class ExchangeRate(AbstractExchangeRate):
                     convert_from=latest_row['convert_from'],
                     convert_to=latest_row['convert_to'],
                     date=latest_row['date'],
-                    exchange_rate_multiplier=latest_multiplier
+                    exchange_rate_multiplier=cast(Decimal, latest_multiplier)
                 )
                 latest.update_current()
                 return latest
@@ -572,6 +761,7 @@ class ExchangeRate(AbstractExchangeRate):
 
         except Exception as e:
             logger.error(f'Error getting exchange rate history for {convert_from} to {convert_to}, {e}', exc_info=True)
+        return None
 
 
 
@@ -587,6 +777,20 @@ class Market(BaseModel):
 
     suffix = models.CharField(max_length=16, null=True, blank=True)
 
+    # Where the market is, which decides whether the assets listed on it count as
+    # "Australian listed" on the CGT schedule. Left blank rather than assumed; the country
+    # is suggested from the suffix or the code when a market is created.
+    country = models.CharField(
+        max_length=2, null=True, blank=True,
+        help_text='ISO country code, e.g. AU. Decides whether instruments here are treated '
+                  'as Australian listed for capital gains reporting.',
+    )
+    is_exchange_listed = models.BooleanField(
+        default=True,
+        help_text='Uncheck for unlisted holdings. Unlisted assets fall into the "other" '
+                  'categories on the CGT schedule regardless of country.',
+    )
+
 
 class Instrument(BaseModel):
     MODEL_DESCRIPTION = 'Share codes, eg BHP, VGS, VAS, etc'
@@ -596,17 +800,92 @@ class Instrument(BaseModel):
             models.UniqueConstraint(fields=['name', 'account'], name='instrument_keys')
         ]
 
+    # What the thing legally *is*, which the CGT schedule cares about and the ticker does
+    # not reveal. AFI and VAS are both ASX listed and AUD quoted; one is a company and the
+    # other a unit trust, and they belong in different boxes on the form.
+
+
     name = models.CharField(max_length=16)
     description = models.CharField(max_length=255, blank=True)
     currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
     market = models.ForeignKey(Market, on_delete=models.PROTECT)
     current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True)
 
+    legal_form = models.CharField(
+        max_length=13, choices=LegalForm.choices, default=LegalForm.UNKNOWN,
+        help_text='Shown on the product disclosure statement or annual tax statement.',
+    )
+    #: Where the legal form came from; set automatically, see `save`. Only USER counts as
+    #: confirmed, and schedules on unconfirmed instruments are drafts.
+    legal_form_source = models.CharField(
+        max_length=9, choices=LegalFormSource.choices, default=LegalFormSource.DEFAULT,
+        editable=False,
+    )
+    #: Overrides the derived schedule category. Limited to the schedule's own categories.
+    cgt_asset_category_override = models.CharField(
+        max_length=48, null=True, blank=True,
+        choices=CGTAssetCategory.reportable_choices(),
+        help_text='Leave empty. Only set this if the category worked out from the legal '
+                  'form and the market is wrong for this holding.',
+    )
+    #: Overrides the per-parcel TAP derivation for every parcel. Leave empty normally:
+    #: "no" also switches off the s104-165(3) deeming on departure.
+    is_taxable_australian_property_override = models.BooleanField(
+        null=True, blank=True,
+        help_text='Leave empty. Only set this if the instrument is taxable Australian '
+                  'property in its own right -- real property, or a non-portfolio interest '
+                  'in a land rich entity. Setting it to "no" is not the same as leaving it '
+                  'empty: it overrides the departure deeming for every parcel, including '
+                  'ones you held when you ceased Australian residency.',
+    )
+
+    @safe_property
+    def cgt_asset_category(self) -> str:
+        """Which box on the CGT schedule a gain on this instrument belongs in."""
+        from share_dinkum_app.cgt import classification
+        return classification.asset_category(self)
+
+    @safe_property
+    def is_classified(self) -> bool:
+        """Whether the legal form is known and was set or confirmed by the user, not suggested."""
+        return (self.legal_form != LegalForm.UNKNOWN
+                and self.legal_form_source == LegalFormSource.USER)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Set `legal_form_source` to USER when the legal form is set by hand.
+
+        That is: created with a legal form and a DEFAULT source, or the legal form changed
+        without the caller also changing the source (the suggester sets its own).
+        """
+        if self.legal_form != LegalForm.UNKNOWN:
+            previous = (
+                Instrument.objects.filter(pk=self.pk)
+                .values('legal_form', 'legal_form_source').first()
+                if self.pk else None
+            )
+            if previous is None:
+                # Created already carrying a legal form, so it came from a person or a file
+                # rather than from the default.
+                if self.legal_form_source == LegalFormSource.DEFAULT:
+                    self.legal_form_source = LegalFormSource.USER
+            else:
+                changed = previous['legal_form'] != self.legal_form
+                source_set_by_caller = (
+                    previous['legal_form_source'] != self.legal_form_source)
+                if changed and not source_set_by_caller:
+                    self.legal_form_source = LegalFormSource.USER
+
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'legal_form' in set(update_fields):
+                kwargs['update_fields'] = set(update_fields) | {'legal_form_source'}
+
+        super().save(*args, **kwargs)
+
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
     
 
     @safe_property
-    def quantity_held(self):
+    def quantity_held(self) -> Decimal:
         # Remaining quantity is a bit more complicated than just buys minus sells, since parcels can be split, consolidated and bifurcated.
         parcels = Parcel.objects.filter(
             account=self.account,
@@ -629,7 +908,7 @@ class Instrument(BaseModel):
     calculated_value_held =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def value_held(self):
+    def value_held(self) -> Money:
         if self.current_unit_price:
             value_held = Money(self.current_unit_price * self.quantity_held, self.currency)
         else:
@@ -642,7 +921,7 @@ class Instrument(BaseModel):
     calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def value_held_converted(self):
+    def value_held_converted(self) -> Money | None:
         
         if self.currency == self.account.currency:
             # Already in account currency
@@ -657,12 +936,13 @@ class Instrument(BaseModel):
         )
 
         if not current_rate:
-            logger.error(f'No exchange rate available for {self.currency} to {self.account.currency}')
-            logger.error(f'Instrument: {self}, Account: {self.account}, Currency: {self.currency}')
-            
-            raise ValueError(
-                f"No exchange rate available for {self.currency} to {self.account.currency}"
-            )
+            # Unknown rather than an error: raising here failed every save of the instrument,
+            # and so every trade in it, whenever the rate could not be fetched (offline).
+            logger.error(
+                'No exchange rate available for %s to %s, so the value of %s in %s is unknown '
+                'until one can be fetched.', self.currency, self.account.currency, self,
+                self.account.currency)
+            return None
 
         converted_value = current_rate.apply(self.value_held)
         assert isinstance(converted_value, Money), f'Converted value held is not a Money instance: {converted_value}'
@@ -670,7 +950,7 @@ class Instrument(BaseModel):
 
 
     @safe_property
-    def yfinance_ticker_code(self):
+    def yfinance_ticker_code(self) -> str:
         
         suffix = self.market.suffix
         
@@ -680,18 +960,23 @@ class Instrument(BaseModel):
         else:
             return self.name
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.is_active:
             return f'{self.name} - {self.description} [{self.account.description}]'
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
 
-    def update_price_history(self, end_date=None):
-        """
-        Refresh price history data for this instrument up to the supplied end_date.
+    #: Stored prices are replaced by what is fetched for the same day, not kept.
+    PRICE_HISTORY_FIELDS: list[str] = ['open', 'high', 'low', 'close', 'volume', 'stock_splits']
 
-        When no end_date is provided the current date is used. The fetch always rewinds a few days
-        from the most recent stored price to account for weekends or suspensions.
+    def update_price_history(self, end_date: Date | None = None, start_date: Date | None = None) -> int:
+        """Fetch price history up to `end_date` (default today) and update the current price.
+
+        Starts at `start_date` if given, else four days before the latest stored price, to
+        cover weekends and suspensions, or from the first buy if there is none. A day already
+        stored is overwritten: a price fetched while the market was open is not that day's
+        close, and one stored adjusted is not the price it traded at. Returns the number of
+        days stored.
         """
         end_date = end_date or date.today()
 
@@ -701,11 +986,11 @@ class Instrument(BaseModel):
             .first()
         )
 
-        if latest_price_history:
+        if start_date is None and latest_price_history:
             start_date = latest_price_history.date - timedelta(days=4)
             if start_date > end_date:
                 start_date = end_date
-        else:
+        elif start_date is None:
             earliest_buy = (
                 Buy.objects.filter(instrument=self)
                 .order_by('date')
@@ -717,7 +1002,7 @@ class Instrument(BaseModel):
                 start_date = date(2020, 1, 1)
 
         if start_date > end_date:
-            return
+            return 0
 
         try:
             price_history = yfinanceinterface.get_instrument_price_history(
@@ -727,7 +1012,7 @@ class Instrument(BaseModel):
             )
             if price_history.empty:
                 logger.warning('No price history returned for %s between %s and %s', self, start_date, end_date)
-                return
+                return 0
 
             decimal_fields = {
                 field_name: InstrumentPriceHistory._meta.get_field(field_name)
@@ -735,17 +1020,17 @@ class Instrument(BaseModel):
             }
             for column, field in decimal_fields.items():
                 price_history[column] = price_history[column].apply(
-                    lambda val: convert_to_decimal_field(val, field)
+                    lambda val: convert_to_decimal_field(val, field)  # type: ignore[arg-type, return-value]
                 )
 
-            price_history['account'] = self.account
-            price_history['id'] = price_history['date'].apply(lambda x: uuid7())
+            price_history['account'] = self.account  # type: ignore[call-overload]
+            price_history['id'] = price_history['date'].apply(lambda x: uuid7())  # type: ignore[arg-type, return-value]
 
             # Drop rows with null close prices (yfinance sometimes returns NaN for recent dates)
             price_history = price_history.dropna(subset=['close'])
             if price_history.empty:
                 logger.warning('No valid close prices for %s between %s and %s', self, start_date, end_date)
-                return
+                return 0
 
             instrument_price_field = self._meta.get_field('current_unit_price')
 
@@ -760,19 +1045,26 @@ class Instrument(BaseModel):
                 )
             self.save()
 
-            price_history_entries = []
+            price_history_entries: list[InstrumentPriceHistory] = []
             for _, row in price_history.iterrows():
                 price_history_entries.append(
-                    InstrumentPriceHistory(
+                    InstrumentPriceHistory(  # type: ignore[arg-type]
                         **row.to_dict()
                     )
                 )
 
             with transaction.atomic():
-                InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
+                InstrumentPriceHistory.objects.bulk_create(
+                    price_history_entries,
+                    update_conflicts=True,
+                    unique_fields=['account', 'instrument', 'date'],
+                    update_fields=self.PRICE_HISTORY_FIELDS,
+                )
+            return len(price_history_entries)
 
         except Exception as e:
             logger.error(f'Error getting price history for {self} between {start_date} and {end_date}, {e}', exc_info=True)
+            return 0
 
 
 
@@ -799,7 +1091,7 @@ class InstrumentPriceHistory(models.Model):
     stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
 
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         # Redirect stuff to admin
         app_label = self._meta.app_label
         model_name = self._meta.model_name
@@ -815,7 +1107,7 @@ class Trade(BaseModel):
     description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
     instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
     date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
     unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     total_brokerage = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
@@ -825,14 +1117,14 @@ class Trade(BaseModel):
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
     @safe_property
-    def fiscal_year(self):
+    def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
         return fiscal_year
     
     calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_brokerage_converted(self):
+    def total_brokerage_converted(self) -> Money:
         total_brokerage_converted =  self.total_brokerage
         if self.exchange_rate:
             total_brokerage_converted = self.exchange_rate.apply(total_brokerage_converted)
@@ -841,7 +1133,7 @@ class Trade(BaseModel):
     calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def unit_brokerage_converted(self):
+    def unit_brokerage_converted(self) -> Money:
         unit_brokerage_converted =  self.total_brokerage / self.quantity
         if self.exchange_rate:
             unit_brokerage_converted = self.exchange_rate.apply(unit_brokerage_converted)
@@ -850,7 +1142,7 @@ class Trade(BaseModel):
     calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def unit_price_converted(self):
+    def unit_price_converted(self) -> Money:
         logger.debug('Calculating unit price converted on %s', self)
         unit_price_converted =  self.unit_price
         if self.exchange_rate:
@@ -860,15 +1152,41 @@ class Trade(BaseModel):
             logger.debug('No exchange rate available for %s', self)
         return unit_price_converted
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.description}'
 
-    def save(self, *args, **kwargs):
+    STRUCTURAL_FIELDS: tuple[str, ...] = (
+        'instrument', 'date', 'quantity', 'unit_price_currency', 'total_brokerage_currency')
+    POSITIVE_FIELDS: tuple[str, ...] = ('quantity',)
+
+    #: Can be corrected after the trade is entered. A change is carried to its parcels and
+    #: allocations, whose stored figures would otherwise keep the old price.
+    REPRICING_FIELDS: tuple[str, ...] = ('unit_price', 'total_brokerage', 'exchange_rate')
+
+    def _repriced(self, update_fields: Any) -> bool:
+        if self._state.adding or self.pk is None:
+            return False
+        if update_fields is not None and not set(update_fields) & set(self.REPRICING_FIELDS):
+            return False
+        fields: list[Any] = [self._meta.get_field(name) for name in self.REPRICING_FIELDS]
+        stored = type(self)._default_manager.filter(pk=self.pk).values(
+            '_creation_handled', *[field.attname for field in fields]).first()
+        if stored is None or not stored['_creation_handled']:
+            return False
+        return any(
+            field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
+            for field in fields)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        repriced = self._repriced(kwargs.get('update_fields'))
         if self.is_active:
             self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price} / unit'
         else:
             self.description = 'INACTIVE'
         super().save(*args, **kwargs)
+        if repriced:
+            from share_dinkum_app import recalculate
+            recalculate.derived_from(cast('Buy | Sell', self))
 
 
 class Buy(Trade):
@@ -879,56 +1197,93 @@ class Buy(Trade):
     calculated_related_parcels = models.TextField(null=True, blank=True, editable=False)
     
     @safe_property
-    def related_parcels(self):
+    def related_parcels(self) -> str:
         related_parcels = Parcel.objects.filter(buy=self)
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
+
+    def chronology_problem(self) -> str | None:
+        if not self.instrument_id or not self.date:
+            return None
+        # A split is dated on its ex-date and reaches buys before it. A buy on the ex-date is
+        # already in post-split units, as a sale that day is, so only a later split matters.
+        split = ShareSplit.objects.filter(
+            account_id=self.account_id, instrument_id=self.instrument_id,
+            _creation_handled=True, date__gt=self.date,
+        ).order_by('date').first()
+        if split is None:
+            return None
+        return (
+            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
+            f'this buy is dated before it, so it would not be split with the rest. Delete the '
+            f'split, enter this buy, then enter the split again.')
 
 
 class Sell(Trade):
     MODEL_DESCRIPTION = 'Sales of shares.'
     _creation_handled = models.BooleanField(default=False, editable=False)
 
-    STRATEGY_CHOICES = [
-        ('FIFO', 'First-in, First-out'),
-        ('LIFO', 'Last-in, First out'),
-        ('MIN_CGT', 'Minimise net capital gain'),
-        ('MANUAL', 'Manually create allocations')
-    ]
     
     strategy = models.CharField(
         max_length=7,
-        choices=STRATEGY_CHOICES,
-        default='MIN_CGT',
+        choices=SellStrategy.choices,
+        default=SellStrategy.MIN_CGT,
     )
+
+    STRUCTURAL_FIELDS: tuple[str, ...] = Trade.STRUCTURAL_FIELDS + ('strategy',)
 
     calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def proceeds(self):
+    def proceeds(self) -> Money:
         proceeds = (self.quantity * self.unit_price_converted) - self.total_brokerage_converted
         return proceeds
     
     calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def unit_proceeds(self):
+    def unit_proceeds(self) -> Money:
         return self.proceeds / self.quantity
 
     calculated_unallocated_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def unallocated_quantity(self):
+    def unallocated_quantity(self) -> Decimal:
         allocated_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
-        return (self.quantity or 0 ) - allocated_quantity
-    
-    def clean(self):
-        super().clean()
-        # Ensure an exchange rate is provided for cross-currency sells
-        if self.instrument.currency != self.account.currency and not self.exchange_rate:
-            raise ValidationError(
-                "Exchange rate is required when instrument currency differs from account currency."
-            )
+        return cast(Decimal, (self.quantity or 0) - allocated_quantity)
+
+    @classmethod
+    def with_unallocated_quantity(cls, account: 'Account') -> 'QuerySet[Any]':  # annotated with `allocated`
+        """Sales with units no parcel was allocated to, annotated with `allocated`.
+
+        Gains are worked out per allocation, so those units are in no gain at all: a sale
+        larger than the holding, one dated before its purchase, or a MANUAL sale never
+        allocated.
+        """
+        return (
+            cls.objects.filter(account=account, is_active=True)
+            .annotate(allocated=Coalesce(
+                Sum('sale_allocation__quantity', filter=Q(sale_allocation__is_active=True)),
+                Decimal('0')))
+            .filter(quantity__gt=F('allocated'))
+            .select_related('instrument')
+            .order_by('date')
+        )
+
+    def chronology_problem(self) -> str | None:
+        if not self.instrument_id or not self.date:
+            return None
+        # A sale on a split's own date is in post-split units, so only a later split matters.
+        split = ShareSplit.objects.filter(
+            account_id=self.account_id, instrument_id=self.instrument_id,
+            _creation_handled=True, date__gt=self.date, affected_parcels__isnull=False,
+        ).order_by('date').first()
+        if split is None:
+            return None
+        return (
+            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
+            f'this sale is dated before it, so it would be matched against the split parcels. '
+            f'Delete the split, enter this sale, then enter the split again.')
 
 
 class Parcel(BaseModel):
@@ -945,7 +1300,9 @@ class Parcel(BaseModel):
         editable=False
         )
     parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False)
-    cumulative_split_multiplier = models.DecimalField(max_digits=16, decimal_places=4, editable=False, default=Decimal('1.0'))
+    #: Ten places, since a consolidation's ratio rarely terminates: at four, 1-for-3 stored
+    #: 0.3333 and every unit price divided by it came out 0.01% high.
+    cumulative_split_multiplier = models.DecimalField(max_digits=22, decimal_places=10, editable=False, default=Decimal('1.0'))
     activation_date = models.DateField(null=True, editable=False)
     deactivation_date = models.DateField(null=True, editable=False)
     sale_date = models.DateField(null=True, editable=False)
@@ -953,13 +1310,13 @@ class Parcel(BaseModel):
     calculated_instrument_name = models.CharField(max_length=16, null=True, blank=True, editable=False)
     
     @safe_property
-    def instrument_name(self):
+    def instrument_name(self) -> str | None:
         return self.buy.instrument.name if self.buy and self.buy.instrument else None
 
     calculated_remaining_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
 
     @safe_property
-    def remaining_quantity(self):
+    def remaining_quantity(self) -> Decimal:
 
         if not self.is_active:
             return Decimal('0')
@@ -970,19 +1327,19 @@ class Parcel(BaseModel):
     calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
     
     @safe_property
-    def is_sold(self):
+    def is_sold(self) -> bool:
         return self.remaining_quantity <= Decimal('0') # Using <= to account for any potential rounding issues
 
 
     @safe_property
-    def adjusted_buy_price(self):
+    def adjusted_buy_price(self) -> Money:
         adjusted_buy_price = self.buy.unit_price_converted / self.cumulative_split_multiplier
         return adjusted_buy_price
 
     calculated_adjusted_unit_brokerage = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def adjusted_unit_brokerage(self):
+    def adjusted_unit_brokerage(self) -> Money:
 
         if not self.is_active:
             return Money(Decimal('0'), self.buy.account.currency)
@@ -992,7 +1349,7 @@ class Parcel(BaseModel):
 
     
     @safe_property
-    def total_adjustments(self):
+    def total_adjustments(self) -> Money:
         total_adjustment = self.cost_base_adjustment_allocation.filter(
             deactivation_date__isnull=True
         ).aggregate(
@@ -1005,7 +1362,7 @@ class Parcel(BaseModel):
     calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_cost_base(self):
+    def total_cost_base(self) -> Money:
 
         if not self.is_active:
             return Money(Decimal('0'), self.buy.account.currency)
@@ -1021,18 +1378,68 @@ class Parcel(BaseModel):
     calculated_unit_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def unit_cost_base(self):
+    def unit_cost_base(self) -> Money:
         
         if not self.is_active:
             return Money(Decimal('0'), self.buy.account.currency)
 
         return self.total_cost_base / self.parcel_quantity
 
-    def split_or_consolidate(self, multiplier, date):
+    @classmethod
+    def with_unconverted_cost_base(cls, account: 'Account') -> 'QuerySet[Parcel]':
+        """Active parcels whose stored cost base is not in the account's currency.
+
+        Left by a bug fixed in 0.3.0: a parcel was built before its foreign-currency buy had
+        an exchange rate. Reports read the live figures and were right; only the stored copy
+        was wrong. Saving the parcel again recalculates it. A zero cost base is ignored,
+        since its currency changes nothing.
+        """
+        return (
+            cls.objects.filter(account=account, deactivation_date__isnull=True)
+            .exclude(calculated_total_cost_base_currency=str(account.currency))
+            .exclude(calculated_total_cost_base=Decimal('0'))
+        )
+
+    def market_value_at(self, day: Date, purpose: str = 'CUTOVER_2027') -> tuple[Money | None, str | None]:
+        """This parcel's market value on `day`, for a deemed disposal.
+
+        Worked out from the instrument's per-unit valuation, adjusted for later splits, so it
+        survives the parcel being split or bifurcated. Returns `(value, source)`, or
+        `(None, None)` if there is no valuation.
+        """
+        from share_dinkum_app.cgt import cutover
+
+        unit_value, source = cutover.unit_value_at(
+            self.buy.instrument, day, purpose=purpose)
+        if unit_value is None:
+            return None, None
+
+        # A valuation is per unit as units stood on the valuation date. Any split since has
+        # multiplied the unit count and divided the value, so the recorded figure has to be
+        # brought forward to today's units before it is multiplied out.
+        multiplier = cutover.scale_for_splits(self, day)
+        value = (unit_value / multiplier) * self.parcel_quantity
+
+        # Price history is quoted in the instrument's currency, and a recorded valuation may
+        # be too. The cost base it is compared with is in the account's.
+        account_currency = str(self.account.currency)
+        if str(value.currency) != account_currency:
+            rate = ExchangeRate.get_or_create(
+                account=self.account, convert_from=str(value.currency),
+                convert_to=account_currency, exchange_date=day)
+            value = rate.apply(value)
+        return value, source
+
+    def split_or_consolidate(self, multiplier: Decimal, date: Date) -> 'Parcel':
+        """Replace this parcel with one of `multiplier` times the units, carrying its adjustments.
+
+        Pass the exact ratio (`ShareSplit.ratio`), not the rounded `split_multiplier`: a
+        1-for-3 consolidation of 3,000 units then gives 1,000 rather than 999.999.
+        """
         assert multiplier > 0
         assert self.is_active
 
-        new_parcel_message = f'This parcel was created by splitting parcel {self.pk} by multiplier {multiplier}'
+        new_parcel_message = f'This parcel was created by splitting parcel {self.pk} by multiplier {multiplier:.6g}'
 
         with transaction.atomic():
             # Create target parcel
@@ -1040,14 +1447,22 @@ class Parcel(BaseModel):
             parcel_target.pk = None # Make a new instance
             parcel_target.activation_date = date # Set new activation date
             parcel_target.parent_parcel = self
-            parcel_target.parcel_quantity *= multiplier
-            parcel_target.cumulative_split_multiplier *= multiplier
+            parcel_target.parcel_quantity = cast(Decimal, convert_to_decimal_field(
+                self.parcel_quantity * multiplier, self._meta.get_field('parcel_quantity')))
+            parcel_target.cumulative_split_multiplier = cast(Decimal, convert_to_decimal_field(
+                self.cumulative_split_multiplier * multiplier,
+                self._meta.get_field('cumulative_split_multiplier')))
             parcel_target.save()
             parcel_target.log_event(new_parcel_message)
 
+            # The adjustments go with the units. Left behind on this parcel, which is about to
+            # be deactivated, they would drop out of the cost base without a trace.
+            for allocation in self.cost_base_adjustment_allocation.filter(is_active=True):
+                allocation.move_to(parcel_target, date=date)
+
             # Update old parcel
-            self.log_event(f'This parcel was split with multipler {multiplier}, then marked as INACTIVE. New parcel is {parcel_target.pk}.')
-            
+            self.log_event(f'This parcel was split with multipler {multiplier:.6g}, then marked as INACTIVE. New parcel is {parcel_target.pk}.')
+
             # This sets is_active = False for the old parcel
             self.deactivation_date = date
 
@@ -1055,10 +1470,16 @@ class Parcel(BaseModel):
 
         return parcel_target
 
-    def bifurcate(self, quantity, date):
-        assert quantity > 0, "Quantity to bifurcate (split) must be greater than zero"
-        assert quantity <= self.parcel_quantity, "Quantity to bifurcate (split) must be less than the available quantity"
-        assert self.is_active
+    def bifurcate(self, quantity: Decimal, date: Date) -> 'Parcel':
+        # Errors rather than asserts: they name the parcel, and survive `python -O`.
+        if quantity <= 0:
+            raise ValueError(f'Cannot split {quantity} units off parcel {self.pk}: the quantity must be more than zero.')
+        if quantity > self.parcel_quantity:
+            raise ValueError(
+                f'Cannot split {quantity} units off parcel {self.pk} (bought {self.buy.date}): '
+                f'it only holds {self.parcel_quantity}.')
+        if not self.is_active:
+            raise ValueError(f'Cannot split parcel {self.pk}: it was replaced on {self.deactivation_date}.')
 
         if quantity == self.parcel_quantity:
             # No need to bifurcate.
@@ -1108,7 +1529,7 @@ class Parcel(BaseModel):
 
         return parcel_target
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.is_active:
             parcel_desc  = f'{self.description} @ {self.adjusted_buy_price} / unit | Total cost base = {self.total_cost_base} |'
             if self.is_sold:
@@ -1117,7 +1538,7 @@ class Parcel(BaseModel):
         else:
             return f'{self.pk} | INACTIVE'
 
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         self.is_active = self.deactivation_date is None
         self.description = f'{self.buy.date} | PARCEL |  {self.buy.instrument.name} | {self.parcel_quantity} unit'
         super().save(*args, **kwargs)
@@ -1133,33 +1554,93 @@ class SellAllocation(BaseModel):
     sell = models.ForeignKey(Sell, related_name='sale_allocation', on_delete=models.PROTECT)
     quantity = models.DecimalField(max_digits=16, decimal_places=4)
 
+    STRUCTURAL_FIELDS: tuple[str, ...] = ('parcel', 'sell', 'quantity')
+
     calculated_sale_date = models.DateField(null=True, blank=True, editable=False)
     
     @safe_property
-    def sale_date(self):
+    def sale_date(self) -> Date:
         return self.sell.date
     
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
     @safe_property
-    def fiscal_year(self):
+    def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
         return fiscal_year
     
     calculated_days_held = models.IntegerField(null=True, blank=True, editable=False)
     
     @safe_property
-    def days_held(self):
+    def days_held(self) -> int:
         return (self.sell.date - self.parcel.buy.date).days
     
     calculated_total_capital_gain = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_capital_gain(self):
+    def total_capital_gain(self) -> Money:
         # Note, a parcel is always fully consumed by a sell allocation due to the bifurcation process, therefore can just use parcel.total_cost_base rather than unit cost base and qty. This avoids rounding issues
         return (self.sell.proceeds * self.quantity / self.sell.quantity) - self.parcel.total_cost_base
 
-    def save(self, *args, **kwargs):
+    def allocation_problems(self) -> list[str]:
+        """Why this new allocation cannot be made, as messages; empty if it can.
+
+        Checked before saving, since saving splits the parcel. Without it a sold parcel
+        could be sold again, and the holding would go negative.
+        """
+        if not self.parcel_id or not self.sell_id or self.quantity is None:
+            return []
+
+        def units(value: Any) -> str:
+            return f'{Decimal(value).normalize():f}'
+
+        parcel, sell = self.parcel, self.sell
+        buy = parcel.buy
+        problems: list[str] = []
+        if self.quantity <= 0:
+            problems.append(f'The quantity must be more than zero, not {units(self.quantity)}.')
+        if parcel.deactivation_date is not None:
+            problems.append(
+                f'The parcel bought on {buy.date} was replaced on {parcel.deactivation_date} '
+                f'(split, or partly sold), so allocate from the parcel that replaced it.')
+        if buy.instrument_id != sell.instrument_id:
+            problems.append(
+                f'The parcel is {buy.instrument.name} but the sale is {sell.instrument.name}.')
+        if buy.date > sell.date:
+            problems.append(
+                f'The parcel was bought on {buy.date}, after the sale on {sell.date}.')
+
+        others = SellAllocation.objects.filter(is_active=True).exclude(pk=self.pk)
+        sold = others.filter(parcel=parcel).aggregate(total=Sum('quantity'))['total'] or 0
+        unsold = parcel.parcel_quantity - sold
+        if self.quantity > unsold:
+            problems.append(
+                f'Only {units(unsold)} units of the parcel bought on {buy.date} are unsold, '
+                f'not {units(self.quantity)}.')
+        allocated = others.filter(sell=sell).aggregate(total=Sum('quantity'))['total'] or 0
+        if allocated + self.quantity > sell.quantity:
+            problems.append(
+                f'The sale on {sell.date} is for {units(sell.quantity)} units and '
+                f'{units(allocated)} are already allocated, so {units(self.quantity)} more is '
+                f'too many.')
+        return problems
+
+    def _is_new_allocation(self) -> bool:
+        # A row from an export arrives already handled: its parcel is the sold one.
+        return self._state.adding and not self._creation_handled
+
+    def clean(self) -> None:
+        super().clean()
+        if self._is_new_allocation():
+            problems = self.allocation_problems()
+            if problems:
+                raise ValidationError(problems)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if self._is_new_allocation():
+            problems = self.allocation_problems()
+            if problems:
+                raise ValueError(' '.join(problems))
         if self.is_active:
             self.description = f'{self.sell.date} {self.sell.instrument.name} | {self.quantity}'
         else:
@@ -1171,31 +1652,73 @@ class SellAllocation(BaseModel):
 class ShareSplit(BaseModel):
     MODEL_DESCRIPTION = 'Events which transform parcels into new parcels with different cost base and quantity.'
     instrument = models.ForeignKey(Instrument, related_name='share_split', on_delete=models.PROTECT)
-    quantity_before = models.DecimalField(max_digits=16, decimal_places=4)
-    quantity_after = models.DecimalField(max_digits=16, decimal_places=4)
-    date = models.DateField()
+    quantity_before = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
+    quantity_after = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
+    date = models.DateField(
+        help_text='The ex-date. Trades on it are already in post-split units, so only parcels '
+                  'bought before it are split.')
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
     affected_parcels = models.ManyToManyField(Parcel, editable=False)
     _creation_handled = models.BooleanField(default=False, editable=False)
 
+    STRUCTURAL_FIELDS: tuple[str, ...] = ('instrument', 'date', 'quantity_before', 'quantity_after')
+    POSITIVE_FIELDS: tuple[str, ...] = ('quantity_before', 'quantity_after')
+
     calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def split_multiplier(self):
+    def split_multiplier(self) -> Decimal:
         multiplier = self.quantity_after / self.quantity_before
         return multiplier.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
+
+    @property
+    def ratio(self) -> Decimal:
+        """`quantity_after / quantity_before` unrounded, for applying the split to parcels."""
+        return Decimal(self.quantity_after) / Decimal(self.quantity_before)
+
+    def chronology_problem(self) -> str | None:
+        if not self.instrument_id or not self.date:
+            return None
+        # A sale on the split's own date is in post-split units, so it needs the split applied
+        # first, just as a later one does. Only parcels bought before the split are split.
+        sold_later = SellAllocation.objects.filter(
+            account_id=self.account_id, is_active=True,
+            sell__instrument_id=self.instrument_id, sell__date__gte=self.date,
+            parcel__buy__date__lt=self.date,
+        ).select_related('sell').order_by('sell__date').first()
+        if sold_later is None:
+            return None
+        when = 'on the same day' if sold_later.sell.date == self.date else 'dated before it'
+        return (
+            f'The sale of {self.instrument.name} on {sold_later.sell.date} has already been '
+            f'allocated, and this split is {when}, so that sale was worked out in pre-split '
+            f'units. Delete that sale, enter the split, then enter the sale again.')
+
+    def deletion_blocker(self) -> str | None:
+        """Why this split cannot be deleted, or None if it can.
+
+        Deleting reverses the split on the parcels it created. Once one of those has been
+        sold or split again, its units are in post-split terms elsewhere too, and reversing
+        only part of the history would leave the holding inconsistent.
+        """
+        if self.affected_parcels.filter(deactivation_date__isnull=False).exists():
+            return (
+                f'The split of {self.instrument.name} on {self.date} cannot be deleted: parcels '
+                f'it created have since been sold or split again. Delete those sales or later '
+                f'splits first.')
+        return None
 
     calculated_affected_parcels = models.TextField(null=True, blank=True, editable=False)
     
     @safe_property
-    def affected_parcel_list(self):
+    def affected_parcel_list(self) -> str:
         parcels = self.affected_parcels.select_related()
         parcel_list_str = ''
         for parcel in parcels:
             parcel_list_str += f'{parcel}\n'
         return parcel_list_str
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.pk} | {self.date} | Split of {self.instrument.name} | Multiplier = {self.split_multiplier}'
 
 
@@ -1211,43 +1734,61 @@ class CostBaseAdjustment(BaseModel):
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
     @safe_property
-    def fiscal_year(self):
+    def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.financial_year_end_date)
         return fiscal_year
     
     @property
-    def date(self):
+    def date(self) -> Date:
         # Alias as it is used in the user_directory_path
         return self.financial_year_end_date
     
     calculated_cost_base_increase_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
     
     @safe_property
-    def cost_base_increase_converted(self):
+    def cost_base_increase_converted(self) -> Money:
         cost_base_increase_converted =  self.cost_base_increase
         if self.exchange_rate:
             cost_base_increase_converted = self.exchange_rate.apply(cost_base_increase_converted)
         return cost_base_increase_converted
     
-    ALLOCATION_CHOICES = [
-        ('QTY_HELD', 'Alllocate to parcels, weighting by (qty * days_held) in the F.Y.'),
-        ('MANUAL', 'Manually create allocations')
-    ]
     allocation_method = models.CharField(
         max_length=8,
-        choices=ALLOCATION_CHOICES,
-        default='QTY_HELD',
+        choices=AllocationMethod.choices,
+        default=AllocationMethod.QTY_HELD,
     )
 
-    def get_description(self):
+    #: Spread across parcels once, when it is entered, so none of these can change after.
+    STRUCTURAL_FIELDS: tuple[str, ...] = (
+        'instrument', 'financial_year_end_date', 'cost_base_increase',
+        'cost_base_increase_currency', 'allocation_method')
+
+    @classmethod
+    def with_unconverted_allocations(cls, account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
+        """Adjustments allocated to parcels in a currency other than the account's.
+
+        Left by a bug fixed in 0.3.0: a foreign-currency adjustment was allocated before it
+        had an exchange rate, and `Parcel.total_adjustments` then counts the foreign amount
+        as the account's currency. That is a wrong cost base, not just a wrong stored copy.
+        It is not repaired automatically, because re-allocating spreads the adjustment over
+        the parcels again; deleting it and entering it again does that deliberately.
+        """
+        stale = CostBaseAdjustmentAllocation.objects.filter(
+            account=account, deactivation_date__isnull=True,
+        ).exclude(
+            cost_base_increase_currency=str(account.currency),
+        ).exclude(cost_base_increase=Decimal('0'))
+        return cls.objects.filter(id__in=stale.values('cost_base_adjustment_id'))
+
+    def get_description(self) -> str:
         return f'{self.pk} | {self.financial_year_end_date} | Adjustment of {self.instrument.name} | Cost base increase = {self.cost_base_increase}'
     
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         self.description = self.get_description()
         super().save(*args, **kwargs)
 
-    def __str__(self):
-        return self.description
+    def __str__(self) -> str:
+        return cast(str, self.description)
 
                 
 class CostBaseAdjustmentAllocation(BaseModel):
@@ -1259,7 +1800,8 @@ class CostBaseAdjustmentAllocation(BaseModel):
     activation_date = models.DateField(null=True, editable=False)   # not required
     deactivation_date = models.DateField(null=True, editable=False)
 
-    def bifurcate(self, target_parcel, remainder_parcel, date):
+    def bifurcate(self, target_parcel: Parcel, remainder_parcel: Parcel,
+                  date: Date) -> tuple['CostBaseAdjustmentAllocation', 'CostBaseAdjustmentAllocation']:
 
         assert self.is_active, "Parcel is inactive"
 
@@ -1270,35 +1812,67 @@ class CostBaseAdjustmentAllocation(BaseModel):
 
         new_parcel_message = f'This CostBaseAdjustmentAllocation was created by splitting {self.pk} into two separate allocations.'
 
+        original_amount = self.cost_base_increase
+
+        # Rounded to the precision the column actually stores, so the two halves are
+        # computed at the precision they will be saved at and still sum to the original.
+        # SQLite keeps whatever it is given, but a numeric(19,4) column would round on the
+        # way in, and the halves would then no longer reconcile.
+        amount_field = self._meta.get_field('cost_base_increase')
+        target_amount = Money(
+            convert_to_decimal_field(original_amount.amount * target_fraction, amount_field),
+            original_amount.currency,
+        )
+
         with transaction.atomic():
             # Create target allocation
             allocation_target = copy.copy(self) # create a shallow copy
             allocation_target.pk = None
             allocation_target.activation_date = date
             allocation_target.parcel = target_parcel
-            allocation_target.cost_base_increase *= target_fraction
+            allocation_target.cost_base_increase = target_amount
             allocation_target.save()
             allocation_target.log_event(new_parcel_message)
-            # Create remainder parcel
+            # Create remainder parcel. Its share is what is left rather than the
+            # complementary fraction: the field stores four decimal places, so halving an
+            # odd amount and rounding both halves loses a hundredth of a cent every time,
+            # and a parcel split repeatedly would bleed cost base with nothing to show why.
             allocation_remainder = copy.copy(self) # create a shallow copy
             allocation_remainder.pk = None
             allocation_remainder.activation_date = date
             allocation_remainder.parcel = remainder_parcel
-            allocation_remainder.cost_base_increase *= (1 - target_fraction)
+            allocation_remainder.cost_base_increase = original_amount - target_amount
             allocation_remainder.save()
             allocation_remainder.log_event(new_parcel_message)
             # Update old parcel
             self.log_event(f'This allocation was split into {allocation_target.pk} and {allocation_remainder.pk}, then marked as INACTIVE')
             self.deactivation_date = date
-            self.save()        
-        return
-    
+            self.save()
+        return allocation_target, allocation_remainder
 
-    def save(self, *args, **kwargs):
+    def move_to(self, parcel: Parcel, date: Date) -> 'CostBaseAdjustmentAllocation':
+        """Carry this allocation whole to `parcel`, which replaced its own on `date`.
+
+        For a share split, where one parcel becomes one other. Returns the new allocation.
+        """
+        with transaction.atomic():
+            moved = copy.copy(self) # create a shallow copy
+            moved.pk = None
+            moved.activation_date = date
+            moved.parcel = parcel
+            moved.save()
+            moved.log_event(f'This CostBaseAdjustmentAllocation was moved from {self.pk} when parcel {self.parcel_id} was replaced by {parcel.pk}.')
+            self.log_event(f'This allocation was moved to {moved.pk}, then marked as INACTIVE')
+            self.deactivation_date = date
+            self.save()
+        return moved
+
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
         self.is_active = self.deactivation_date is None
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.pk} | {self.cost_base_adjustment.financial_year_end_date} | Adjustment of {self.cost_base_adjustment.instrument.name} | Cost base increase = {self.cost_base_increase} | applied to {self.parcel.id}'
     
 
@@ -1312,7 +1886,7 @@ class Income(BaseModel):
     instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
 
     date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[MinValueValidator(0)])
     exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
 
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
@@ -1320,11 +1894,11 @@ class Income(BaseModel):
     calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
     
     @safe_property
-    def fiscal_year(self):
+    def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
         return fiscal_year
 
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         if self.is_active:
             # TODO include total income somehow
             self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name}' # | {self.quantity} unit @ {self.unit_price_converted} / unit'
@@ -1332,19 +1906,15 @@ class Income(BaseModel):
             self.description = 'INACTIVE'
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.pk} | {self.description}'
     
 
 class Dividend(Income):
     MODEL_DESCRIPTION = 'Dividends, including local dividends and foreign dividends.'
 
-    DIVIDEND_TYPE_CHOICES = (
-        ('LOCAL', 'Local dividend'),
-        ('FOREIGN', 'Foreign dividend')
-    )
-
-    dividend_type = models.CharField(max_length=7, choices=DIVIDEND_TYPE_CHOICES, default='LOCAL')
+    dividend_type = models.CharField(
+        max_length=7, choices=DividendType.choices, default=DividendType.LOCAL)
 
     unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
     franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
@@ -1361,38 +1931,38 @@ class Dividend(Income):
     )
     
     @safe_property
-    def company_rate(self):
+    def company_rate(self) -> Decimal:
         return self.corporate_tax_rate_percentage / 100
 
     calculated_total_unfranked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_unfranked_amount(self):
+    def total_unfranked_amount(self) -> Money:
         return self.unfranked_amount_per_share * self.quantity
 
     calculated_total_franked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_franked_amount(self):
+    def total_franked_amount(self) -> Money:
         return self.franked_amount_per_share * self.quantity
     
     calculated_total_franking_credits = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_franking_credits(self):
+    def total_franking_credits(self) -> Money:
         return self.total_franked_amount * self.company_rate / (1 - self.company_rate)
     
     calculated_total_dividend = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_dividend(self):
+    def total_dividend(self) -> Money:
         # handle zero amounts in wrong currency
         return add_currencies(self.total_unfranked_amount, self.total_franked_amount)
 
     calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_dividend_converted(self):
+    def total_dividend_converted(self) -> Money:
 
         total_dividend_converted =  self.total_dividend
         if self.exchange_rate:
@@ -1403,18 +1973,25 @@ class Dividend(Income):
 class Distribution(Income):
     MODEL_DESCRIPTION = 'Distributions, such as the income received from ETFs'
     distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+
+    # Optional link to the annual statement that explains what this cash was made up of.
+    # A payment carries no tax character of its own -- the attribution does, and it is
+    # annual, so it is deliberately not broken out onto this row.
+    attribution_statement = models.ForeignKey(
+        'AttributionStatement', related_name='distributions',
+        null=True, blank=True, on_delete=models.SET_NULL)
     total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
 
     calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_distribution(self):
+    def total_distribution(self) -> Money:
         return self.distribution_amount_per_share * self.quantity
     
     calculated_total_distribution_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
     
     @safe_property
-    def total_distribution_converted(self):
+    def total_distribution_converted(self) -> Money:
         total_distribution_converted = self.total_distribution
         if self.exchange_rate:
             total_distribution_converted = self.exchange_rate.apply(total_distribution_converted)
@@ -1428,6 +2005,531 @@ class DataExport(BaseModel):
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
     include_price_history = models.BooleanField(default=False, help_text='Include price history in the export?')
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{self.created_at.date().isoformat()} | Data Export - {self.account.description}'
+
+
+class ResidencyPeriod(BaseModel):
+    """A period with one Australian tax residency status.
+
+    Used to apportion the CGT discount for days as a foreign or temporary resident
+    (s115-105, s115-115). With no periods, residency is undeclared and the flat discount
+    applies, flagged in reports. One Australian period covering every holding gives the
+    same result.
+    """
+
+    MODEL_DESCRIPTION = 'Periods of Australian tax residency, used to apportion the CGT discount.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'start_date'], name='residency_period_keys')
+        ]
+        ordering = ['start_date']
+
+    status = models.CharField(max_length=9, choices=ResidencyStatus.choices)
+    start_date = models.DateField(help_text='First day of this period.')
+    end_date = models.DateField(
+        null=True, blank=True, help_text='Last day of this period. Leave blank if ongoing.')
+
+    i1_election_made = models.BooleanField(
+        null=True, blank=True,
+        help_text='Where this period begins a departure from Australia: did you choose '
+                  'under s104-165(2) to disregard the deemed disposal on ceasing '
+                  'residency? If so, the assets you held then stay within the Australian '
+                  'CGT net until you sell them.',
+    )
+
+    def __str__(self) -> str:
+        ending = self.end_date.isoformat() if self.end_date else 'ongoing'
+        return f'{self.get_status_display()} | {self.start_date.isoformat()} to {ending}'
+
+    def covers(self, day: Date) -> bool:
+        if day < self.start_date:
+            return False
+        return self.end_date is None or day <= self.end_date
+
+    def validate_intrinsic(self) -> None:
+        """Reject an end before the start, or an overlap with another period.
+
+        Runs on every save, including imports, so it only checks what holds whatever order
+        rows are loaded in.
+        """
+        if self.start_date is None:
+            return
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValidationError({'end_date': 'The end date is before the start date.'})
+
+        others = ResidencyPeriod.objects.filter(account=self.account, is_active=True)
+        if self.pk:
+            others = others.exclude(pk=self.pk)
+        for other in others.order_by('start_date'):
+            overlap_start = max(self.start_date, other.start_date)
+            overlap_end = min(self.end_date or date.max, other.end_date or date.max)
+            if overlap_start <= overlap_end:
+                raise ValidationError(
+                    f'This overlaps an existing period ({other}). Residency history has to '
+                    f'describe one status at a time.')
+
+    def clean(self) -> None:
+        """`validate_intrinsic`, plus: no gaps, no open-ended period before another, and no
+        start after the earliest buy.
+
+        Not run on save, as these can be briefly false mid-import. A saved history with
+        holes is reported by `cgt.residency.coverage_problems()`.
+        """
+        super().clean()
+        self.validate_intrinsic()
+        if self.start_date is None:
+            return
+
+        others = list(
+            ResidencyPeriod.objects.filter(account=self.account, is_active=True)
+            .exclude(pk=self.pk).order_by('start_date')
+        )
+        periods = sorted(others + [self], key=lambda period: period.start_date)
+        for earlier, later in zip(periods, periods[1:]):
+            if earlier.end_date is None:
+                raise ValidationError(
+                    f'{earlier} is open ended, but another period starts afterwards. Give '
+                    f'the earlier period an end date.')
+            if (later.start_date - earlier.end_date).days != 1:
+                raise ValidationError(
+                    f'There is a gap between {earlier} and {later}. Residency history has '
+                    f'to be continuous, or a holding bought in the gap has no status.')
+
+        earliest_buy = Buy.objects.filter(
+            account=self.account, is_active=True).order_by('date').first()
+        if earliest_buy and periods[0].start_date > earliest_buy.date:
+            raise ValidationError(
+                f'Your residency history starts on {periods[0].start_date.isoformat()}, '
+                f'after your earliest purchase on {earliest_buy.date.isoformat()}. Extend '
+                f'it back, or the discount on that holding cannot be apportioned.')
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        self.validate_intrinsic()
+        super().save(*args, **kwargs)
+
+
+class AttributionStatement(BaseModel):
+    """An annual tax statement from a managed investment trust.
+
+    Records the capital gains the trust attributes to the member. Annual, like
+    CostBaseAdjustment, because attributions cannot be split across quarterly payments.
+    """
+
+    MODEL_DESCRIPTION = 'Annual tax statements from managed investment trusts (AMMA statements).'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'instrument', 'financial_year_end_date'],
+                name='attribution_statement_keys',
+            )
+        ]
+        ordering = ['financial_year_end_date', 'id']
+
+    instrument = models.ForeignKey(
+        Instrument, related_name='attribution_statement', on_delete=models.PROTECT)
+    financial_year_end_date = models.DateField()
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
+
+    #: The cost base adjustment read off the same statement, where one was recorded.
+    cost_base_adjustment = models.OneToOneField(
+        'CostBaseAdjustment', related_name='attribution_statement',
+        null=True, blank=True, on_delete=models.SET_NULL,
+    )
+
+    calculated_fiscal_year = models.ForeignKey(
+        FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+
+    @safe_property
+    def fiscal_year(self) -> 'FiscalYear':
+        fiscal_year, _created = self.account.fiscal_year_type.classify_date(
+            self.financial_year_end_date)
+        return fiscal_year
+
+    def __str__(self) -> str:
+        return f'{self.financial_year_end_date.isoformat()} | {self.instrument.name} attribution'
+
+    def component_total(self, *components: str) -> Decimal:
+        """Sum of the named components, zero where none are present."""
+        total = Decimal('0')
+        for row in self.components.filter(component__in=components, is_active=True):
+            total += row.amount.amount
+        return total
+
+    @safe_property
+    def discounted_capital_gain(self) -> Decimal:
+        """Discounted gains as the trust reports them, already halved. Not grossed up."""
+        return self.component_total('DISCOUNTED_TAP', 'DISCOUNTED_NTAP')
+
+    @safe_property
+    def other_method_capital_gain(self) -> Decimal:
+        """Gains the trust worked out without a discount, so not grossed up."""
+        return self.component_total('OTHER_TAP', 'OTHER_NTAP')
+
+    @safe_property
+    def total_current_year_capital_gain(self) -> Decimal:
+        """The grossed up figure: twice the discounted gains, plus the other method ones."""
+        return self.discounted_capital_gain * 2 + self.other_method_capital_gain
+
+    @safe_property
+    def reconciles(self) -> bool | None:
+        """Whether the grossed-up total is within 2 cents of the stated total.
+
+        None if the statement has no stated total.
+        """
+        stated = self.components.filter(component='TOTAL_CY_CG', is_active=True).first()
+        if stated is None:
+            return None
+        return abs(self.total_current_year_capital_gain - stated.amount.amount) < Decimal('0.02')
+
+    @safe_property
+    def stated_cost_base_movement(self) -> Decimal | None:
+        """The cost base movement this statement declares (positive is an increase), or None.
+
+        In order of precedence:
+        * AMIT increase less decrease, always netted, as the two can be large and equal.
+        * Otherwise, the negated non-attributable or tax-deferred amount.
+        """
+        def total(*components: str) -> Decimal | None:
+            found = self.components.filter(component__in=components, is_active=True)
+            return sum((row.amount.amount for row in found), Decimal('0')) if found else None
+
+        increase = total('COSTBASE_INCREASE')
+        decrease = total('COSTBASE_DECREASE')
+        if increase is not None or decrease is not None:
+            return (increase or Decimal('0')) - (decrease or Decimal('0'))
+
+        # Pre-AMIT, and the AMIT statements that state a non-attributable amount instead.
+        # Both only ever reduce a cost base, so both are negated.
+        for component in ('NON_ATTRIBUTABLE', 'TAX_DEFERRED'):
+            amount = total(component)
+            if amount is not None:
+                return -amount
+        return None
+
+    @safe_property
+    def cost_base_agrees(self) -> bool | None:
+        """Whether the linked cost base adjustment is within 2 cents of the stated movement.
+
+        The two are entered independently so this check means something. None if either is
+        missing.
+        """
+        adjustment = getattr(self, 'cost_base_adjustment', None)
+        if adjustment is None:
+            return None
+        stated = self.stated_cost_base_movement
+        if stated is None:
+            return None
+        recorded = adjustment.cost_base_increase.amount
+        return abs(stated - recorded) < Decimal('0.02')
+
+
+class AttributionComponent(BaseModel):
+    """One line from an annual tax statement. A row per line, so new lines need no migration."""
+
+    MODEL_DESCRIPTION = 'Individual components of a managed investment trust annual statement.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['statement', 'component'], name='attribution_component_keys')
+        ]
+        ordering = ['statement', 'component']
+
+    statement = models.ForeignKey(
+        AttributionStatement, related_name='components', on_delete=models.CASCADE)
+    component = models.CharField(
+        max_length=26, choices=AttributionComponentType.choices)
+    amount = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+
+    def __str__(self) -> str:
+        return f'{self.statement.instrument.name} | {self.get_component_display()} | {self.amount}'
+
+
+class LodgedSnapshotError(ValueError):
+    """A capture would replace a snapshot marked as lodged, which records what was filed."""
+
+
+class CGTReturnSnapshot(BaseModel):
+    """A fiscal year's capital gains figures as they stood at a point in time.
+
+    Gains are recomputed on every report, so a calculation change can alter a lodged year.
+    Take one before lodging; CGTBasisChangeReport compares it with a fresh calculation.
+    """
+
+    MODEL_DESCRIPTION = 'A record of the capital gains figures for a fiscal year as they stood at a point in time.'
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'fiscal_year', 'taken_at'],
+                name='cgt_return_snapshot_keys',
+            )
+        ]
+        ordering = ['fiscal_year', 'taken_at']
+
+    fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot')
+    taken_at = models.DateField(default=date.today, help_text='The day these figures were captured.')
+    basis = models.CharField(
+        max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY)
+    engine_version = models.CharField(max_length=32, blank=True, help_text='Application version that produced the figures.')
+
+    is_lodged = models.BooleanField(default=False, help_text='Were these the figures actually lodged?')
+    lodged_at = models.DateField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        lodged = ' (lodged)' if self.is_lodged else ''
+        return f'{self.fiscal_year.name} snapshot {self.taken_at.isoformat()}{lodged}'
+
+    #: The fields captured per row.
+    CAPTURED_FIELDS: list[str] = [
+        'sell_allocation_id', 'sell_date', 'instrument', 'quantity_sold',
+        'days_held', 'proceeds', 'cost_base', 'capital_gain',
+    ]
+
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        """The captured figures, as a list of plain dicts."""
+        return [row.as_dict() for row in self.captured_rows.all()]
+
+    @property
+    def totals(self) -> dict[str, Any]:
+        if not self.pk:
+            return {}
+        captured = list(self.captured_rows.all())
+        total = sum(
+            (row.capital_gain.amount for row in captured if row.capital_gain is not None),
+            Decimal('0'),
+        )
+        return {
+            'row_count': len(captured),
+            'total_capital_gain': str(total),
+        }
+
+    @classmethod
+    def capture(cls, account: 'Account', fiscal_year: 'FiscalYear', taken_at: Date | None = None,
+                basis: str = 'LEGACY', is_lodged: bool = False) -> 'CGTReturnSnapshot':
+        """Snapshot the realised capital gains for one fiscal year.
+
+        A second capture on the same day replaces that day's snapshot, unless it is marked as
+        lodged: that raises LodgedSnapshotError, since those are the figures that were filed.
+        """
+        from share_dinkum_app.reports import RealisedCapitalGainReport
+        from share_dinkum_app import version as version_module
+
+        taken_at = taken_at or date.today()
+        if cls.objects.filter(account=account, fiscal_year=fiscal_year, taken_at=taken_at,
+                              is_lodged=True).exists():
+            raise LodgedSnapshotError(
+                f'The {fiscal_year.name} snapshot taken on {taken_at} is marked as lodged, so '
+                f'it was kept rather than replaced. Untick "is lodged" on it first to replace '
+                f'it.')
+
+        df = RealisedCapitalGainReport(account=account).generate()
+        if not df.empty:
+            df = df[df['fiscal_year'] == fiscal_year.name]
+
+        with transaction.atomic():
+            snapshot, _created = cls.objects.update_or_create(
+                account=account,
+                fiscal_year=fiscal_year,
+                taken_at=taken_at,
+                defaults={
+                    'basis': basis,
+                    'engine_version': getattr(version_module, '__version__', ''),
+                    'is_lodged': is_lodged,
+                },
+            )
+            snapshot.captured_rows.all().delete()
+
+            CGTReturnSnapshotRow.objects.bulk_create([
+                CGTReturnSnapshotRow(
+                    account=account,
+                    snapshot=snapshot,
+                    sell_allocation_id=row['sell_allocation_id'],
+                    sell_date=row['sell_date'],
+                    instrument=row['instrument'],
+                    quantity_sold=row['quantity_sold'],
+                    days_held=row['days_held'],
+                    proceeds=row['proceeds'],
+                    cost_base=row['cost_base'],
+                    capital_gain=row['capital_gain'],
+                )
+                for _, row in df.iterrows()
+            ])
+
+        return snapshot
     
+
+
+class CGTReturnSnapshotRow(BaseModel):
+    """One sell allocation, as it stood when a snapshot was taken.
+
+    `sell_allocation_id` is a plain UUID, not a foreign key, so the row outlives the
+    allocation if a later sale replaces it.
+    """
+
+    MODEL_DESCRIPTION = 'One disposal within a capital gains snapshot, as it stood when taken.'
+
+    class Meta:
+        ordering = ['sell_date', 'id']
+
+    snapshot = models.ForeignKey(
+        CGTReturnSnapshot, on_delete=models.CASCADE, related_name='captured_rows')
+
+    sell_allocation_id = models.UUIDField(
+        null=True, blank=True,
+        help_text='The allocation these figures came from. Deliberately not a foreign key: '
+                  'the allocation may since have been replaced, which is exactly what a '
+                  'snapshot is for.')
+    sell_date = models.DateField(null=True, blank=True)
+    instrument = models.CharField(max_length=255, blank=True)
+    quantity_sold = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True)
+    days_held = models.IntegerField(null=True, blank=True)
+
+    proceeds = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+    cost_base = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+    capital_gain = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f'{self.instrument} | {self.sell_date} | {self.capital_gain}'
+
+    def as_dict(self) -> dict[str, Any]:
+        """The captured fields as a dict of Decimal, Money and date values."""
+        return {
+            'sell_allocation_id': self.sell_allocation_id,
+            'sell_date': self.sell_date,
+            'instrument': self.instrument,
+            'quantity_sold': self.quantity_sold,
+            'days_held': self.days_held,
+            'proceeds': self.proceeds,
+            'cost_base': self.cost_base,
+            'capital_gain': self.capital_gain,
+        }
+
+class CPIIndex(models.Model):
+    """The Consumer Price Index, one row per quarter. Shared, not per account.
+
+    Loaded by `manage.py load_cpi`. Indexation raises if a quarter it needs is missing.
+    """
+
+    MODEL_DESCRIPTION = 'Consumer Price Index by quarter, used for cost base indexation.'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['quarter_start_date'], name='cpi_index_keys')
+        ]
+        ordering = ['quarter_start_date']
+        verbose_name_plural = 'CPI index'
+
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    quarter_start_date = models.DateField(
+        help_text='First day of the quarter: 1 January, 1 April, 1 July or 1 October.')
+    index_number = models.DecimalField(max_digits=12, decimal_places=4)
+    source = models.CharField(
+        max_length=255, blank=True,
+        help_text='Where the figure came from, so a disputed cost base can be traced.')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f'{self.quarter_start_date.isoformat()} | {self.index_number}'
+
+    def clean(self) -> None:
+        super().clean()
+        if self.quarter_start_date is None:
+            return
+        if (self.quarter_start_date.month, self.quarter_start_date.day) not in (
+                (1, 1), (4, 1), (7, 1), (10, 1)):
+            raise ValidationError({
+                'quarter_start_date':
+                    'A CPI quarter starts on 1 January, 1 April, 1 July or 1 October.'})
+
+
+class InstrumentValuation(BaseModel):
+    """What one unit of an instrument was worth on a day, for a deemed disposal.
+
+    Per unit rather than per parcel, because parcels are replaced when split or partly sold;
+    `Parcel.market_value_at()` multiplies it out. `purpose` says which deemed disposal it
+    is for (see `ValuationPurpose`).
+    """
+
+    MODEL_DESCRIPTION = 'The value of one unit of an instrument on a date, for a deemed disposal.'
+
+
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'instrument', 'valuation_date', 'purpose'],
+                name='instrument_valuation_keys')
+        ]
+        ordering = ['valuation_date']
+
+    instrument = models.ForeignKey(
+        Instrument, on_delete=models.CASCADE, related_name='valuations')
+    valuation_date = models.DateField()
+    unit_value = MoneyField(
+        max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+    purpose = models.CharField(
+        max_length=12, choices=ValuationPurpose.choices,
+        default=ValuationPurpose.CUTOVER_2027)
+    source = models.CharField(
+        max_length=13, choices=ValuationSource.choices, default=ValuationSource.USER)
+
+    def __str__(self) -> str:
+        return f'{self.instrument} | {self.valuation_date.isoformat()} | {self.unit_value}'
+
+
+class CapitalLossCarryForward(BaseModel):
+    """A capital loss carried forward from one year to later years.
+
+    Either an opening balance from returns lodged before using this application
+    (`is_opening_balance`), or a closed year's loss. Stored rather than recomputed, so a later
+    correction does not change losses a lodged return relied on.
+    """
+
+    MODEL_DESCRIPTION = 'Capital losses carried forward into a later income year.'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'fiscal_year'], name='capital_loss_carry_forward_keys')
+        ]
+        ordering = ['fiscal_year']
+
+    fiscal_year = models.ForeignKey(
+        FiscalYear, on_delete=models.PROTECT,
+        help_text='The year the loss was made, not the year it is used in.')
+    amount = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='A positive number. This is a loss; its sign is implied.')
+    is_opening_balance = models.BooleanField(
+        default=False,
+        help_text='Tick where this came from a return lodged before you started using this '
+                  'application, rather than from transactions it holds.')
+
+    def __str__(self) -> str:
+        origin = 'opening balance' if self.is_opening_balance else 'calculated'
+        return f'{self.fiscal_year} | {self.amount} | {origin}'
+
+    def clean(self) -> None:
+        super().clean()
+        amount = getattr(self.amount, 'amount', None)
+        if amount is not None and amount < 0:
+            raise ValidationError({
+                'amount': 'Record a loss as a positive number. A negative one here would be '
+                          'applied as a gain.'})

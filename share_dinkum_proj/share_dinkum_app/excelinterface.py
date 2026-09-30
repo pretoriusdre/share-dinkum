@@ -4,9 +4,11 @@ from datetime import datetime
 import os
 from pathlib import Path
 import re
+from typing import IO, Any, cast
 
 from openpyxl import load_workbook, Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.styles import Alignment, NamedStyle, Font
 from openpyxl.comments import Comment
@@ -21,12 +23,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def get_all_tables_in_excel(filename):
-    """Extract named tables from an Excel workbook, auto-expanding them when
-    additional data exists beneath the defined range. If a worksheet has no named
-    tables, fall back to loading the entire sheet."""
+def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.DataFrame]:
+    """Read every named table in a workbook into DataFrames, keyed by table name.
 
-    def _sheet_to_dataframe(ws):
+    A table expands to take in data below its defined range. A sheet with no tables is
+    loaded whole.
+    """
+
+    def _sheet_to_dataframe(ws: Worksheet) -> pd.DataFrame:
         data_iter = ws.values
         try:
             header = next(data_iter)
@@ -41,7 +45,7 @@ def get_all_tables_in_excel(filename):
         return df
 
     wb = load_workbook(filename, data_only=True)
-    mapping = {}
+    mapping: dict[str, pd.DataFrame] = {}
 
     for ws in wb.worksheets:
         tables = list(ws.tables.values())
@@ -103,28 +107,25 @@ def get_all_tables_in_excel(filename):
 
 
 
-def make_tz_naive(df):
+def make_tz_naive(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             df[col] = df[col].dt.tz_localize(None)
-            df[col] = df[col].apply(lambda x: pd.to_datetime(x, errors='coerce').date())
+            df[col] = df[col].apply(lambda x: pd.to_datetime(x, errors='coerce').date())  # type: ignore[arg-type, return-value]
     return df
 
 
 
 class ExcelGen:
     def __init__(
-        self, title=None, author=None, description=None, template_info=None, url=None
-    ):
-        """
-        Initializes the ExcelGen class with optional parameters for the title, author, and description of the Excel file, as well as template information.
-
-        Args:
-            title (str, optional): The title of the Excel file.
-            author (str, optional): The author of the Excel file.
-            description (str, optional): A description of the Excel file.
-            template_info (str, optional): Information about the template used in the Excel file. If not provided, a default string is used.
-        """
+        self,
+        title: str | None = None,
+        author: str | None = None,
+        description: str | None = None,
+        template_info: str | None = None,
+        url: str | None = None,
+    ) -> None:
+        """Start an empty workbook. `template_info` defaults to a standard note."""
         self.excel_illegal_characters_re = re.compile(r'[\000-\010]|[\013-\014]|[\016-\037]')
         
         self.title = title
@@ -136,7 +137,7 @@ class ExcelGen:
         )
         self.url = url
 
-        self.table_summary = []
+        self.table_summary: list[tuple[int, str, str | None, int]] = []
 
         self.wb = Workbook()
         first_worksheet = self.wb.worksheets[0]
@@ -153,35 +154,27 @@ class ExcelGen:
 
     def add_table(
         self,
-        df,
-        table_name,
-        description=None,
-        pk=None,
-        start_row=1,
-        start_col=1,
-        position_index=None,
-        style_map=None,
-        width_map=None,
-        format_map=None,
-        exclude_from_summary=False,
-        add_hyperlinks=True,
-        value_style_map=None,
-    ):
-        """
-        Adds a table to the Excel workbook using a pandas DataFrame.
+        df: pd.DataFrame,
+        table_name: str,
+        description: str | None = None,
+        pk: str | list[str] | None = None,
+        start_row: int = 1,
+        start_col: int = 1,
+        position_index: int | None = None,
+        style_map: dict[str, Any] | None = None,
+        width_map: dict[str, float] | None = None,
+        format_map: dict[str, str] | None = None,
+        exclude_from_summary: bool = False,
+        add_hyperlinks: bool = True,
+        value_style_map: dict[Any, Any] | None = None,
+    ) -> None:
+        """Add `df` as a named Excel table on a new numbered sheet.
 
-        Args:
-            df (pd.DataFrame): The pandas DataFrame to be added as a table.
-            table_name (str): The name of the table. Max 30 chars.
-            description (str, optional): A description of the table.
-            pk (str or list, optional): The primary key(s) of the table.
-            start_row (int, optional): The starting row for the table. Defaults to 1.
-            start_col (int, optional): The starting column for the table. Defaults to 1.
-            position_index (int, optional): The position index of the worksheet in the workbook.
-            style_map (dict, optional): A dictionary mapping column names to cell styles.
-            width_map (dict, optional): A dictionary mapping column names to column widths.
-            format_map (dict, optional): A dictionary mapping column names to number formats.
-            exclude_from_summary (bool, optional): If True, the table will not be included in the table summary. Defaults to False.
+        * `table_name`: the Excel table name (max 30 characters).
+        * `pk`: column(s) whose headers are highlighted.
+        * `style_map`, `width_map`, `format_map`: per-column style, width, number format.
+        * `value_style_map`: cell style by cell value.
+        * `exclude_from_summary`: leave the table out of the index sheet.
         """
 
 
@@ -317,13 +310,8 @@ class ExcelGen:
         ws.add_table(tab)
         ws.freeze_panes = f"A{start_row + 1}"
 
-    def save(self, output_path):
-        """
-        Saves the Excel workbook to the specified output path.
-
-        Args:
-            output_path (str): The path where the Excel workbook will be saved.
-        """
+    def save(self, output_path: str | Path) -> None:
+        """Add the index sheet, autofit columns, and save to `output_path`."""
 
         self._add_table_summary()
 
@@ -357,7 +345,7 @@ class ExcelGen:
     #         value_style_map={self.title: 'Headline 1'},
     #     )
 
-    def _add_table_summary(self):
+    def _add_table_summary(self) -> None:
         table_summary_df = pd.DataFrame.from_records(
             self.table_summary, columns=['sheet_name', 'table_name', 'description', 'num_records']
         )
@@ -378,10 +366,10 @@ class ExcelGen:
         )
 
 
-    def _autofit_columns(self, ws, max_allowable=80):
+    def _autofit_columns(self, ws: Worksheet, max_allowable: int = 80) -> None:
         for col in ws.columns:
             max_length = 0
-            column = get_column_letter(col[0].column)  # Get the column letter
+            column = get_column_letter(cast(int, col[0].column))  # Get the column letter
 
             for cell in col:
                 try:  # Necessary to avoid error on empty cells

@@ -3,11 +3,8 @@ import sys
 import os
 from pathlib import Path
 
-def setup_logging(level=logging.INFO, log_dir=None, log_file="app.log"):
-    """
-    Basic logging configuration.
-    Writes logs to both console and a file under log_dir.
-    """
+def setup_logging(level: int = logging.INFO, log_dir: Path | None = None, log_file: str = "app.log") -> logging.Logger:
+    """Log to the console and to `log_dir/log_file` (default: the app's `logs` folder)."""
 
     # Default to BASE_DIR/logs if not provided
     if log_dir is None:

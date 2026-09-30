@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from django.conf import settings
 from django.core.files.base import ContentFile
 
@@ -8,11 +9,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def process_filefield(value):
+def process_filefield(value: Any) -> "str | ContentFile[bytes] | None":
     # Used to handle a filefield in a data import process.
 
-    
-    # Case 0: No file provided (value is None or empty string)
+    # Case 0: No file provided (value is None, empty string, or a pandas blank).
+    #
+    # NaN needs naming separately because `not value` does not catch it: a float NaN is
+    # truthy, so a blank cell in a file column walked straight past this guard and reached
+    # the model, where FileField.pre_save asked a float for its `.name` and the whole load
+    # died on `'float' object has no attribute 'name'`. Nothing in that message points at
+    # an empty spreadsheet cell. NaN is also the one value that is not equal to itself,
+    # which is what the second test uses and why it needs no import of pandas here.
+    if value is None or value != value:
+        return None
     if not value:
         return None
 
@@ -51,9 +60,9 @@ def process_filefield(value):
 
 
 
-def user_directory_path(instance, filename):
+def user_directory_path(instance: Any, filename: str) -> str:
 
-    parts = []
+    parts: list[str] = []
     if hasattr(instance, 'account'):
         parts.append(f'{instance.account.id}')
     if hasattr(instance, 'instrument'):

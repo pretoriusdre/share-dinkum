@@ -55,6 +55,14 @@
             margin-bottom: 1rem;
         }
 
+        /* Sits under the card heading, so the chart's own total is readable without
+           hovering a slice or adding them up by eye. */
+        .chart-total {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin: -0.5rem 0 1rem;
+        }
+
         .dashboard-subtitle {
             color: var(--body-quiet-color, #6b7280);
             font-size: 0.95rem;
@@ -116,6 +124,54 @@
             font-size: 0.9rem;
         }
 
+        /* Bounds the actions so five of them read as a panel rather than as a page of
+           buttons pushing the charts below the fold. */
+        .dashboard-panel {
+            border: 1px solid var(--hairline-color, #e5e7eb);
+            border-radius: 6px;
+            padding: 0.75rem 1rem 1rem;
+            margin: 1rem 0 0;
+        }
+
+        .action-group-heading {
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--body-quiet-color, #6b7280);
+            margin: 1rem 0 0;
+        }
+
+        .action-group-heading:first-child {
+            margin-top: 0;
+        }
+
+        .dashboard-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin: 0.75rem 0 0;
+        }
+
+        .dashboard-actions form {
+            margin: 0;
+        }
+
+        .dashboard-actions .refresh-meta {
+            color: var(--body-quiet-color, #6b7280);
+            font-size: 0.9rem;
+        }
+
+        .dashboard-actions .export-option {
+            margin-left: 0.5rem;
+        }
+
+        .dashboard-actions button[disabled] {
+            opacity: 0.6;
+            cursor: progress;
+        }
+
         canvas {
             width: 100% !important;
             height: auto !important;
@@ -129,7 +185,7 @@
     <div class="dashboard-main">
         <div class="dashboard-wrapper">
             <div>
-                <h1 class="dashboard-title">{% trans "Dashboard" %}{% if dashboard_account %} – {{ dashboard_account.description }}{% endif %}</h1>
+                <h1 class="dashboard-title">{% trans "Dashboard" %}{% if dashboard_account %}: {{ dashboard_account.description }}{% endif %}</h1>
                 {% if dashboard_account and dashboard_currency %}
                     <p class="dashboard-subtitle">
                         {% blocktrans with currency=dashboard_currency %}All amounts shown in {{ currency }}.{% endblocktrans %}
@@ -140,7 +196,52 @@
                         {% blocktrans with value=dashboard_portfolio_value_display %}Total portfolio value: {{ value }}{% endblocktrans %}
                     </p>
                 {% endif %}
+
+                {% if dashboard_action_groups %}
+                    <div class="dashboard-panel">
+                        {% for group in dashboard_action_groups %}
+                            <h2 class="action-group-heading">{{ group.label }}</h2>
+                            {% for action in group.actions %}
+                                <div class="dashboard-actions">
+                                    <form method="post" action="{{ action.url }}"
+                                          data-action-form data-action="{{ action.name }}"
+                                          data-busy-label="{{ action.busy_label }}"
+                                          {% if action.returns_file %}data-returns-file{% endif %}>
+                                        {% csrf_token %}
+                                        <button type="submit" data-action-button
+                                                class="button{% if action.primary %} default{% endif %}">
+                                            {{ action.label }}
+                                        </button>
+                                        {% for option in action.options %}
+                                            <label class="refresh-meta export-option">
+                                                <input type="checkbox" name="{{ option.name }}">
+                                                {{ option.label }}
+                                            </label>
+                                        {% endfor %}
+                                    </form>
+                                    <span class="refresh-meta">
+                                        {% if action.status_text %}{{ action.status_text }}{% endif %}
+                                        {{ action.description }}
+                                    </span>
+                                </div>
+                            {% endfor %}
+                        {% endfor %}
+                    </div>
+                {% endif %}
             </div>
+
+
+            {% if tax_settings_warning %}
+                <ul class="messagelist">
+                    <li class="warning">{{ tax_settings_warning }}</li>
+                </ul>
+            {% endif %}
+
+            {% if data_check_warning %}
+                <ul class="messagelist">
+                    <li class="warning">{{ data_check_warning }}</li>
+                </ul>
+            {% endif %}
 
             {% if dashboard_message %}
                 <ul class="messagelist">
@@ -151,6 +252,11 @@
             <div class="chart-grid">
                 <section class="chart-card chart-card--full">
                     <h2>{% trans "Remaining parcel value" %}</h2>
+                    {% if parcel_total_display %}
+                        <p class="chart-total">
+                            {% blocktrans with value=parcel_total_display %}Total: {{ value }}{% endblocktrans %}
+                        </p>
+                    {% endif %}
                     {% if parcel_chart_labels %}
                         <canvas id="parcelDonut" aria-label="{% trans "Remaining parcel value by instrument" %}"></canvas>
                     {% else %}
@@ -244,14 +350,14 @@
             const formatted = numericValue.toLocaleString(undefined, {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
-            });
+        });
             return currency ? `${currency} ${formatted}` : formatted;
         };
         const formatUnits = (value) => {
             const numericValue = Number(value || 0);
             return numericValue.toLocaleString(undefined, {
                 maximumFractionDigits: 4,
-            });
+        });
         };
 
         const parcelLabelsNode = document.getElementById('parcel-labels-data');
@@ -319,7 +425,7 @@
                         animateScale: true,
                     },
                 },
-            });
+        });
         }
 
         const incomeCanvas = document.getElementById('incomeStacked');
@@ -377,7 +483,7 @@
                         },
                     },
                 },
-            });
+        });
         }
 
         const areaCanvas = document.getElementById('portfolioArea');
@@ -395,7 +501,7 @@
                     pointRadius: 0,
                     stepped: 'before',
                 };
-            });
+        });
 
             new window.Chart(areaCanvas, {
                 type: 'line',
@@ -443,7 +549,7 @@
                         },
                     },
                 },
-            });
+        });
         }
 
         const valueCanvas = document.getElementById('portfolioValue');
@@ -460,7 +566,7 @@
                     borderWidth: 2,
                     pointRadius: 0,
                 };
-            });
+        });
 
             new window.Chart(valueCanvas, {
                 type: 'line',
@@ -506,8 +612,37 @@
                         },
                     },
                 },
-            });
+        });
         }
     })();
 </script>
+<script>
+    // These actions run synchronously and can take a while, so a button that still looks
+    // clickable invites an impatient second press and a second full run. One handler for
+    // every action rather than one per button: what differs between them -- the busy text,
+    // and whether the response is a file -- is declared on the action and read off the
+    // markup, so adding an action needs no JavaScript at all.
+    (function () {
+        var forms = document.querySelectorAll('[data-action-form]');
+        Array.prototype.forEach.call(forms, function (form) {
+            form.addEventListener('submit', function () {
+                var button = form.querySelector('[data-action-button]');
+                if (!button) { return; }
+                var label = button.textContent;
+                button.disabled = true;
+                button.textContent = form.getAttribute('data-busy-label') || label;
+
+                // A response that is a file never navigates, so nothing would ever put this
+                // button back. Restore it once the download has had time to start.
+                if (form.hasAttribute('data-returns-file')) {
+                    window.setTimeout(function () {
+                        button.disabled = false;
+                        button.textContent = label;
+                    }, 8000);
+                }
+            });
+        });
+    })();
+</script>
+
 {% endblock %}

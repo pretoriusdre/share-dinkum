@@ -1,11 +1,7 @@
-"""The installed version, and whether a newer one has been released.
+"""The installed version, and whether GitHub has a newer release.
 
-The version itself comes from the installed package metadata, which `uv sync` writes from
-pyproject.toml, so the version is set in exactly one place.
-
-The update check asks GitHub for the latest release. It is deliberately incapable of breaking the
-page it appears on: every failure path returns "no update known" and logs a warning, so being
-offline, rate limited, or ahead of the first published release all look the same to the caller.
+The version comes from package metadata (set from pyproject.toml by `uv sync`). A failed
+update check logs a warning and reports no update, so it never breaks the page.
 """
 
 import json
@@ -13,6 +9,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as installed_version
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -25,7 +22,7 @@ PACKAGE_NAME = 'share-dinkum'
 
 # Used when the project has not been installed, eg a plain `git clone` that never had `uv sync` run.
 # Keep this in step with the version in pyproject.toml.
-FALLBACK_VERSION = '0.2.0'
+FALLBACK_VERSION = '0.3.0'
 
 RELEASES_API_URL = 'https://api.github.com/repos/pretoriusdre/share-dinkum/releases/latest'
 RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
@@ -33,9 +30,12 @@ RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
 # Short enough that a slow or unreachable network is not noticeable on the page which triggers it.
 REQUEST_TIMEOUT_SECONDS = 3
 CHECK_INTERVAL = timedelta(hours=24)
+# A check that could not reach GitHub is remembered for this long, so an offline machine is not
+# made to wait on the request every time the dashboard loads.
+FAILED_CHECK_RETRY = timedelta(hours=1)
 
 
-def get_version():
+def get_version() -> str:
     try:
         return installed_version(PACKAGE_NAME)
     except PackageNotFoundError:
@@ -45,12 +45,12 @@ def get_version():
 __version__ = get_version()
 
 
-def get_cache_path():
-    """Where the last check is remembered, so the dashboard is not calling out on every page load."""
+def get_cache_path() -> Path:
+    """Path of the file caching the last update check."""
     return Path(settings.BASE_DIR) / '.update_check.json'
 
 
-def parse_version(text):
+def parse_version(text: Any) -> tuple[int, ...] | None:
     """Turn 'v1.2.3' into (1, 2, 3), or None for anything which is not that shape."""
     if not text:
         return None
@@ -61,24 +61,29 @@ def parse_version(text):
         return None
 
 
-def read_cache():
-    """The last check, if it is still recent enough to reuse. None means go and look again."""
+def read_cache() -> dict[str, Any] | None:
+    """The cached check if still current, else None.
+
+    Current for CHECK_INTERVAL after reaching GitHub, FAILED_CHECK_RETRY after failing to.
+    """
     try:
         cached = json.loads(get_cache_path().read_text(encoding='utf-8'))
-        checked_at = datetime.fromisoformat(cached['checked_at'])
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(cached['checked_at'])
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
-    if datetime.now(timezone.utc) - checked_at > CHECK_INTERVAL:
+    interval = CHECK_INTERVAL if cached.get('reached', True) else FAILED_CHECK_RETRY
+    if age > interval:
         return None
     return cached
 
 
-def write_cache(latest_version, release_url):
-    payload = {
+def write_cache(latest_version: str | None, release_url: str | None, reached: bool = True) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         'checked_at': datetime.now(timezone.utc).isoformat(),
         'latest_version': latest_version,
         'release_url': release_url,
+        'reached': reached,
     }
     try:
         get_cache_path().write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -88,11 +93,10 @@ def write_cache(latest_version, release_url):
     return payload
 
 
-def fetch_latest_release():
-    """Ask GitHub for the latest release.
+def fetch_latest_release() -> tuple[bool, str | None, str | None]:
+    """Return `(reached_github, tag_name, release_url)` for the latest GitHub release.
 
-    Returns (reached_github, tag_name, release_url). A 404 counts as reaching GitHub: it means no
-    release has been published yet, which is a real answer worth remembering rather than a failure.
+    A 404 (no releases yet) counts as reaching GitHub.
     """
     try:
         response = requests.get(
@@ -111,13 +115,12 @@ def fetch_latest_release():
         return False, None, None
 
 
-def check_for_update(force=False):
-    """The installed version, and the newer one if there is one.
+def check_for_update(force: bool = False) -> dict[str, Any]:
+    """A dict of current and latest version, release URL, and whether an update is available.
 
-    The result is always safe to render. Where the check could not be made, or no release has been
-    published, the update fields are simply empty.
+    Uses the cache unless `force`. If GitHub cannot be reached, the update fields stay empty.
     """
-    result = {
+    result: dict[str, Any] = {
         'current_version': __version__,
         'latest_version': None,
         'release_url': RELEASES_PAGE_URL,
@@ -128,8 +131,11 @@ def check_for_update(force=False):
     if cached is None:
         reached_github, tag_name, release_url = fetch_latest_release()
         if not reached_github:
+            write_cache(latest_version=None, release_url=None, reached=False)
             return result
         cached = write_cache(latest_version=tag_name, release_url=release_url)
+    if not cached.get('reached', True):
+        return result
 
     latest_version = cached.get('latest_version')
     result['latest_version'] = latest_version

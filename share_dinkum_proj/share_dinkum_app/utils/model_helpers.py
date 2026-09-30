@@ -1,10 +1,11 @@
+from django.db import models
 from django.forms.models import model_to_dict
 
 import logging
 logger = logging.getLogger(__name__)
 
 
-def save_with_logging(obj, context=""):
+def save_with_logging(obj: models.Model, context: str = "") -> None:
     try:
         logger.debug(f"Saving object of type {type(obj).__name__} in context: {context}")
         logger.debug(f"Object data before save: {model_to_dict(obj)}")
