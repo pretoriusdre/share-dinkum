@@ -46,15 +46,14 @@ To upgrade, stop the server and run `uv run update`.
 
 - **CGT return snapshots** (`CGTReturnSnapshot`): a year's CGT figures at a point in time. The basis
   change report compares a snapshot with a fresh calculation. `uv run dev capture_cgt_snapshot` takes
-  one for every year with a sale.
+  a snapshot for every year with a sale.
 
 - **Instrument legal form and market country.**
   - `uv run dev suggest_instrument_classification` fills in what it can from dividend and
     distribution history and lists the rest.
-  - Unclassified instruments are reported, not assumed.
+  - Unclassified instruments are reported, rather than assumed. You'd need to check these.
   - A schedule stays a draft until each legal form is confirmed: tick **Confirm legal form** on the
-    instrument, use the bulk action on the instrument list, or correct the suggestion. Saving an
-    unrelated field does not confirm it.
+    instrument, use the bulk action on the instrument list, or correct the suggestion.
 
 - **Dashboard actions:** Refresh prices, Take capital gains snapshot, Export Australian CGT report,
   Export portfolio, Full backup.
@@ -63,9 +62,6 @@ To upgrade, stop the server and run `uv run update`.
 
 - **`uv run dev refetch_price_history`** fetches every stored price again, as traded (see below).
   It deletes nothing, and names any holding the provider no longer has, whose prices stay adjusted.
-
-- **A CGT schedule warns when an earlier year's net capital loss is not recorded** as carried
-  forward. Nothing is carried forward until it is, so the later year's net gain may be overstated.
 
 - **The dashboard warns about a parcel whose cost base has gone below zero** from AMIT decreases.
   The excess is a capital gain in the year it arose (CGT event E10), which is not worked out here.
@@ -149,9 +145,6 @@ To upgrade, stop the server and run `uv run update`.
 - **A parcel cannot be allocated to sales for more than it holds**, nor to a sale of another
   instrument or one dated before its purchase.
 
-- **Parcels cannot be deleted in the admin.**
-
-
 - **Backups go to one place: `~/share-dinkum-backups/main/`**, for `uv run update`, the notebook's
   `backup()` and the dashboard. Previously two folders in two layouts, and only the notebook's was
   pruned.
@@ -189,8 +182,8 @@ To upgrade, stop the server and run `uv run update`.
 - **`capture_cutover_valuations --date` values the date given**, with `--purpose` to say what for.
   It valued 30 June 2027 whatever date it was given.
 
-- **The dashboard charts follow share splits.** A holding stayed in pre-split units and went
-  negative once post-split units were sold.
+- **The dashboard charts now compensate for share splits.** Previously, a holding stayed in pre-split 
+  units and went negative once post-split units were sold.
 
 - **An offline update check is not retried for an hour**, rather than on every dashboard load.
 
