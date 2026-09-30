@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from django.conf import settings
 from django.core.files.base import ContentFile
 
@@ -8,7 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def process_filefield(value):
+def process_filefield(value: Any) -> "str | ContentFile[bytes] | None":
     # Used to handle a filefield in a data import process.
 
     # Case 0: No file provided (value is None, empty string, or a pandas blank).
@@ -59,9 +60,9 @@ def process_filefield(value):
 
 
 
-def user_directory_path(instance, filename):
+def user_directory_path(instance: Any, filename: str) -> str:
 
-    parts = []
+    parts: list[str] = []
     if hasattr(instance, 'account'):
         parts.append(f'{instance.account.id}')
     if hasattr(instance, 'instrument'):

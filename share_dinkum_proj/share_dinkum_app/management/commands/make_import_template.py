@@ -4,10 +4,12 @@ Generated from the models so the headers always match what the loader expects.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.db.models import Model
 
 from djmoney.models.fields import MoneyField
 
@@ -46,12 +48,12 @@ EXCLUDED_FIELDS = {
 # Columns which are not plain model fields. SellAllocation points at a Parcel, which does not exist
 # until the buy it came from has been loaded, so the file refers to the buy and the sell by the
 # legacy_id given to them in this same file. See DataLoader.load_table_to_model.
-EXTRA_COLUMNS = {
+EXTRA_COLUMNS: dict[type[Model], list[str]] = {
     app_models.SellAllocation: ['lookup_legacy_sell', 'lookup_legacy_buy'],
 }
 
 
-def get_lookup_column(field):
+def get_lookup_column(field: Any) -> str | None:
     """The `field__name` or `field__code` lookup column for a relation, or None if neither exists."""
     related_field_names = {f.name for f in field.related_model._meta.fields}
     for candidate in ('name', 'code'):
@@ -60,12 +62,12 @@ def get_lookup_column(field):
     return None
 
 
-def get_template_columns(model):
+def get_template_columns(model: type[Model]) -> list[str]:
     """A model's fillable columns: legacy_id first, notes last, currency after its amount."""
     field_names = {f.name for f in model._meta.fields}
     money_field_names = {f.name for f in model._meta.fields if isinstance(f, MoneyField)}
 
-    columns = []
+    columns: list[str] = []
     for field in model._meta.fields:
         name = field.name
 
@@ -101,7 +103,7 @@ def get_template_columns(model):
     return ordered
 
 
-def build_template(output_path):
+def build_template(output_path: Path) -> None:
     generator = excelinterface.ExcelGen(
         title='Share Dinkum import template',
         description='Fill in one file per portfolio. Loading a file only ever adds to the portfolio it is loaded into.',
@@ -130,7 +132,7 @@ def build_template(output_path):
 class Command(BaseCommand):
     help = 'Create an empty Excel import template, ready to fill in for one portfolio.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             '--output',
             default=None,
@@ -142,7 +144,7 @@ class Command(BaseCommand):
             help='Overwrite the file if it already exists.',
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         default_path = Path(__file__).resolve().parents[2] / 'import_data' / 'data_import_template_blank.xlsx'
         output_path = Path(options['output']).resolve() if options['output'] else default_path
 

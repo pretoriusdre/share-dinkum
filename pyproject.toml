@@ -29,3 +29,40 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = ["devserver"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13.0",
+    "django-stubs[compatible-mypy]>=5.1.0",
+    "pandas-stubs>=2.2.0",
+    "types-openpyxl>=3.1.0",
+    "types-requests>=2.32.0",
+]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ['/migrations/', '^build/', '^\.venv/', 'tests\.py$']
+
+[tool.django-stubs]
+django_settings_module = "share_dinkum_proj.settings"
+
+[[tool.mypy.overrides]]
+module = "djmoney.models.fields"
+follow_imports = "skip"
+
+# The plugin cannot resolve reverse managers across the circular AppUser <-> Account foreign keys.
+[[tool.mypy.overrides]]
+module = "share_dinkum_app.models"
+disable_error_code = ["django-manager-missing"]
+
+# Tests are not annotated.
+[[tool.mypy.overrides]]
+module = "share_dinkum_app.tests"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false

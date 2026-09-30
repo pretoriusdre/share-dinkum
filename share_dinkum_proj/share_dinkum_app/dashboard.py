@@ -6,18 +6,20 @@ Each action is one entry in `DASHBOARD_ACTIONS`, which supplies its URL, button,
 """
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Callable
+from typing import Any
 import logging
 import tempfile
 
 from django.conf import settings
 from django.contrib import admin, messages
 from django.db.models import Max
-from django.http import FileResponse, HttpResponse
+from django.http import FileResponse, HttpRequest, HttpResponse
+from django.http.response import HttpResponseBase
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
@@ -32,6 +34,7 @@ from djmoney.money import Money
 from share_dinkum_app import cgt, data_checks, version
 from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.models import (
+    Account,
     Buy,
     CGTReturnSnapshot,
     CurrentExchangeRate,
@@ -51,13 +54,13 @@ from share_dinkum_app.models import (
 logger = logging.getLogger(__name__)
 
 
-def _select_account_for_user(user):
+def _select_account_for_user(user: Any) -> Account | None:
     if not getattr(user, 'is_authenticated', False):
         return None
     return getattr(user, 'visible_account', None)
 
 
-def _decimal_to_float(value):
+def _decimal_to_float(value: Any) -> float:
     if value is None:
         return 0.0
     if not isinstance(value, Decimal):
@@ -65,7 +68,7 @@ def _decimal_to_float(value):
     return float(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 
-def _format_money(money):
+def _format_money(money: Any) -> str:
     if money is None:
         return ''
     amount = getattr(money, 'amount', None)
@@ -81,7 +84,7 @@ def _format_money(money):
     return f"{formatted_amount:,.2f}"
 
 
-def _export_last_taken(account):
+def _export_last_taken(account: Account | None) -> date | None:
     """The date of this portfolio's latest data export, or None."""
     if account is None:
         return None
@@ -94,7 +97,7 @@ def _export_last_taken(account):
     return latest.created_at.date() if latest else None
 
 
-def _snapshot_last_taken(account):
+def _snapshot_last_taken(account: Account | None) -> date | None:
     """The date of this portfolio's latest capital gains snapshot, or None."""
     if account is None:
         return None
@@ -105,7 +108,7 @@ def _snapshot_last_taken(account):
     )
 
 
-def _prices_last_updated(account):
+def _prices_last_updated(account: Account | None) -> date | None:
     """The latest date this portfolio has a price for, or None."""
     if account is None:
         return None
@@ -116,7 +119,7 @@ def _prices_last_updated(account):
     )
 
 
-def _tax_settings_warning(account):
+def _tax_settings_warning(account: Account | None) -> str | None:
     """A warning if capital gains rest on undeclared tax settings, else None.
 
     Raised when the account has sales and its taxpayer type or residency is undeclared, or
@@ -127,7 +130,7 @@ def _tax_settings_warning(account):
     if not Sell.objects.filter(account=account, is_active=True).exists():
         return None
 
-    missing = []
+    missing: list[str] = []
     if account.taxpayer_type == TaxpayerType.UNDECLARED:
         missing.append('who the portfolio belongs to')
     if not ResidencyPeriod.objects.filter(account=account, is_active=True).exists():
@@ -150,7 +153,7 @@ def _tax_settings_warning(account):
     )
 
 
-def _data_check_warning(account):
+def _data_check_warning(account: Account | None) -> str | None:
     """A warning listing what `data_checks` found in the portfolio, else None.
 
     Cleared by the `repair_portfolio_data` command, or, for what needs a person, by fixing
@@ -174,26 +177,26 @@ def _data_check_warning(account):
     )
 
 
-def prepare_dashboard_context(request, context):
+def prepare_dashboard_context(request: HttpRequest, context: dict[str, Any]) -> dict[str, Any]:
     account = _select_account_for_user(request.user)
 
-    dashboard_message = None
+    dashboard_message: str | None = None
     dashboard_message_level = 'info'
-    total_portfolio_value_display = None
-    parcel_labels = []
-    parcel_values = []
+    total_portfolio_value_display: str | None = None
+    parcel_labels: list[str] = []
+    parcel_values: list[float] = []
     #: Summed from the chart's slices, not read off the account, so the caption always
     #: matches the chart (an instrument that fails to convert is left out of both).
     parcel_total = Decimal('0')
-    parcel_total_display = None
-    income_labels = []
-    dividend_series = []
-    distribution_series = []
-    area_chart_labels = []
-    area_chart_datasets = []
-    value_chart_labels = []
-    value_chart_datasets = []
-    dashboard_currency = None
+    parcel_total_display: str | None = None
+    income_labels: list[str] = []
+    dividend_series: list[float] = []
+    distribution_series: list[float] = []
+    area_chart_labels: list[str] = []
+    area_chart_datasets: list[dict[str, Any]] = []
+    value_chart_labels: list[str] = []
+    value_chart_datasets: list[dict[str, Any]] = []
+    dashboard_currency: str | None = None
 
 
     if not account:
@@ -236,7 +239,7 @@ def prepare_dashboard_context(request, context):
         if parcel_labels:
             parcel_total_display = _format_money(Money(parcel_total, account.currency))
 
-        income_by_year = {}
+        income_by_year: dict[int, dict[str, Any]] = {}
 
         dividends = Dividend.objects.filter(account=account, is_active=True)
         for dividend in dividends:
@@ -305,7 +308,7 @@ def prepare_dashboard_context(request, context):
         )
 
         if area_instrument_ids:
-            trade_adjustments = defaultdict(dict)
+            trade_adjustments: defaultdict[date, dict[Any, Decimal]] = defaultdict(dict)
 
             for record in buy_records:
                 inst_id = record['instrument_id']
@@ -324,16 +327,16 @@ def prepare_dashboard_context(request, context):
             # Holdings are in the units of each day, as the prices are, so a split is a step
             # on its ex-date. Without it a holding stayed in pre-split units for good and went
             # negative once the post-split units were sold.
-            split_ratios = defaultdict(dict)
-            for record in ShareSplit.objects.filter(
+            split_ratios: defaultdict[date, dict[Any, Decimal]] = defaultdict(dict)
+            for split_record in ShareSplit.objects.filter(
                     account=account, is_active=True,
                     instrument_id__in=area_instrument_ids,
             ).values('instrument_id', 'date', 'quantity_before', 'quantity_after'):
-                if record['quantity_before']:
-                    ratios = split_ratios[record['date']]
-                    ratios[record['instrument_id']] = ratios.get(
-                        record['instrument_id'], Decimal('1')) * (
-                        Decimal(record['quantity_after']) / Decimal(record['quantity_before']))
+                if split_record['quantity_before']:
+                    ratios = split_ratios[split_record['date']]
+                    ratios[split_record['instrument_id']] = ratios.get(
+                        split_record['instrument_id'], Decimal('1')) * (
+                        Decimal(split_record['quantity_after']) / Decimal(split_record['quantity_before']))
 
             available_dates = set(trade_adjustments.keys())
 
@@ -373,8 +376,8 @@ def prepare_dashboard_context(request, context):
                 )
 
                 quantities_current = {inst_id: Decimal('0') for inst_id in ordered_instrument_ids}
-                dataset_values = {inst_id: [] for inst_id in ordered_instrument_ids}
-                quantities_by_date = {}
+                dataset_values: dict[Any, list[float]] = {inst_id: [] for inst_id in ordered_instrument_ids}
+                quantities_by_date: dict[date, dict[Any, Decimal]] = {}
 
                 for date_key in sorted_dates:
                     # The split first: it reaches what was held before its ex-date, and the
@@ -412,7 +415,7 @@ def prepare_dashboard_context(request, context):
                     start_date = sorted_dates[0]
                     end_date = sorted_dates[-1]
 
-                    price_history_map = defaultdict(dict)
+                    price_history_map: defaultdict[Any, dict[date, Any]] = defaultdict(dict)
                     price_history_qs = (
                         InstrumentPriceHistory.objects.filter(
                             account=account,
@@ -421,10 +424,10 @@ def prepare_dashboard_context(request, context):
                         )
                         .values('instrument_id', 'date', 'close')
                     )
-                    for record in price_history_qs:
-                        price_history_map[record['instrument_id']][record['date']] = record['close']
+                    for price_record in price_history_qs:
+                        price_history_map[price_record['instrument_id']][price_record['date']] = price_record['close']
 
-                    initial_prices = {}
+                    initial_prices: dict[Any, Any] = {}
                     for inst_id in ordered_instrument_ids:
                         prior_close = (
                             InstrumentPriceHistory.objects.filter(
@@ -440,20 +443,21 @@ def prepare_dashboard_context(request, context):
                             initial_prices[inst_id] = prior_close
 
                     account_currency = str(account.currency)
-                    instrument_currency_by_id = {}
-                    currencies_requiring_conversion = set()
+                    instrument_currency_by_id: dict[Any, str] = {}
+                    currencies_requiring_conversion: set[str] = set()
 
                     for inst_id in ordered_instrument_ids:
-                        instrument_obj = instrument_by_id.get(inst_id)
-                        if instrument_obj is None:
+                        known_instrument = instrument_by_id.get(inst_id)
+                        if known_instrument is None:
                             continue
-                        currency_code = str(instrument_obj.currency)
+                        currency_code = str(known_instrument.currency)
                         instrument_currency_by_id[inst_id] = currency_code
                         if currency_code != account_currency:
                             currencies_requiring_conversion.add(currency_code)
 
-                    exchange_rate_maps = {currency: {} for currency in currencies_requiring_conversion}
-                    initial_exchange_rates = {}
+                    exchange_rate_maps: dict[str, dict[date, Any]] = {
+                        currency: {} for currency in currencies_requiring_conversion}
+                    initial_exchange_rates: dict[str, Any] = {}
 
                     if currencies_requiring_conversion:
                         exchange_rate_qs = (
@@ -466,10 +470,10 @@ def prepare_dashboard_context(request, context):
                             .values('convert_from', 'date', 'exchange_rate_multiplier')
                         )
 
-                        for record in exchange_rate_qs:
-                            exchange_rate_maps.setdefault(record['convert_from'], {})[
-                                record['date']
-                            ] = record['exchange_rate_multiplier']
+                        for rate_record in exchange_rate_qs:
+                            exchange_rate_maps.setdefault(rate_record['convert_from'], {})[
+                                rate_record['date']
+                            ] = rate_record['exchange_rate_multiplier']
 
                         for currency_code in currencies_requiring_conversion:
                             prior_rate = (
@@ -500,7 +504,8 @@ def prepare_dashboard_context(request, context):
                         for currency in currencies_requiring_conversion
                     }
 
-                    value_series_by_instrument = {inst_id: [] for inst_id in ordered_instrument_ids}
+                    value_series_by_instrument: dict[Any, list[Decimal]] = {
+                        inst_id: [] for inst_id in ordered_instrument_ids}
 
                     for date_key in sorted_dates:
                         for inst_id in ordered_instrument_ids:
@@ -528,9 +533,9 @@ def prepare_dashboard_context(request, context):
                             price_decimal = price if isinstance(price, Decimal) else Decimal(price)
                             value = (quantity * price_decimal).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
 
-                            currency_code = instrument_currency_by_id.get(inst_id)
-                            if currency_code and currency_code != account_currency:
-                                rate = exchange_state.get(currency_code)
+                            inst_currency = instrument_currency_by_id.get(inst_id)
+                            if inst_currency and inst_currency != account_currency:
+                                rate = exchange_state.get(inst_currency)
                                 if rate is None:
                                     value_series_by_instrument[inst_id].append(Decimal('0'))
                                     continue
@@ -596,7 +601,7 @@ def prepare_dashboard_context(request, context):
     return context
 
 
-def dashboard_view(request):
+def dashboard_view(request: HttpRequest) -> TemplateResponse:
     context = admin.site.each_context(request)
     app_list = admin.site.get_app_list(request)
     context['app_list'] = app_list
@@ -612,7 +617,7 @@ def dashboard_view(request):
 
 
 @require_POST
-def export_data_view(request):
+def export_data_view(request: HttpRequest) -> HttpResponseBase:
     """Create a DataExport and return its Excel file as a download.
 
     Price history is included only if the `include_price_history` option is ticked.
@@ -646,12 +651,12 @@ def export_data_view(request):
     return FileResponse(
         export.file.open('rb'),
         as_attachment=True,
-        filename=Path(export.file.name).name,
+        filename=Path(export.file.name or '').name,
     )
 
 
 @require_POST
-def capture_snapshot_view(request):
+def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
     """Take a capital gains snapshot for every fiscal year with a sale.
 
     Snapshots are not marked lodged; the user ticks that themselves.
@@ -682,7 +687,7 @@ def capture_snapshot_view(request):
         return redirect(dashboard_url)
 
     basis = cgt.residency_basis(account)
-    recorded = []
+    recorded: list[FiscalYear] = []
     try:
         for fiscal_year in fiscal_years:
             try:
@@ -701,7 +706,7 @@ def capture_snapshot_view(request):
     if not recorded:
         return redirect(dashboard_url)
 
-    names = ', '.join(fiscal_year.name for fiscal_year in recorded)
+    names = ', '.join(fiscal_year.name or '' for fiscal_year in recorded)
     note = (
         ' These assume an Australian resident throughout and a flat 50% discount, because '
         'residency has not been declared.'
@@ -716,7 +721,7 @@ def capture_snapshot_view(request):
 
 
 @require_POST
-def refresh_prices_view(request):
+def refresh_prices_view(request: HttpRequest) -> HttpResponse:
     """Refresh prices and exchange rates for the user's portfolio.
 
     Sets `Account.update_price_history` and saves; a signal does the work.
@@ -758,7 +763,7 @@ def refresh_prices_view(request):
 
 
 @require_POST
-def export_cgt_schedule_view(request):
+def export_cgt_schedule_view(request: HttpRequest) -> HttpResponse:
     """Return the capital gains schedule as an Excel download.
 
     Built in a temporary file, read into memory and deleted; nothing is stored.
@@ -795,7 +800,7 @@ def export_cgt_schedule_view(request):
 
 
 @require_POST
-def full_backup_view(request):
+def full_backup_view(request: HttpRequest) -> HttpResponse:
     """Back up the database and media to the backups folder, not as a download."""
     from share_dinkum_app import backup as backup_module
 
@@ -842,8 +847,8 @@ class DashboardAction:
     group: str
     label: str
     description: str
-    view: Callable
-    status: Callable | None = None
+    view: Callable[..., HttpResponseBase]
+    status: Callable[[Account | None], str | None] | None = None
     options: tuple[ActionOption, ...] = ()
     primary: bool = False
     #: Button text while the (synchronous) action runs; the button is disabled meanwhile.
@@ -852,35 +857,35 @@ class DashboardAction:
     returns_file: bool = False
 
     @property
-    def url_name(self):
+    def url_name(self) -> str:
         return f'dashboard_{self.name}'
 
 
-def _refresh_status(account):
+def _refresh_status(account: Account | None) -> str:
     latest = _prices_last_updated(account)
     return f'Latest close held: {localize(latest)}.' if latest else 'No prices held yet.'
 
 
-def _snapshot_status(account):
+def _snapshot_status(account: Account | None) -> str:
     latest = _snapshot_last_taken(account)
     if not latest:
         return 'No snapshot taken yet.'
     return f'Last snapshot {localize(latest)}.'
 
 
-def _export_status(account):
+def _export_status(account: Account | None) -> str:
     latest = _export_last_taken(account)
     return f'Last exported {localize(latest)}.' if latest else 'Never exported.'
 
 
-def _backup_root():
+def _backup_root() -> Path:
     """The backup root shared with `uv run update` and the notebook."""
     from share_dinkum_app import backup as backup_module
 
     return backup_module.DEFAULT_BACKUP_ROOT
 
 
-def _backup_status(account):
+def _backup_status(account: Account | None) -> str:
     """When the latest backup was taken, read from the backup folder names."""
     from share_dinkum_app import backup as backup_module
 
@@ -899,7 +904,7 @@ def _backup_status(account):
 
 
 #: Every dashboard action, in display order.
-DASHBOARD_ACTIONS = (
+DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
     DashboardAction(
         name='refresh_prices',
         route='refresh-prices/',
@@ -964,10 +969,10 @@ DASHBOARD_ACTIONS = (
 )
 
 
-def action_groups(account):
+def action_groups(account: Account | None) -> list[dict[str, Any]]:
     """`DASHBOARD_ACTIONS` as `[(group, [actions])]`, groups in order of first appearance."""
-    groups = []
-    index_by_group = {}
+    groups: list[dict[str, Any]] = []
+    index_by_group: dict[str, int] = {}
     for action in DASHBOARD_ACTIONS:
         rendered = {
             'name': action.name,

@@ -7,9 +7,13 @@ TAP status is worked out per parcel, not per instrument: the s104-165(3) deeming
 only to parcels held on departure.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from share_dinkum_app.cgt import classification, residency
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account, Instrument
 
 TAP = 'TAP'
 NTAP = 'NTAP'
@@ -22,7 +26,7 @@ REASON_TEMPORARY_RESIDENT = 's768-915: temporary resident, asset is not taxable 
 REASON_TRUST_ATTRIBUTION = 's855-40(2) and s276-55: foreign resident member, gain not attributable to taxable Australian property'
 
 
-def instrument_tap_status(instrument):
+def instrument_tap_status(instrument: 'Instrument | None') -> str | None:
     """TAP or NTAP if the instrument decides it alone, else None (the normal case).
 
     The instrument's override wins if set; otherwise real property is TAP. A "no" override
@@ -36,14 +40,14 @@ def instrument_tap_status(instrument):
     return None
 
 
-def _absences(declared):
+def _absences(declared: residency.Periods) -> list[tuple[date, date | None, bool]]:
     """Runs of back-to-back non-resident periods, as `(start, end, election made)`.
 
     One departure can be recorded as several periods, say FOREIGN then TEMPORARY, or split
     where an election was noted. The election is made once, on leaving, so it covers the
     whole run until residency resumes.
     """
-    absences = []
+    absences: list[tuple[date, date | None, bool]] = []
     for period in sorted(declared, key=lambda p: p.start_date):
         if period.status == residency.RESIDENT:
             continue
@@ -58,7 +62,8 @@ def _absences(declared):
     return absences
 
 
-def i1_deeming_applies(account, acquisition_date, event_date, declared=None):
+def i1_deeming_applies(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
+                       declared: residency.Periods | None = None) -> bool:
     """Whether s104-165(3) deems this parcel TAP.
 
     True if some absence with an I1 election began after the acquisition and covers the
@@ -88,8 +93,9 @@ def i1_deeming_applies(account, acquisition_date, event_date, declared=None):
     return False
 
 
-def override_suppresses_deeming(account, instrument, acquisition_date, event_date,
-                                declared=None):
+def override_suppresses_deeming(account: 'Account | None', instrument: 'Instrument | None',
+                                acquisition_date: date | None, event_date: date | None,
+                                declared: residency.Periods | None = None) -> bool:
     """Whether the instrument resolves to NTAP while s104-165(3) would deem the parcel TAP.
 
     Flags a gain disregarded because of a setting rather than the facts.
@@ -99,7 +105,8 @@ def override_suppresses_deeming(account, instrument, acquisition_date, event_dat
     return i1_deeming_applies(account, acquisition_date, event_date, declared=declared)
 
 
-def parcel_tap_status(account, instrument, acquisition_date, event_date, declared=None):
+def parcel_tap_status(account: 'Account | None', instrument: 'Instrument | None', acquisition_date: date | None,
+                      event_date: date | None, declared: residency.Periods | None = None) -> str | None:
     """TAP or NTAP for a disposal, or None if residency is undeclared."""
     from_instrument = instrument_tap_status(instrument)
     if from_instrument is not None:
@@ -115,7 +122,8 @@ def parcel_tap_status(account, instrument, acquisition_date, event_date, declare
     return NTAP
 
 
-def disregard(account, tap_status, event_date, declared=None):
+def disregard(account: 'Account | None', tap_status: str | None, event_date: date | None,
+              declared: residency.Periods | None = None) -> tuple[bool, str | None]:
     """Return `(is_disregarded, reason)` for a disposal.
 
     Disregarded only if the asset is NTAP and the holder was a declared foreign or temporary
@@ -136,7 +144,8 @@ def disregard(account, tap_status, event_date, declared=None):
     return False, None
 
 
-def disregard_attribution(account, tap_status, event_date, declared=None):
+def disregard_attribution(account: 'Account | None', tap_status: str | None, event_date: date | None,
+                          declared: residency.Periods | None = None) -> tuple[bool, str | None]:
     """Return `(is_disregarded, reason)` for a trust-attributed gain (s855-40(2), s276-55).
 
     Disregarded only if NTAP and the member was a foreign or temporary resident on the event

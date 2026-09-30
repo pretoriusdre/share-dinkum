@@ -8,7 +8,9 @@ yfinance. User-confirmed values are never overwritten; suggestions stay unconfir
     uv run dev suggest_instrument_classification --use-market-data
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from typing import Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app import cgt, yfinanceinterface
 from share_dinkum_app.choices import LegalForm, LegalFormSource
@@ -18,7 +20,7 @@ from share_dinkum_app.models import Account, Instrument, Market
 class Command(BaseCommand):
     help = 'Suggest a legal form for unclassified instruments, and report what remains.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             '--account', type=str, default=None,
             help='Portfolio description. Defaults to every portfolio.')
@@ -31,7 +33,7 @@ class Command(BaseCommand):
             '--dry-run', action='store_true',
             help='Report what would change without writing anything.')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
         if options['account']:
             accounts = accounts.filter(description=options['account'])
@@ -107,7 +109,7 @@ class Command(BaseCommand):
                 'statement or annual tax statement: a company issues shares, a trust issues '
                 'units, and most ETFs are trusts.')
 
-    def _market_data(self, instrument):
+    def _market_data(self, instrument: Instrument) -> dict[str, Any] | None:
         """yfinance info for the instrument, or None on any failure."""
         try:
             ticker = yfinanceinterface.yf.Ticker(instrument.yfinance_ticker_code)

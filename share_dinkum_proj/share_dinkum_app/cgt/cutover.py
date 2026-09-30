@@ -13,8 +13,9 @@ s112-155(1)(d) denies the deemed sale to anyone s115-105 applies to: a foreign o
 resident at any time during ownership after 8 May 2012, including returned expatriates.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 from djmoney.money import Money
 
@@ -23,6 +24,9 @@ from share_dinkum_app.cgt import discount as discount_module, residency
 from share_dinkum_app.constants import CGT_CUTOVER_DATE
 
 #: s112-155(2): deemed sale on 30 June 2027, reacquisition on 1 July 2027, at one valuation.
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account, Instrument, Parcel
+
 DEEMED_SALE_DATE = CGT_CUTOVER_DATE - timedelta(days=1)
 DEEMED_REACQUISITION_DATE = CGT_CUTOVER_DATE
 
@@ -55,7 +59,8 @@ PENDING_S115_105_INDEXED = (
 )
 
 
-def deemed_sale_applies(account, acquisition_date, event_date, declared=None):
+def deemed_sale_applies(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
+                        declared: residency.Periods | None = None) -> tuple[bool, str | None]:
     """Return `(applies, reason)`: whether s112-155 splits this disposal.
 
     Not for a holding wholly on one side of the cutover, a company or super fund, or
@@ -87,7 +92,7 @@ def deemed_sale_applies(account, acquisition_date, event_date, declared=None):
     return True, None
 
 
-def deemed_reset_dates(account, declared=None):
+def deemed_reset_dates(account: 'Account | None', declared: residency.Periods | None = None) -> list[tuple[date, str]]:
     """Dates this account's holdings are deemed sold and reacquired, as `(date, purpose)`,
     oldest first.
 
@@ -98,7 +103,7 @@ def deemed_reset_dates(account, declared=None):
     if declared is None:
         declared = residency.periods(account)
 
-    dates = [(CGT_CUTOVER_DATE, PURPOSE_CUTOVER)]
+    dates: list[tuple[date, str]] = [(CGT_CUTOVER_DATE, PURPOSE_CUTOVER)]
 
     previous = None
     for period in declared:
@@ -115,7 +120,8 @@ def deemed_reset_dates(account, declared=None):
     return sorted(set(dates))
 
 
-def unit_value_at(instrument, day, purpose=PURPOSE_CUTOVER, prefer_recorded=True):
+def unit_value_at(instrument: 'Instrument', day: date, purpose: str = PURPOSE_CUTOVER,
+                  prefer_recorded: bool = True) -> tuple[Any, str | None]:
     """Return `(unit value, source)` on `day`, or `(None, None)`.
 
     A recorded valuation (for `purpose` first, then any) beats that day's closing price.
@@ -146,7 +152,7 @@ def unit_value_at(instrument, day, purpose=PURPOSE_CUTOVER, prefer_recorded=True
     return None, None
 
 
-def scale_for_splits(parcel, day):
+def scale_for_splits(parcel: 'Parcel', day: date) -> Decimal:
     """The combined ratio of the instrument's share splits after `day`.
 
     Divide a per-unit value from `day` by this to get a value per current unit.

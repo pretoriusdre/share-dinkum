@@ -56,12 +56,12 @@ class CGTAssetCategory(models.TextChoices):
     UNCLASSIFIED = 'UNCLASSIFIED', 'Unclassified'
 
     @classmethod
-    def reportable(cls):
+    def reportable(cls) -> list['CGTAssetCategory']:
         """The eight real categories, excluding UNCLASSIFIED."""
         return [member for member in cls if member != cls.UNCLASSIFIED]
 
     @classmethod
-    def label_for(cls, value):
+    def label_for(cls, value: str) -> str:
         """The label for a stored value, or the value itself if unrecognised."""
         try:
             return cls(value).label
@@ -69,7 +69,7 @@ class CGTAssetCategory(models.TextChoices):
             return value
 
     @classmethod
-    def reportable_choices(cls):
+    def reportable_choices(cls) -> list[tuple[str, str]]:
         """Choices excluding UNCLASSIFIED, for the override field."""
         return [(member.value, member.label) for member in cls.reportable()]
 

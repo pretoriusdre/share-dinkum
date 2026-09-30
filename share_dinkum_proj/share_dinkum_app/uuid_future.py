@@ -26,10 +26,10 @@ from uuid import UUID
 # RFC 4122 variant bits and version bits to activate on a UUID integral value.
 _RFC_4122_VERSION_7_FLAGS = ((7 << 76) | (0x8000 << 48))
 
-_last_timestamp_v7 = None
+_last_timestamp_v7: int | None = None
 _last_counter_v7 = 0  # 42-bit counter
 
-def _uuid7_get_counter_and_tail():
+def _uuid7_get_counter_and_tail() -> tuple[int, int]:
     rand = int.from_bytes(os.urandom(10))
     # 42-bit counter with MSB set to 0
     counter = (rand >> 32) & 0x1ff_ffff_ffff
@@ -38,7 +38,7 @@ def _uuid7_get_counter_and_tail():
     return counter, tail
 
 
-def uuid7():
+def uuid7() -> UUID:
     """Generate a UUID from a Unix timestamp in milliseconds and random bits.
 
     UUIDv7 objects feature monotonicity within a millisecond.

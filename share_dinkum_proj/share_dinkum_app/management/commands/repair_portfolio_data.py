@@ -15,7 +15,9 @@ has gone below zero, and cost base adjustments spread unconverted or at a stand-
 (delete each and enter it again).
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from typing import Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 
 from share_dinkum_app import data_checks, recalculate
@@ -25,11 +27,11 @@ from share_dinkum_app.models import Account, CostBaseAdjustment
 class Command(BaseCommand):
     help = 'Recalculate stored figures, reattach split adjustments, refetch stand-in rates, and list what needs fixing by hand.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument('--dry-run', action='store_true')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
         if options['account']:
             accounts = accounts.filter(description=options['account'])
@@ -39,7 +41,7 @@ class Command(BaseCommand):
         for account in accounts:
             self._handle_account(account, options['dry_run'])
 
-    def _handle_account(self, account, dry_run):
+    def _handle_account(self, account: Account, dry_run: bool) -> None:
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         if dry_run:
@@ -72,7 +74,7 @@ class Command(BaseCommand):
             self.stdout.write(style(f'  {finding.summary}.'))
         self._list_for_a_person(account)
 
-    def _list_for_a_person(self, account):
+    def _list_for_a_person(self, account: Account) -> None:
         sales = list(data_checks.unallocated_sales(account))
         if sales:
             self.stdout.write(self.style.WARNING(

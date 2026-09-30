@@ -10,7 +10,9 @@ Where available, indexation is mandatory (s110-36(1A)) and removes the discount 
 A missing CPI quarter raises `IndexationDataUnavailable` rather than guessing.
 """
 
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from typing import TYPE_CHECKING, Any, overload
 
 from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.cgt import discount, residency
@@ -22,6 +24,9 @@ from share_dinkum_app.constants import (
 )
 
 #: s960-275: the factor is worked out to three decimal places, rounding up at five.
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account
+
 _FACTOR_PRECISION = Decimal('0.001')
 
 #: The minimum factor, so deflation never shrinks a cost base (s960-275(4)).
@@ -32,14 +37,18 @@ class IndexationDataUnavailable(Exception):
     """A CPI quarter needed for indexation is missing. Reports mark the row pending."""
 
 
-def quarter_start(day):
+@overload
+def quarter_start(day: date) -> date: ...
+@overload
+def quarter_start(day: None) -> None: ...
+def quarter_start(day: date | None) -> date | None:
     """The first day of the CPI quarter containing `day`."""
     if day is None:
         return None
     return day.replace(month=((day.month - 1) // 3) * 3 + 1, day=1)
 
 
-def index_number(day):
+def index_number(day: date) -> Decimal:
     """The CPI index number for the quarter containing `day`.
 
     Raises `IndexationDataUnavailable` where that quarter has not been loaded.
@@ -57,7 +66,8 @@ def index_number(day):
     return entry.index_number
 
 
-def is_indexation_eligible(account, acquisition_date, event_date, declared=None):
+def is_indexation_eligible(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
+                           declared: residency.Periods | None = None) -> bool:
     """The s114-25 test: resident every day from the later of 1 July 2027 and acquisition
     to the event.
 
@@ -94,7 +104,7 @@ def is_indexation_eligible(account, acquisition_date, event_date, declared=None)
     return disqualifying == 0
 
 
-def indexation_factor(acquisition_date, event_date, method=None):
+def indexation_factor(acquisition_date: date | None, event_date: date | None, method: str | None = None) -> Decimal:
     """The cost base growth factor from acquisition (no earlier than 1 July 2027) to the event.
 
     CPI ratio, or a flat annual rate if `method` is FLAT_RATE. Rounded to three places and
@@ -124,7 +134,8 @@ def indexation_factor(acquisition_date, event_date, method=None):
     return max(factor, _NO_INDEXATION)
 
 
-def indexed_cost_base(cost_base, acquisition_date, event_date, method=None):
+def indexed_cost_base(cost_base: Any, acquisition_date: date | None, event_date: date | None,
+                      method: str | None = None) -> Any:
     """`cost_base` times the indexation factor.
 
     Indexes the whole cost base from one date; s960-275 indexes each element from when it

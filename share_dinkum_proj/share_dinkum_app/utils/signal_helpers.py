@@ -1,13 +1,19 @@
+from collections.abc import Callable
+from typing import Any
+
 from django.db.models.signals import post_save, post_delete, pre_save, pre_delete
 
 import logging
 logger = logging.getLogger(__name__)
 
+# (signal, receiver function, sender, dispatch_uid)
+AppReceiver = tuple[Any, Callable[..., Any], Any, Any]
 
-def get_app_receivers(app_name):
+
+def get_app_receivers(app_name: str) -> list[AppReceiver]:
     """Model signal receivers defined in `app_name`, as `(signal, func, sender, dispatch_uid)`."""
     signals = [post_save, post_delete, pre_save, pre_delete]
-    app_receivers = []
+    app_receivers: list[AppReceiver] = []
 
     for signal in signals:
         for receiver_key, receiver_weakref, _ in signal.receivers:
@@ -23,7 +29,7 @@ def get_app_receivers(app_name):
     return app_receivers
 
 
-def disconnect_app_signals(app_name):
+def disconnect_app_signals(app_name: str) -> list[AppReceiver]:
     """Disconnect the app's model signal receivers; returns them for `reconnect_app_signals`."""
     receivers = get_app_receivers(app_name)
     for signal, func, sender, dispatch_uid in receivers:
@@ -31,7 +37,7 @@ def disconnect_app_signals(app_name):
     return receivers
 
 
-def reconnect_app_signals(receivers):
+def reconnect_app_signals(receivers: list[AppReceiver]) -> None:
     """Reconnect receivers returned by `disconnect_app_signals`."""
     for signal, func, sender, dispatch_uid in receivers:
         signal.connect(func, sender=sender, dispatch_uid=dispatch_uid)

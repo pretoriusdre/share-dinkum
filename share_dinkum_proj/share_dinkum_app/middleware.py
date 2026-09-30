@@ -5,22 +5,27 @@ Signs every request in as a local superuser, creating one on first run. Set
 LOCAL_AUTO_LOGIN=False in .env to remove it and restore the normal login page.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 from django.contrib.auth import get_user_model, login
 from django.db import IntegrityError
+from django.db.models import QuerySet
+from django.http import HttpRequest, HttpResponse
 
 # The username data_import.ipynb creates for your own data. Sharing one name means that whichever
 # of the two runs first, the other finds the account already there and reuses it.
 LOCAL_USERNAME = 'admin'
 
 
-def _usable_superusers():
+def _usable_superusers() -> QuerySet[Any]:
     """Active staff superusers (the ones the admin accepts), oldest first."""
     return get_user_model().objects.filter(
         is_superuser=True, is_active=True, is_staff=True
     ).order_by('date_joined')
 
 
-def _portfolio_recency(user):
+def _portfolio_recency(user: Any) -> tuple[bool, Any]:
     """Sort key ranking a user by when their visible portfolio was created.
 
     Picks the user whose portfolio was set up most recently. Users with none rank lowest.
@@ -30,10 +35,10 @@ def _portfolio_recency(user):
 
 
 class AutoLoginMiddleware:
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest) -> HttpResponse:
         if not request.user.is_authenticated:
             user = self._local_user()
             if user is not None:
@@ -41,7 +46,7 @@ class AutoLoginMiddleware:
         return self.get_response(request)
 
     @staticmethod
-    def _local_user():
+    def _local_user() -> Any:
         """The user to sign in as, created if none exists, or None to show the login page.
 
         Looked up per request, since a new database has no user until the first request.

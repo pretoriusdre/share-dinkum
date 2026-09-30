@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.contrib import admin, messages
 from django import forms
 
@@ -5,9 +7,12 @@ from django.apps import apps
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.admin.exceptions import AlreadyRegistered, NotRegistered
+from django.contrib.admin.options import InlineModelAdmin
 from django.contrib.auth.forms import UserChangeForm
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Model, ForeignKey, ManyToManyRel
+from django.db.models import Model, ForeignKey, ManyToManyRel, QuerySet
+from django.http import HttpRequest
 
 import share_dinkum_app
 import share_dinkum_app.models
@@ -31,15 +36,15 @@ logger = logging.getLogger(__name__)
 
 class BaseInline(admin.TabularInline):
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.exclude = self.get_excluded_fields()
+        self.exclude = self.get_excluded_fields()  # type: ignore[misc]
         #self.autocomplete_fields = self.get_autocomplete_fields()
 
-    def get_autocomplete_fields(self, request=None, obj=None):
+    def get_autocomplete_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
         return [field.name for field in self.model._meta.get_fields() if isinstance(field, ForeignKey)]
 
-    def get_excluded_fields(self):
+    def get_excluded_fields(self) -> list[str]:
         excluded_fields = ['notes']  # Add fields you want to exclude
         return [
             field.name
@@ -55,29 +60,30 @@ class GenericModelAdmin(admin.ModelAdmin):
 
     search_fields = ('id',)
 
-    def __init__(self, *args, **kwargs):
+    # Set on the instance rather than the class, since they are worked out from the model.
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.autocomplete_fields = self.get_autocomplete_fields()
-        self.list_display = self.get_list_display_fields()
-        self.list_filter = self.get_list_filter_fields()
+        self.autocomplete_fields = self.get_autocomplete_fields()  # type: ignore[misc]
+        self.list_display = self.get_list_display_fields()  # type: ignore[assignment]
+        self.list_filter = self.get_list_filter_fields()  # type: ignore[misc, assignment]
 
 
         if hasattr(self.model, 'name'):
-            self.search_fields = getattr(self, 'search_fields', ()) + ('name',)
+            self.search_fields = getattr(self, 'search_fields', ()) + ('name',)  # type: ignore[misc, assignment]
 
         if hasattr(self.model, 'description'):
-            self.search_fields = getattr(self, 'search_fields', ()) + ('description',)
+            self.search_fields = getattr(self, 'search_fields', ()) + ('description',)  # type: ignore[misc, assignment]
 
 
-    def get_autocomplete_fields(self, request=None, obj=None):
+    def get_autocomplete_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
 
         return [field.name for field in self.model._meta.get_fields() if isinstance(field, ForeignKey)]
     
 
-    def get_fields(self, request, obj=None):
+    def get_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:  # type: ignore[override]
         hidden_fields = ['created_at', 'created_by', 'updated_at', 'updated_by']
 
-        form = self._get_form_for_get_fields(request, obj)
+        form = self._get_form_for_get_fields(request, obj)  # type: ignore[attr-defined]
 
 
         # all_fields =  ['id'] + [*form.base_fields] 
@@ -90,7 +96,7 @@ class GenericModelAdmin(admin.ModelAdmin):
     
 
     
-    def get_readonly_fields(self, request, obj=None):
+    def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:
 
         non_editable_fields = [field.name for field in self.model._meta.fields if not field.editable]
         non_editable_fields = [name for name in non_editable_fields if not name.endswith('_currency')]
@@ -100,7 +106,7 @@ class GenericModelAdmin(admin.ModelAdmin):
     
 
 
-    def get_list_display_fields(self, request=None, obj=None):
+    def get_list_display_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
         excluded_names = ['created_at', 'created_by', 'updated_at', 'updated_by', 'notes',  'unit_price_currency', 'total_brokerage_currency', '_creation_handled']
         fields = [
             field.name
@@ -110,11 +116,11 @@ class GenericModelAdmin(admin.ModelAdmin):
         ]
         return fields
         
-    def get_list_filter_fields(self, request=None, obj=None):
+    def get_list_filter_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
         filterable_fields = ['instrument', 'account']
         return [field.name for field in self.model._meta.get_fields() if field.name in filterable_fields]
     
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
         # A record that knows why it cannot be deleted (a share split whose parcels have
         # since been sold) hides the button rather than failing on the confirmation page.
         blocker = getattr(obj, 'deletion_blocker', None)
@@ -127,7 +133,7 @@ class GenericModelAdmin(admin.ModelAdmin):
     #: hit Django's TooManyFieldsSent limit.
     INLINE_FIELD_BUDGET = 6000
 
-    def get_inline_instances(self, request, obj=None):
+    def get_inline_instances(self, request: HttpRequest, obj: Any = None) -> list[InlineModelAdmin]:
 
         inline_instances = super().get_inline_instances(request, obj)
 
@@ -180,8 +186,8 @@ class GenericModelAdmin(admin.ModelAdmin):
         return inline_instances
     
     # Set the default account to the current user's default account if it exists.
-    def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
+    def get_form(self, request: HttpRequest, obj: Any = None, change: bool = False, **kwargs: Any) -> Any:
+        form = super().get_form(request, obj, change=change, **kwargs)
         current_user = request.user
         if current_user and hasattr(current_user, 'default_account'):
             try:
@@ -198,15 +204,15 @@ class GenericModelAdminWithoutAdd(GenericModelAdmin):
 
     Deleting a parcel would remove a holding while the buy that created it remained.
     """
-    def has_add_permission(self, request):
+    def has_add_permission(self, request: HttpRequest) -> bool:
         return False
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
         return False
 
 
 class HiddenModelAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
-    def has_module_permission(self, request):
+    def has_module_permission(self, request: HttpRequest) -> bool:
         return False  # hides from sidebar
 
 
@@ -220,7 +226,7 @@ class AppUserAdmin(UserAdmin):
 
     fieldsets = UserAdmin.fieldsets + (
             (None, {'fields': ('default_account',)}),
-    )
+    )  # type: ignore[operator]
 
 
 class AccountAdmin(admin.ModelAdmin):
@@ -230,12 +236,12 @@ class AccountAdmin(admin.ModelAdmin):
 class ExchangeRateAdmin(GenericModelAdmin):
     """Rates come from the market data provider; a wrong or stand-in one is corrected here."""
 
-    def has_add_permission(self, request):
+    def has_add_permission(self, request: HttpRequest) -> bool:
         # The account is not editable, so a rate added here could never be saved. A missing
         # rate is fetched when a record needs it, and a stand-in is corrected in place.
         return False
 
-    def save_model(self, request, obj, form, change):
+    def save_model(self, request: HttpRequest, obj: Any, form: Any, change: bool) -> None:
         corrected = change and 'exchange_rate_multiplier' in form.changed_data
         super().save_model(request, obj, form, change)
         if corrected:
@@ -253,7 +259,7 @@ class UnsetNullBooleanSelect(forms.NullBooleanSelect):
     labels change; the submitted values are the standard ones.
     """
 
-    def __init__(self, attrs=None):
+    def __init__(self, attrs: dict[str, Any] | None = None) -> None:
         super().__init__(attrs)
         self.choices = [
             ('unknown', 'Unset - derive it per parcel'),
@@ -290,7 +296,7 @@ class InstrumentAdmin(GenericModelAdmin):
     form = InstrumentAdminForm
     actions = ['confirm_legal_form_action']
 
-    def get_fields(self, request, obj=None):
+    def get_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:  # type: ignore[override]
         """Show the confirm tick only for a saved, unconfirmed instrument with a legal form."""
         fields = list(super().get_fields(request, obj))
         if obj is None or obj.is_classified or obj.legal_form == LegalForm.UNKNOWN:
@@ -301,7 +307,7 @@ class InstrumentAdmin(GenericModelAdmin):
             fields.insert(position, CONFIRM_LEGAL_FORM_FIELD)
         return fields
 
-    def save_model(self, request, obj, form, change):
+    def save_model(self, request: HttpRequest, obj: Any, form: Any, change: bool) -> None:
         """Apply the tick before saving, so `Instrument.save()` sees it as caller-set."""
         if form.cleaned_data.get(CONFIRM_LEGAL_FORM_FIELD):
             if obj.legal_form == LegalForm.UNKNOWN:
@@ -315,11 +321,11 @@ class InstrumentAdmin(GenericModelAdmin):
         super().save_model(request, obj, form, change)
 
     @admin.action(description='Confirm legal form as your answer')
-    def confirm_legal_form_action(self, request, queryset):
+    def confirm_legal_form_action(self, request: HttpRequest, queryset: QuerySet[Any]) -> None:
         """Confirm the selected instruments' legal forms, naming any with none set."""
         confirmed = 0
         already = 0
-        unclassified = []
+        unclassified: list[str] = []
 
         for instrument in queryset:
             if instrument.legal_form == LegalForm.UNKNOWN:
@@ -345,7 +351,7 @@ class InstrumentAdmin(GenericModelAdmin):
 
 # Map specific models to custom admin if required, or hide them.
 
-model_admin_map = {
+model_admin_map: "dict[type[Model], type[admin.ModelAdmin[Any]]]" = {
 
     Account : AccountAdmin,
     ExchangeRate : ExchangeRateAdmin,
@@ -359,7 +365,7 @@ model_admin_map = {
 
 try:
     admin.site.unregister(Group)
-except admin.sites.NotRegistered:
+except NotRegistered:
     pass
 
 
@@ -371,7 +377,7 @@ for model, model_admin in model_admin_map.items():
     try:
         if model_admin and issubclass(model, Model):
             admin.site.register(model, model_admin)
-    except admin.sites.AlreadyRegistered:
+    except AlreadyRegistered:
         logger.error(f'Failed to register {model} with {model_admin}. Already registered?')
 
 

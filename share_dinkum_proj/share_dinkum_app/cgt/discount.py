@@ -11,13 +11,18 @@
 """
 
 from datetime import timedelta
+from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.cgt import residency
 from share_dinkum_app.constants import CGT_DISCOUNT_RATE
 
 #: `constants.CGT_DISCOUNT_RATE` as a Decimal, to avoid float error.
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account
+
 FULL_DISCOUNT_RATE = Decimal(str(CGT_DISCOUNT_RATE))
 
 #: s115-100(b): a complying superannuation entity discounts a third, not a half.
@@ -51,7 +56,7 @@ _APPORTIONED_TAXPAYER_TYPES = {
 }
 
 
-def twelve_month_anniversary(purchase_date):
+def twelve_month_anniversary(purchase_date: date) -> date:
     """The same date one year on; 29 February becomes 28 February."""
     try:
         return purchase_date.replace(year=purchase_date.year + 1)
@@ -59,7 +64,7 @@ def twelve_month_anniversary(purchase_date):
         return purchase_date.replace(year=purchase_date.year + 1, day=28)
 
 
-def is_discount_eligible(purchase_date, sale_date):
+def is_discount_eligible(purchase_date: date | None, sale_date: date | None) -> bool:
     """Whether the sale is after the purchase's 12-month anniversary (s115-25(1)).
 
     A calendar test, not 365 days. A sale on the anniversary itself does not qualify, the
@@ -70,7 +75,7 @@ def is_discount_eligible(purchase_date, sale_date):
     return sale_date > twelve_month_anniversary(purchase_date)
 
 
-def taxpayer_type_of(account):
+def taxpayer_type_of(account: 'Account | None') -> TaxpayerType:
     """The account's taxpayer type, or UNDECLARED if unset or unrecognised, so reports flag it."""
     taxpayer_type = getattr(account, 'taxpayer_type', None)
     if taxpayer_type in TaxpayerType.values:
@@ -78,12 +83,13 @@ def taxpayer_type_of(account):
     return TaxpayerType.UNDECLARED
 
 
-def base_rate(account):
+def base_rate(account: 'Account | None') -> Decimal:
     """The discount rate before any residency apportionment."""
     return _RATE_BY_TAXPAYER_TYPE[taxpayer_type_of(account)]
 
 
-def apportionment_fraction(account, purchase_date, sale_date, declared=None):
+def apportionment_fraction(account: 'Account | None', purchase_date: date | None, sale_date: date | None,
+                           declared: residency.Periods | None = None) -> Decimal:
     """The s115-115 fraction of the discount kept, between 0 and 1. Counted days over total:
 
     * Bought after 8 May 2012 (s115-115(2)): resident days.
@@ -124,7 +130,8 @@ def apportionment_fraction(account, purchase_date, sale_date, declared=None):
     return fraction.quantize(_APPORTIONMENT_PRECISION)
 
 
-def discount_percentage(purchase_date, sale_date, account=None, declared=None):
+def discount_percentage(purchase_date: date | None, sale_date: date | None, account: 'Account | None' = None,
+                        declared: residency.Periods | None = None) -> Decimal:
     """The fraction of a gain the discount removes, as a Decimal (0.5 is half).
 
     Zero if not held long enough. Otherwise the taxpayer type's rate, apportioned only if
@@ -147,6 +154,7 @@ def discount_percentage(purchase_date, sale_date, account=None, declared=None):
 
     # Undeclared days count too, so a gap in the history apportions the discount whether or
     # not some other day was foreign.
+    assert purchase_date is not None and sale_date is not None  # is_discount_eligible
     window_start = max(purchase_date, residency.APPORTIONMENT_START_DATE + timedelta(days=1))
     if residency.days_not_resident(account, window_start, sale_date, declared=declared) <= 0:
         return rate
@@ -155,7 +163,8 @@ def discount_percentage(purchase_date, sale_date, account=None, declared=None):
         account, purchase_date, sale_date, declared=declared)
 
 
-def apply_discount(amount, purchase_date, sale_date, account=None, declared=None):
+def apply_discount(amount: Any, purchase_date: date | None, sale_date: date | None,
+                   account: 'Account | None' = None, declared: residency.Periods | None = None) -> Any:
     """Reduce a gain by its discount percentage. A loss or zero is returned unchanged."""
     if amount is None:
         return amount

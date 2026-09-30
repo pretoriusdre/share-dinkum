@@ -7,8 +7,9 @@ kept unless `--overwrite` is given.
 """
 
 from datetime import date
+from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app.cgt import cutover, residency
 from share_dinkum_app.choices import ValuationPurpose, ValuationSource
@@ -18,7 +19,7 @@ from share_dinkum_app.models import Account, Instrument, InstrumentValuation
 class Command(BaseCommand):
     help = 'Record market values for the 1 July 2027 deemed sale and other reset dates.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument(
             '--date', help='A single date to value, as YYYY-MM-DD. Omit for every reset '
@@ -33,7 +34,7 @@ class Command(BaseCommand):
                  'sourced themselves is not silently overwritten.')
         parser.add_argument('--dry-run', action='store_true')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
         if options['account']:
             accounts = accounts.filter(description=options['account'])
@@ -43,7 +44,7 @@ class Command(BaseCommand):
         for account in accounts:
             self._handle_account(account, options)
 
-    def _handle_account(self, account, options):
+    def _handle_account(self, account: Account, options: dict[str, Any]) -> None:
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         if options['date']:

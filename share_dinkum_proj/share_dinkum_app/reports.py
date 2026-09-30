@@ -1,16 +1,19 @@
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
+from typing import Any
 
 from djmoney.money import Money
 
 from share_dinkum_app.models import (
-    AttributionStatement, Sell, Account, Parcel, CurrentExchangeRate, CGTReturnSnapshot)
+    AttributionStatement, Sell, Account, FiscalYear, Parcel, CurrentExchangeRate, CGTReturnSnapshot)
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface
 from share_dinkum_app.choices import CGTAssetCategory
+from share_dinkum_app.cgt.schedule import Schedule
 
-def _key(value):
+def _key(value: Any) -> str | None:
     """A sell allocation id as text, or None, so snapshot and current keys compare equal."""
     return None if value is None else str(value)
 
@@ -18,9 +21,9 @@ def _key(value):
 class BaseReport:
     """Base for reports, with cached conversion of Money to the account currency."""
 
-    def __init__(self, account: Account):
+    def __init__(self, account: Account) -> None:
         self.account = account
-        self._rate_cache = {}
+        self._rate_cache: dict[str, CurrentExchangeRate] = {}
 
     def _to_account_currency(self, money: Money) -> Money:
         if money is None:
@@ -32,7 +35,7 @@ class BaseReport:
         if rate is None:
             rate = CurrentExchangeRate.get_or_create(
                 account=self.account,
-                convert_from=money.currency,
+                convert_from=str(money.currency),
                 convert_to=self.account.currency,
             )
             if not rate:
@@ -48,10 +51,10 @@ class RealisedCapitalGainReport:
     The columns are fixed for existing users; new fields go on CGTEventReport.
     """
 
-    def __init__(self, account: Account):
+    def __init__(self, account: Account) -> None:
         self.account = account
 
-    def generate(self):
+    def generate(self) -> pd.DataFrame:
         report_columns = [
             "sell_date", "instrument", "quantity_sold", "buy_id", "parcel_id", "sell_id", "sell_allocation_id",
             "buy_date", "days_held", "proceeds", "cost_base", "capital_gain", "fiscal_year"
@@ -81,7 +84,7 @@ class RealisedCapitalGainReport:
 class OpenParcelReport(BaseReport):
     """Summary of every open (unsold) parcel: cost base and current market value."""
 
-    def generate(self):
+    def generate(self) -> pd.DataFrame:
         report_columns = [
             "instrument", "parcel_id", "buy_id", "buy_date", "days_held",
             "remaining_quantity", "unit_cost_base", "cost_base",
@@ -90,7 +93,7 @@ class OpenParcelReport(BaseReport):
         ]
 
         today = date.today()
-        report_rows = []
+        report_rows: list[dict[str, Any]] = []
 
         parcels = (
             Parcel.objects.filter(account=self.account, is_active=True)
@@ -148,9 +151,10 @@ class CGTBasisChangeReport:
     """
 
     #: Fields compared. Rows are matched on sell allocation id.
-    COMPARED_FIELDS = ['quantity_sold', 'days_held', 'proceeds', 'cost_base', 'capital_gain']
+    COMPARED_FIELDS: list[str] = ['quantity_sold', 'days_held', 'proceeds', 'cost_base', 'capital_gain']
 
-    def __init__(self, account: Account, fiscal_year=None, lodged_only: bool = False):
+    def __init__(self, account: Account, fiscal_year: FiscalYear | None = None,
+                 lodged_only: bool = False) -> None:
         self.account = account
         self.fiscal_year = fiscal_year
         self.lodged_only = lodged_only
@@ -160,7 +164,7 @@ class CGTBasisChangeReport:
     COMPARISON_PLACES = Decimal('0.0001')
 
     @classmethod
-    def _as_decimal(cls, value):
+    def _as_decimal(cls, value: Any) -> Decimal | None:
         if value is None or value == '':
             return None
         if isinstance(value, Money):
@@ -172,7 +176,7 @@ class CGTBasisChangeReport:
                 return None
         return value.quantize(cls.COMPARISON_PLACES, rounding=ROUND_HALF_UP)
 
-    def _current_rows_by_key(self, fiscal_year_name):
+    def _current_rows_by_key(self, fiscal_year_name: str | None) -> dict[str | None, Any]:
         """Current figures for one fiscal year, keyed by sell allocation."""
         df = RealisedCapitalGainReport(account=self.account).generate()
         if df.empty:
@@ -180,13 +184,13 @@ class CGTBasisChangeReport:
         df = df[df['fiscal_year'] == fiscal_year_name]
         return {_key(row['sell_allocation_id']): row for _, row in df.iterrows()}
 
-    def generate(self):
+    def generate(self) -> pd.DataFrame:
         report_columns = [
             'fiscal_year', 'taken_at', 'snapshot_basis', 'current_basis',
             'snapshot_engine_version', 'sell_allocation_id', 'status', 'field',
             'snapshot_value', 'current_value', 'difference',
         ]
-        report_rows = []
+        report_rows: list[dict[str, Any]] = []
 
         # The basis is a property of the account today, not of the snapshot.
         current_basis = cgt.residency_basis(self.account)
@@ -206,7 +210,8 @@ class CGTBasisChangeReport:
             snapshot_rows = {
                 _key(row.get('sell_allocation_id')): row for row in snapshot.rows}
 
-            def base_row(allocation_id, status, field, was, now, diff):
+            def base_row(allocation_id: str | None, status: str, field: str, was: Any, now: Any,
+                         diff: Any) -> dict[str, Any]:
                 return {
                     'fiscal_year': fiscal_year_name,
                     'taken_at': snapshot.taken_at,
@@ -261,13 +266,13 @@ class CGTEventReport(BaseReport):
     Asset categories are shown as their ATO labels.
     """
 
-    def __init__(self, account: Account, fiscal_year=None):
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
 
-    def generate(self):
+    def generate(self) -> pd.DataFrame:
         columns = cgt.event_fields()
-        rows = []
+        rows: list[dict[str, Any]] = []
         for event in cgt.all_events(self.account, fiscal_year=self.fiscal_year):
             row = {name: getattr(event, name) for name in columns}
             # The category is stored as a stable code and read as the ATO's wording. This
@@ -284,25 +289,25 @@ class CGTScheduleReport(BaseReport):
     A draft while `warnings()` is non-empty.
     """
 
-    def __init__(self, account: Account, fiscal_year=None):
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
-        self._schedule = None
+        self._schedule: Schedule | None = None
 
     @property
-    def schedule(self):
+    def schedule(self) -> Schedule:
         if self._schedule is None:
             self._schedule = cgt.build_schedule(self.account, self.fiscal_year)
         return self._schedule
 
-    def warnings(self):
+    def warnings(self) -> list[str]:
         return list(self.schedule.warnings)
 
     @property
-    def is_draft(self):
+    def is_draft(self) -> bool:
         return self.schedule.is_draft
 
-    def generate(self):
+    def generate(self) -> pd.DataFrame:
         columns = [
             "category", "gross_gains", "current_year_losses_applied",
             "prior_year_losses_applied", "gain_before_discount", "discount_applied",
@@ -314,7 +319,7 @@ class CGTScheduleReport(BaseReport):
         ]
         return pd.DataFrame(rows, columns=columns)
 
-    def summary(self):
+    def summary(self) -> dict[str, Any]:
         """The year's totals, draft flag and warnings, as a dict."""
         schedule = self.schedule
         return {
@@ -334,7 +339,7 @@ class CGTScheduleReport(BaseReport):
         }
 
 
-def _plain(value):
+def _plain(value: Any) -> float | None:
     """A Money (or number) as a float, so Excel can sum it. None stays None."""
     if value is None:
         return None
@@ -342,7 +347,7 @@ def _plain(value):
     return float(amount)
 
 
-def cgt_schedule_workbook(account, output_path, fiscal_years=None):
+def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_years: list[str] | None = None) -> str | Path:
     """Write the CGT schedule workbook to `output_path` and return the path.
 
     Covers `fiscal_years`, default every year with a sale or a trust's annual statement.
@@ -351,7 +356,7 @@ def cgt_schedule_workbook(account, output_path, fiscal_years=None):
     if fiscal_years is None:
         # A statement counts on its own: a year whose only gains a trust attributed is still a
         # year with capital gains to report.
-        records = [
+        records: list[Sell | AttributionStatement] = [
             *Sell.objects.filter(account=account, is_active=True),
             *AttributionStatement.objects.filter(account=account, is_active=True),
         ]
@@ -359,7 +364,9 @@ def cgt_schedule_workbook(account, output_path, fiscal_years=None):
         fiscal_years = [
             year.name for year in sorted(years, key=lambda year: year.start_year)]
 
-    summaries, lines, warnings = [], [], []
+    summaries: list[dict[str, Any]] = []
+    lines: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     for year in fiscal_years:
         report = CGTScheduleReport(account=account, fiscal_year=year)
         summary = report.summary()
@@ -380,9 +387,9 @@ def cgt_schedule_workbook(account, output_path, fiscal_years=None):
         })
 
         for _, row in report.generate().iterrows():
-            line = {'fiscal_year': year, 'is_draft': summary['is_draft']}
+            line: dict[str, Any] = {'fiscal_year': year, 'is_draft': summary['is_draft']}
             line.update({
-                name: value if name == 'category' else _plain(value)
+                str(name): value if name == 'category' else _plain(value)
                 for name, value in row.items()
             })
             lines.append(line)
@@ -420,7 +427,7 @@ def cgt_schedule_workbook(account, output_path, fiscal_years=None):
 
 #: The ATO schedule's lines in form order, as `(kind, label, figure key)`. A None key is a
 #: heading; `flag` marks a figure to check rather than copy.
-CGT_RETURN_LAYOUT = [
+CGT_RETURN_LAYOUT: list[tuple[str, str, str | None]] = [
     ('heading', 'Current year capital gains and losses', None),
     *[entry for category in CGTAssetCategory.reportable() for entry in (
         ('subheading', category.label, None),
@@ -456,7 +463,7 @@ CGT_RETURN_LAYOUT = [
 ]
 
 
-def _cgt_return_figures(account, fiscal_year):
+def _cgt_return_figures(account: Account, fiscal_year: str) -> tuple[dict[str, float | None], bool]:
     """One year's figures keyed to CGT_RETURN_LAYOUT, and whether the year is a draft.
 
     Per-asset-category gains and losses come from the events, since `Schedule.lines` groups
@@ -465,7 +472,8 @@ def _cgt_return_figures(account, fiscal_year):
     report = CGTScheduleReport(account=account, fiscal_year=fiscal_year)
     schedule = report.schedule
 
-    gains, losses = {}, {}
+    gains: dict[str, Decimal] = {}
+    losses: dict[str, Decimal] = {}
     trust_gains = Decimal('0')
     for event in cgt.all_events(account, fiscal_year=fiscal_year):
         if event.is_disregarded:
@@ -479,7 +487,7 @@ def _cgt_return_figures(account, fiscal_year):
         gains[category] = gains.get(category, Decimal('0')) + gain
         losses[category] = losses.get(category, Decimal('0')) + loss
 
-    figures = {
+    figures: dict[str, float | None] = {
         'trust_gains': float(trust_gains),
         'total_gains': _plain(schedule.gross_gains),
         'total_losses': _plain(schedule.gross_losses),
@@ -508,22 +516,22 @@ def _cgt_return_figures(account, fiscal_year):
     return figures, schedule.is_draft
 
 
-def cgt_return_schedule_frame(account, fiscal_years):
+def cgt_return_schedule_frame(account: Account, fiscal_years: list[str]) -> pd.DataFrame:
     """The schedule as the form lays it out: a row per line, a column per year, plus a draft row."""
-    per_year = {}
-    drafts = {}
+    per_year: dict[str, dict[str, float | None]] = {}
+    drafts: dict[str, bool] = {}
     for year in fiscal_years:
         per_year[year], drafts[year] = _cgt_return_figures(account, year)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for kind, label, key in CGT_RETURN_LAYOUT:
-        row = {'line': label, 'kind': kind}
+        row: dict[str, Any] = {'line': label, 'kind': kind}
         for year in fiscal_years:
             row[year] = None if key is None else per_year[year].get(key)
         rows.append(row)
 
     # So the reader knows which columns are still moving without leaving the sheet.
-    status = {'line': 'Draft (year not final)', 'kind': 'flag'}
+    status: dict[str, Any] = {'line': 'Draft (year not final)', 'kind': 'flag'}
     status.update({year: 'yes' if drafts[year] else 'no' for year in fiscal_years})
     rows.append(status)
 

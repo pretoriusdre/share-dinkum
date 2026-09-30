@@ -1,7 +1,9 @@
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 
-def convert_to_decimal_field(value, field):
+def convert_to_decimal_field(value: Any, field: Any) -> Decimal | None:
+    """Convert `value` to fit `field`, a DecimalField (typed Any: `_meta.get_field` returns a union)."""
 
     max_digits = field.max_digits
     decimal_places = field.decimal_places
@@ -9,7 +11,7 @@ def convert_to_decimal_field(value, field):
 
 
 
-def convert_to_decimal(value, max_digits, decimal_places):
+def convert_to_decimal(value: Any, max_digits: int, decimal_places: int) -> Decimal | None:
     if value is None or str(value).strip().lower() == 'nan':
         return None
     try:

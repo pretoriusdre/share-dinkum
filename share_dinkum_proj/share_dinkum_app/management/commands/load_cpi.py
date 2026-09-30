@@ -7,8 +7,9 @@ four weeks after each quarter.
 import csv
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app.models import CPIIndex
 
@@ -16,7 +17,7 @@ from share_dinkum_app.models import CPIIndex
 class Command(BaseCommand):
     help = 'Load quarterly CPI index numbers from a CSV of date,index_number rows.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             'csv_file',
             help='CSV with a date column and an index number column. A header row is '
@@ -28,7 +29,7 @@ class Command(BaseCommand):
             '--dry-run', action='store_true',
             help='Report what would be loaded without writing anything.')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         rows = self._read(options['csv_file'])
         if not rows:
             raise CommandError('No CPI rows found in the file.')
@@ -63,8 +64,8 @@ class Command(BaseCommand):
                 'None of these quarters is on or after 1 July 2027, so no cost base can be '
                 'indexed from them yet.'))
 
-    def _read(self, path):
-        rows = []
+    def _read(self, path: str) -> list[tuple[date, Decimal]]:
+        rows: list[tuple[date, Decimal]] = []
         with open(path, newline='', encoding='utf-8-sig') as handle:
             for line in csv.reader(handle):
                 if len(line) < 2:
@@ -74,7 +75,7 @@ class Command(BaseCommand):
                     rows.append(parsed)
         return sorted(rows)
 
-    def _parse(self, raw_date, raw_value):
+    def _parse(self, raw_date: str | None, raw_value: str | None) -> tuple[date, Decimal] | None:
         """Parse a row to `(quarter_start, index)`, or None if it is not a data row.
 
         Any date in a quarter maps to its start; the ABS dates a quarter by its last month.

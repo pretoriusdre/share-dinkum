@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as installed_version
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -34,7 +35,7 @@ CHECK_INTERVAL = timedelta(hours=24)
 FAILED_CHECK_RETRY = timedelta(hours=1)
 
 
-def get_version():
+def get_version() -> str:
     try:
         return installed_version(PACKAGE_NAME)
     except PackageNotFoundError:
@@ -44,12 +45,12 @@ def get_version():
 __version__ = get_version()
 
 
-def get_cache_path():
+def get_cache_path() -> Path:
     """Path of the file caching the last update check."""
     return Path(settings.BASE_DIR) / '.update_check.json'
 
 
-def parse_version(text):
+def parse_version(text: Any) -> tuple[int, ...] | None:
     """Turn 'v1.2.3' into (1, 2, 3), or None for anything which is not that shape."""
     if not text:
         return None
@@ -60,7 +61,7 @@ def parse_version(text):
         return None
 
 
-def read_cache():
+def read_cache() -> dict[str, Any] | None:
     """The cached check if still current, else None.
 
     Current for CHECK_INTERVAL after reaching GitHub, FAILED_CHECK_RETRY after failing to.
@@ -77,8 +78,8 @@ def read_cache():
     return cached
 
 
-def write_cache(latest_version, release_url, reached=True):
-    payload = {
+def write_cache(latest_version: str | None, release_url: str | None, reached: bool = True) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         'checked_at': datetime.now(timezone.utc).isoformat(),
         'latest_version': latest_version,
         'release_url': release_url,
@@ -92,7 +93,7 @@ def write_cache(latest_version, release_url, reached=True):
     return payload
 
 
-def fetch_latest_release():
+def fetch_latest_release() -> tuple[bool, str | None, str | None]:
     """Return `(reached_github, tag_name, release_url)` for the latest GitHub release.
 
     A 404 (no releases yet) counts as reaching GitHub.
@@ -114,12 +115,12 @@ def fetch_latest_release():
         return False, None, None
 
 
-def check_for_update(force=False):
+def check_for_update(force: bool = False) -> dict[str, Any]:
     """A dict of current and latest version, release URL, and whether an update is available.
 
     Uses the cache unless `force`. If GitHub cannot be reached, the update fields stay empty.
     """
-    result = {
+    result: dict[str, Any] = {
         'current_version': __version__,
         'latest_version': None,
         'release_url': RELEASES_PAGE_URL,

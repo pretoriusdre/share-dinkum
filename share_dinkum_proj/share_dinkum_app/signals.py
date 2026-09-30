@@ -1,14 +1,18 @@
+from collections.abc import Iterable
 from datetime import date, timedelta
 from decimal import Decimal
 import threading
+from typing import Any, cast
 
 from django.apps import apps
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.base import ContentFile
 from django.db.models.signals import pre_save, post_save, pre_delete, post_delete
 from django.dispatch import receiver
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Sum, Q, Max, Min
+from django.db.models import Model, Sum, Q, Max, Min
+from django.db.models.fields.files import FieldFile
 from django.forms.models import model_to_dict
 
 from djmoney.models.fields import MoneyField
@@ -33,14 +37,14 @@ _save_lock = threading.local()
 
 
 @receiver(post_save, sender=Account)
-def assign_default_account(sender, instance, created, **kwargs):
+def assign_default_account(sender: type[Model], instance: Account, created: bool, **kwargs: Any) -> None:
     if created and instance.owner.default_account is None:
         instance.owner.default_account = instance
         instance.owner.save()
 
 
 @receiver(post_save, sender=Market)
-def suggest_market_country(sender, instance, created, **kwargs):
+def suggest_market_country(sender: type[Model], instance: Market, created: bool, **kwargs: Any) -> None:
     """On creation with no country, suggest one from the market's code or suffix."""
     if not created or instance.country:
         return
@@ -52,7 +56,7 @@ def suggest_market_country(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Instrument)
-def suggest_instrument_legal_form(sender, instance, created, **kwargs):
+def suggest_instrument_legal_form(sender: type[Model], instance: Instrument, created: bool, **kwargs: Any) -> None:
     """On creation with an unknown legal form, suggest one for a known code.
 
     Saved with source SUGGESTED, so it does not count as confirmed.
@@ -71,7 +75,7 @@ def suggest_instrument_legal_form(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Buy)
-def create_buy_parcel(sender, instance, created, **kwargs):
+def create_buy_parcel(sender: type[Model], instance: Buy, created: bool, **kwargs: Any) -> None:
 
     assert isinstance(instance, Buy)
 
@@ -97,7 +101,7 @@ def create_buy_parcel(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Sell)
-def create_sell_allocations(sender, instance, created, **kwargs):
+def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, **kwargs: Any) -> None:
     
     assert isinstance(instance, Sell)
 
@@ -111,7 +115,7 @@ def create_sell_allocations(sender, instance, created, **kwargs):
         instance.save(update_fields=["_creation_handled"])
         return
 
-    available_parcels = Parcel.objects.filter(
+    available_parcels: Any = Parcel.objects.filter(  # a queryset, then a sorted list
         account=instance.account,
         deactivation_date__isnull=True,
         buy__instrument=instance.instrument,
@@ -125,7 +129,7 @@ def create_sell_allocations(sender, instance, created, **kwargs):
     elif instance.strategy == SellStrategy.MIN_CGT:
         unit_proceeds = instance.unit_proceeds
 
-        def get_unit_net_capital_gain(parcel):
+        def get_unit_net_capital_gain(parcel: Parcel) -> Any:
             """Per-unit gain after discount, using the same rule as the reports."""
             capital_gain = unit_proceeds - parcel.unit_cost_base
             return cgt.apply_discount(
@@ -170,7 +174,7 @@ def create_sell_allocations(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=SellAllocation)
-def handle_sell_allocation_creation(sender, instance, created, **kwargs):
+def handle_sell_allocation_creation(sender: type[Model], instance: SellAllocation, created: bool, **kwargs: Any) -> None:
 
     assert isinstance(instance, SellAllocation)
 
@@ -199,7 +203,7 @@ def handle_sell_allocation_creation(sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=SellAllocation)
-def handle_sell_allocation_deletion(sender, instance, **kwargs):
+def handle_sell_allocation_deletion(sender: type[Model], instance: SellAllocation, **kwargs: Any) -> None:
 
     assert isinstance(instance, SellAllocation)
 
@@ -212,7 +216,7 @@ def handle_sell_allocation_deletion(sender, instance, **kwargs):
     instance.sell.save()
 
 
-def _fiscal_year_start(adjustment, end):
+def _fiscal_year_start(adjustment: CostBaseAdjustment, end: date) -> date:
     """The start of the fiscal year containing `end`, from the account's fiscal year type.
 
     Without one, the day after `end` a year earlier. Avoids `classify_date`, which creates
@@ -232,7 +236,7 @@ def _fiscal_year_start(adjustment, end):
 
 
 @receiver(post_save, sender=CostBaseAdjustment)
-def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
+def allocate_cost_base_adjustment(sender: type[Model], instance: CostBaseAdjustment, created: bool, **kwargs: Any) -> None:
     """Allocate a new adjustment across the parcels held during its year.
 
     Runs on creation only, so editing an adjustment never moves existing allocations.
@@ -245,7 +249,7 @@ def allocate_cost_base_adjustment(sender, instance, created, **kwargs):
     allocate_cost_base_adjustment_now(instance)
 
 
-def allocate_cost_base_adjustment_now(instance):
+def allocate_cost_base_adjustment_now(instance: CostBaseAdjustment) -> None:
     """Allocate an adjustment across parcels, weighted by quantity times days held in the year.
 
     Only for the QTY_HELD method. The largest weight takes the rounding residual, so the
@@ -264,13 +268,13 @@ def allocate_cost_base_adjustment_now(instance):
     splits = list(ShareSplit.objects.filter(
         account=instance.account, instrument=instance.instrument, is_active=True))
 
-    def days_held_in_year(parcel):
+    def days_held_in_year(parcel: Parcel) -> int:
         """Days the parcel was held within the adjustment's year, inclusive."""
         start = max(cutoff_date, parcel.buy.date)
         finish = min(end, parcel.sale_date) if parcel.sale_date else end
         return max((finish - start).days + 1, 0)
 
-    def units_at_year_end(parcel):
+    def units_at_year_end(parcel: Parcel) -> Decimal:
         """The parcel's quantity counted in units as they stood at the end of the year.
 
         Parcels are split when a split happens, so one sold before it is still in the old
@@ -285,7 +289,7 @@ def allocate_cost_base_adjustment_now(instance):
                 bought_units *= split.ratio
         return bought_units
 
-    def weight(parcel):
+    def weight(parcel: Parcel) -> Decimal:
         return units_at_year_end(parcel) * days_held_in_year(parcel)
 
     with transaction.atomic():
@@ -298,8 +302,8 @@ def allocate_cost_base_adjustment_now(instance):
             Q(sale_date__isnull=True) | Q(sale_date__gte=cutoff_date)
         ).select_related('buy'))
 
-        total_weighted_sum = 0
-        parcel_set_to_save = set()
+        total_weighted_sum: Decimal | int = 0
+        parcel_set_to_save: set[Parcel] = set()
 
         for parcel in affected_parcels:
             total_weighted_sum += weight(parcel)
@@ -360,7 +364,8 @@ def allocate_cost_base_adjustment_now(instance):
 
 
 @receiver([post_save, post_delete], sender=CostBaseAdjustmentAllocation)
-def update_parcel(sender, instance, created=None, **kwargs):
+def update_parcel(sender: type[Model], instance: CostBaseAdjustmentAllocation, created: bool | None = None,
+                  **kwargs: Any) -> None:
     
     assert isinstance(instance, CostBaseAdjustmentAllocation)
     
@@ -373,7 +378,7 @@ def update_parcel(sender, instance, created=None, **kwargs):
 
 
 @receiver(post_save, sender=ShareSplit)
-def handle_share_split(sender, instance, created, **kwargs):
+def handle_share_split(sender: type[Model], instance: ShareSplit, created: bool, **kwargs: Any) -> None:
 
     assert isinstance(instance, ShareSplit)
 
@@ -406,7 +411,7 @@ def handle_share_split(sender, instance, created, **kwargs):
 
 
 @receiver(pre_delete, sender=ShareSplit)
-def remove_share_split(sender, instance, **kwargs):
+def remove_share_split(sender: type[Model], instance: ShareSplit, **kwargs: Any) -> None:
     """Reverse the split on the parcels it created, before the split is deleted.
 
     A pre_delete, because by post_delete the `affected_parcels` rows are already gone. Only
@@ -436,7 +441,7 @@ def remove_share_split(sender, instance, **kwargs):
 
 @receiver([post_save, post_delete], sender=Sell)
 @receiver([post_save, post_delete], sender=Buy)
-def update_instrument_position(sender, instance, **kwargs):
+def update_instrument_position(sender: type[Model], instance: Buy | Sell, **kwargs: Any) -> None:
 
     assert isinstance(instance, (Buy, Sell))
     """
@@ -452,7 +457,7 @@ def update_instrument_position(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=Account)
-def update_account_price_history(sender, instance, created, **kwargs):
+def update_account_price_history(sender: type[Model], instance: Account, created: bool, **kwargs: Any) -> None:
 
     assert isinstance(instance, Account)
 
@@ -470,7 +475,7 @@ def update_account_price_history(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=DataExport)
-def generate_export_file(sender, instance, created, **kwargs):
+def generate_export_file(sender: type[Model], instance: DataExport, created: bool, **kwargs: Any) -> None:
 
     assert isinstance(instance, DataExport)
 
@@ -516,22 +521,22 @@ def generate_export_file(sender, instance, created, **kwargs):
 
 
 
-def _delete_file_after_commit(field_file):
+def _delete_file_after_commit(field_file: FieldFile) -> None:
     """Delete a stored file once the surrounding transaction commits.
 
     Deleting it straight away lost the document whenever the change was then rolled back
     (a failed import, say): the row went back to naming a file that was gone.
     """
-    storage, name = field_file.storage, field_file.name
+    storage, name = field_file.storage, cast(str, field_file.name)
     transaction.on_commit(lambda: storage.delete(name))
 
 
-def _has_file_field(model):
+def _has_file_field(model: type[Model]) -> bool:
     return any(field.name == 'file' for field in model._meta.fields)
 
 
 @receiver(post_delete)
-def delete_file_on_delete(sender, instance, **kwargs):
+def delete_file_on_delete(sender: type[Model], instance: Model, **kwargs: Any) -> None:
     """Delete a deleted instance's `file`, for any model with a field of that name."""
     file_field = getattr(instance, 'file', None)
     if file_field and _has_file_field(sender):
@@ -539,7 +544,7 @@ def delete_file_on_delete(sender, instance, **kwargs):
 
 
 @receiver(pre_save)
-def delete_file_on_change(sender, instance, **kwargs):
+def delete_file_on_change(sender: type[Model], instance: Model, **kwargs: Any) -> None:
     """Delete the old `file` when a saved instance's `file` changes."""
     if not _has_file_field(sender):
         return
@@ -547,8 +552,8 @@ def delete_file_on_change(sender, instance, **kwargs):
         return  # New instance, nothing to delete
 
     try:
-        old_instance = sender.objects.get(pk=instance.pk)
-    except sender.DoesNotExist:
+        old_instance = sender._default_manager.get(pk=instance.pk)
+    except ObjectDoesNotExist:
         return
 
     old_file = getattr(old_instance, 'file', None)
@@ -558,7 +563,7 @@ def delete_file_on_change(sender, instance, **kwargs):
         _delete_file_after_commit(old_file)
 
 
-def _money_fields(model):
+def _money_fields(model: type[Model]) -> list[Any]:
     """The record's own money fields, in declaration order. The calculated_ copies are the
     application's output, already converted."""
     return [
@@ -566,7 +571,7 @@ def _money_fields(model):
         if isinstance(field, MoneyField) and not field.name.startswith('calculated_')]
 
 
-def _date_field_name(model):
+def _date_field_name(model: type[Model]) -> str | None:
     names = {field.name for field in model._meta.fields}
     for name in ('date', 'financial_year_end_date'):
         if name in names:
@@ -574,7 +579,7 @@ def _date_field_name(model):
     return None
 
 
-def _record_currency(instance):
+def _record_currency(instance: Model) -> str | None:
     """The currency the record's amounts are in, or None if it has none.
 
     The first amount that is not zero decides. A field left at zero keeps the column default
@@ -582,7 +587,7 @@ def _record_currency(instance):
     amount is zero does the first field decide: a worthless sale still needs its zero
     proceeds converted, or they cannot be set against a cost base.
     """
-    amounts = [getattr(instance, field.name, None) for field in _money_fields(type(instance))]
+    amounts: list[Any] = [getattr(instance, field.name, None) for field in _money_fields(type(instance))]
     amounts = [money for money in amounts if money is not None]
     for money in amounts:
         if money.amount:
@@ -590,15 +595,15 @@ def _record_currency(instance):
     return str(amounts[0].currency) if amounts else None
 
 
-def _saves_conversion_inputs(model, update_fields):
+def _saves_conversion_inputs(model: type[Model], update_fields: Iterable[str]) -> bool:
     """Whether a save limited to `update_fields` writes anything the rate depends on."""
-    inputs = {'exchange_rate', _date_field_name(model)}
+    inputs: set[str | None] = {'exchange_rate', _date_field_name(model)}
     for field in _money_fields(model):
         inputs |= {field.name, f'{field.name}_currency'}
     return bool(set(update_fields) & inputs)
 
 
-def _moved_off_rate_date(instance, rate):
+def _moved_off_rate_date(instance: Model, rate: ExchangeRate) -> bool:
     """Whether this save moves a stored record off the date its rate was fetched for.
 
     A rate the user chose for another date on purpose is left alone: only a rate for the date
@@ -607,12 +612,13 @@ def _moved_off_rate_date(instance, rate):
     name = _date_field_name(type(instance))
     if name is None or instance._state.adding or instance.pk is None:
         return False
-    stored = type(instance).objects.filter(pk=instance.pk).values_list(name, flat=True).first()
+    stored = type(instance)._default_manager.filter(pk=instance.pk).values_list(name, flat=True).first()
     return stored is not None and stored != getattr(instance, name) and rate.date == stored
 
 
 @receiver(pre_save)
-def attach_exchange_rate(sender, instance, raw=False, update_fields=None, **kwargs):
+def attach_exchange_rate(sender: type[Model], instance: Model, raw: bool = False,
+                         update_fields: Iterable[str] | None = None, **kwargs: Any) -> None:
     """Give a foreign-currency record the exchange rate for its currency and date.
 
     This has to happen before post_save: the parcel, sell allocations and cost base
@@ -625,6 +631,7 @@ def attach_exchange_rate(sender, instance, raw=False, update_fields=None, **kwar
     """
     if raw or not isinstance(instance, BaseModel) or not hasattr(instance, 'exchange_rate'):
         return
+    record: Any = instance  # has `exchange_rate`, which only some BaseModels do
     if update_fields is not None and not _saves_conversion_inputs(sender, update_fields):
         # Storing calculated figures, say. A rate changed here would not even be written.
         return
@@ -633,22 +640,22 @@ def attach_exchange_rate(sender, instance, raw=False, update_fields=None, **kwar
     currency = _record_currency(instance)
     wanted = currency if currency and currency != account_currency else None
 
-    rate = instance.exchange_rate
+    rate = record.exchange_rate
     if rate is not None and wanted is not None:
         fits = (str(rate.convert_from), str(rate.convert_to)) == (wanted, account_currency)
         if fits and not _moved_off_rate_date(instance, rate):
             return
 
-    instance.exchange_rate = None if wanted is None else ExchangeRate.get_or_create(
+    record.exchange_rate = None if wanted is None else ExchangeRate.get_or_create(
         account=instance.account,
         convert_from=wanted,
         convert_to=account_currency,
-        exchange_date=getattr(instance, 'date', None),
+        exchange_date=cast(date, getattr(instance, 'date', None)),
     )
 
 
 @receiver(post_save)
-def persist_safe_properties(sender, instance, created, **kwargs):
+def persist_safe_properties(sender: type[Model], instance: Model, created: bool, **kwargs: Any) -> None:
     logger.debug('Setting calculated fields for %s', instance)
     logger.debug('Instance data is: %s', model_to_dict(instance))
 
@@ -660,7 +667,7 @@ def persist_safe_properties(sender, instance, created, **kwargs):
     if not isinstance(instance, BaseModel):
         return
 
-    updated_fields = []
+    updated_fields: list[str] = []
 
     for attr_name in dir(instance):
         attr = getattr(type(instance), attr_name, None)

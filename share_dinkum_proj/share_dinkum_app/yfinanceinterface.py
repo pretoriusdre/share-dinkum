@@ -2,16 +2,21 @@ import yfinance as yf
 from datetime import date, timedelta, datetime, UTC
 import pandas as pd
 import string
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 from share_dinkum_app.utils import convert_to_decimal
 
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Instrument
 
 import logging
 logger = logging.getLogger(__name__)
 
 
 
-def to_snake_case(text):
+def to_snake_case(text: str) -> str:
     allowable_chars = string.ascii_letters + string.digits
     snake_case = ''.join([char if char in allowable_chars else '_' for char in text]).lower()
     return snake_case
@@ -20,7 +25,7 @@ def to_snake_case(text):
 PRICE_COLUMNS = ['open', 'high', 'low', 'close']
 
 
-def as_traded(price_history):
+def as_traded(price_history: pd.DataFrame) -> pd.DataFrame:
     """Undo the split adjustment Yahoo applies to its unadjusted prices.
 
     Even with `auto_adjust=False`, Yahoo's prices are divided by every split since (and its
@@ -39,7 +44,8 @@ def as_traded(price_history):
     return price_history
 
 
-def get_instrument_price_history(instrument, start_date, end_date=None):
+def get_instrument_price_history(instrument: 'Instrument', start_date: date | datetime | str | None,
+                                 end_date: date | datetime | str | None = None) -> pd.DataFrame:
     """Daily prices as traded that day, from `start_date` to `end_date` (default today).
 
     Not adjusted for dividends or splits: every use of a stored price asks what a unit was
@@ -83,7 +89,7 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
         # Fetched to today whatever the end date, so every split that Yahoo has already
         # divided these prices by is in the rows and can be multiplied back out. Rows after
         # the end date are dropped once that is done.
-        history_kwargs = {'start': start_date.isoformat(), 'auto_adjust': False}
+        history_kwargs: dict[str, Any] = {'start': start_date.isoformat(), 'auto_adjust': False}
         today = date.today()
         if end_date and end_date < today:
             history_kwargs['end'] = (today + timedelta(days=1)).isoformat()
@@ -118,7 +124,7 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
         price_history = price_history[['instrument', 'date', 'open', 'high', 'low', 'close', 'volume', 'stock_splits']]
 
         for col in ['open', 'high', 'low', 'close', 'stock_splits']:
-            price_history[col] = price_history[col].apply(lambda val: convert_to_decimal(val, 16, 6))
+            price_history[col] = price_history[col].apply(lambda val: convert_to_decimal(val, 16, 6))  # type: ignore[arg-type, return-value]
             
         return price_history
 
@@ -128,7 +134,7 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
 
 
 
-def get_current_price(instrument):
+def get_current_price(instrument: 'Instrument') -> Decimal | None:
     """Fetch live/current price from yfinance ticker info."""
     ticker_code = instrument.yfinance_ticker_code
     try:
@@ -143,7 +149,7 @@ def get_current_price(instrument):
         return None
 
 
-def get_exchange_rate_history(convert_from, convert_to, start_date):
+def get_exchange_rate_history(convert_from: str, convert_to: str, start_date: date) -> pd.DataFrame:
     
     ticker_code = f'{convert_from}{convert_to}=X'
     yfinance_obj = yf.Ticker(ticker_code)
@@ -176,7 +182,7 @@ def get_exchange_rate_history(convert_from, convert_to, start_date):
         return pd.DataFrame([])
 
 
-def get_exchange_rate(convert_from, convert_to, exchange_date=None):
+def get_exchange_rate(convert_from: str, convert_to: str, exchange_date: date | str | None = None) -> Decimal | None:
     ticker_code = f'{convert_from}{convert_to}=X'
     yfinance_obj = yf.Ticker(ticker_code)
 

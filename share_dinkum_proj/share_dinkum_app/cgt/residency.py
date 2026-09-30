@@ -6,10 +6,16 @@ reported as an assumption. Declaring periods switches it to `DIVISION_115`.
 """
 
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from share_dinkum_app.choices import CGTBasis, ResidencyStatus
 
 #: Re-exported from ResidencyStatus.
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account, ResidencyPeriod
+
+Periods = list['ResidencyPeriod']
+
 RESIDENT = ResidencyStatus.RESIDENT
 FOREIGN = ResidencyStatus.FOREIGN
 TEMPORARY = ResidencyStatus.TEMPORARY
@@ -24,7 +30,7 @@ BASIS_LEGACY = CGTBasis.LEGACY
 APPORTIONMENT_START_DATE = date(2012, 5, 8)
 
 
-def periods(account):
+def periods(account: 'Account | None') -> Periods:
     """Declared residency periods for an account, earliest first."""
     from share_dinkum_app.models import ResidencyPeriod
 
@@ -35,14 +41,14 @@ def periods(account):
     )
 
 
-def basis(account, declared=None):
+def basis(account: 'Account | None', declared: Periods | None = None) -> str:
     """DIVISION_115 if any residency is declared, else LEGACY."""
     if declared is None:
         declared = periods(account)
     return BASIS_DIVISION_115 if declared else BASIS_LEGACY
 
 
-def status_on(account, day, declared=None):
+def status_on(account: 'Account | None', day: date | None, declared: Periods | None = None) -> str | None:
     """Residency status on one day, or None where it was never declared."""
     if day is None:
         return None
@@ -54,7 +60,7 @@ def status_on(account, day, declared=None):
     return None
 
 
-def _clip(period, start, end):
+def _clip(period: 'ResidencyPeriod', start: date, end: date) -> tuple[date, date] | None:
     """The part of a declared period lying inside [start, end], or None."""
     period_start = period.start_date
     period_end = period.end_date if period.end_date is not None else date.max
@@ -65,18 +71,19 @@ def _clip(period, start, end):
     return lower, upper
 
 
-def _inclusive_days(start, end):
+def _inclusive_days(start: date | None, end: date | None) -> int:
     if start is None or end is None or end < start:
         return 0
     return (end - start).days + 1
 
 
-def days_by_status(account, start, end, declared=None):
+def days_by_status(account: 'Account | None', start: date | None, end: date | None,
+                   declared: Periods | None = None) -> dict[str | None, int]:
     """Days in [start, end], both inclusive (s115-105(2)(d)), counted by status.
 
     Days no period covers are counted under None.
     """
-    counts = {}
+    counts: dict[str | None, int] = {}
     if start is None or end is None or end < start:
         return counts
     if declared is None:
@@ -97,23 +104,23 @@ def days_by_status(account, start, end, declared=None):
     return counts
 
 
-def resident_days(account, start, end, declared=None):
+def resident_days(account: 'Account | None', start: date | None, end: date | None, declared: Periods | None = None) -> int:
     """Days of Australian residency in [start, end]."""
     return days_by_status(account, start, end, declared=declared).get(RESIDENT, 0)
 
 
-def non_resident_days(account, start, end, declared=None):
+def non_resident_days(account: 'Account | None', start: date | None, end: date | None, declared: Periods | None = None) -> int:
     """Days of foreign or temporary residency in [start, end] (s115-105(2)(e))."""
     counts = days_by_status(account, start, end, declared=declared)
     return counts.get(FOREIGN, 0) + counts.get(TEMPORARY, 0)
 
 
-def undeclared_days(account, start, end, declared=None):
+def undeclared_days(account: 'Account | None', start: date | None, end: date | None, declared: Periods | None = None) -> int:
     """Days in [start, end] that no declared period covers."""
     return days_by_status(account, start, end, declared=declared).get(None, 0)
 
 
-def days_not_resident(account, start, end, declared=None):
+def days_not_resident(account: 'Account | None', start: date | None, end: date | None, declared: Periods | None = None) -> int:
     """Days in [start, end] not known to be Australian resident: foreign, temporary or
     undeclared.
 
@@ -123,7 +130,8 @@ def days_not_resident(account, start, end, declared=None):
     return _inclusive_days(start, end) - resident_days(account, start, end, declared=declared)
 
 
-def has_non_resident_days_after_cutoff(account, start, end, declared=None):
+def has_non_resident_days_after_cutoff(account: 'Account | None', start: date | None, end: date | None,
+                                       declared: Periods | None = None) -> bool:
     """The s115-105(2)(e) test: any foreign or temporary day in [start, end] after 8 May 2012.
 
     Tests the whole ownership period, so a returned expatriate stays caught.
@@ -134,7 +142,7 @@ def has_non_resident_days_after_cutoff(account, start, end, declared=None):
     return non_resident_days(account, window_start, end, declared=declared) > 0
 
 
-def first_departure(account, declared=None):
+def first_departure(account: 'Account | None', declared: Periods | None = None) -> 'ResidencyPeriod | None':
     """The first non-resident period that follows a resident one (a departure), or None."""
     if declared is None:
         declared = periods(account)
@@ -146,7 +154,7 @@ def first_departure(account, declared=None):
     return None
 
 
-def coverage_problems(account, declared=None):
+def coverage_problems(account: 'Account | None', declared: Periods | None = None) -> list[str]:
     """Problems with the saved residency history, as sentences; empty if none or undeclared.
 
     Checks for gaps, an open-ended period followed by another, a start after the earliest
@@ -159,7 +167,7 @@ def coverage_problems(account, declared=None):
     if not declared:
         return []
 
-    problems = []
+    problems: list[str] = []
     for earlier, later in zip(declared, declared[1:]):
         if earlier.end_date is None:
             problems.append(

@@ -7,9 +7,15 @@ need a person: only they know which parcel a sale was of, or what an adjustment 
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
-from django.db.models import F, Q, Sum
+from django.db.models import F, Q, QuerySet, Sum
 from django.db.models.functions import Abs, Coalesce
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import (
+        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell,
+    )
 
 COMMAND = 'uv run dev repair_portfolio_data'
 
@@ -25,12 +31,12 @@ class Finding:
     affects_gains: bool
 
 
-def unallocated_sales(account):
+def unallocated_sales(account: 'Account') -> 'QuerySet[Any]':  # annotated with `allocated`
     from share_dinkum_app.models import Sell
     return Sell.with_unallocated_quantity(account)
 
 
-def _parcels_with_sold(account):
+def _parcels_with_sold(account: 'Account') -> 'QuerySet[Any]':  # annotated with `sold`
     from share_dinkum_app.models import Parcel
     return Parcel.objects.filter(account=account, deactivation_date__isnull=True).annotate(
         sold=Coalesce(
@@ -38,13 +44,13 @@ def _parcels_with_sold(account):
             Decimal('0')))
 
 
-def oversold_parcels(account):
+def oversold_parcels(account: 'Account') -> 'QuerySet[Any]':  # annotated with `sold`
     """Parcels allocated to sales for more units than they hold."""
     return _parcels_with_sold(account).filter(sold__gt=F('parcel_quantity')).select_related(
         'buy__instrument')
 
 
-def stale_sold_parcels(account):
+def stale_sold_parcels(account: 'Account') -> 'QuerySet[Parcel]':
     """Parcels whose stored sold flag disagrees with their allocations."""
     return _parcels_with_sold(account).filter(
         Q(calculated_is_sold__isnull=True)
@@ -52,7 +58,7 @@ def stale_sold_parcels(account):
         | Q(calculated_is_sold=True, sold__lt=F('parcel_quantity')))
 
 
-def negative_cost_base_parcels(account):
+def negative_cost_base_parcels(account: 'Account') -> 'QuerySet[Parcel]':
     """Parcels whose cost base has gone below zero, from cost base decreases.
 
     A cost base cannot go below zero: the excess is a capital gain in the year it arises
@@ -65,14 +71,14 @@ def negative_cost_base_parcels(account):
     ).select_related('buy__instrument')
 
 
-def orphaned_adjustment_allocations(account):
+def orphaned_adjustment_allocations(account: 'Account') -> 'QuerySet[CostBaseAdjustmentAllocation]':
     """Adjustments still attached to a parcel a share split replaced, so in no cost base."""
     from share_dinkum_app.models import CostBaseAdjustmentAllocation
     return CostBaseAdjustmentAllocation.objects.filter(
         account=account, is_active=True, parcel__deactivation_date__isnull=False)
 
 
-def unbalanced_adjustments(account):
+def unbalanced_adjustments(account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
     """Adjustments whose allocations do not add up to them, e.g. spread at a stand-in rate."""
     from share_dinkum_app.models import CostBaseAdjustment
     return (
@@ -90,16 +96,16 @@ def unbalanced_adjustments(account):
     )
 
 
-def placeholder_rates(account):
+def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
 
 
-def run(account):
+def run(account: 'Account') -> list[Finding]:
     """Every check with something to report, those affecting gains first."""
     from share_dinkum_app.models import CostBaseAdjustment, Parcel
 
-    checks = [
+    checks: list[tuple[str, int, str, bool, bool]] = [
         ('unallocated_sales', unallocated_sales(account).count(),
          'sale(s) with units allocated to no parcel, whose gain is in no report',
          False, True),

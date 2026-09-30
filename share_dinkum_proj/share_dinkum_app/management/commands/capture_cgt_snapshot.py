@@ -4,7 +4,9 @@ Gains are recomputed on every report, so take a snapshot of lodged years before 
 or changing tax settings. `CGTBasisChangeReport` then shows what moved.
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from typing import Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app import cgt
 from share_dinkum_app.models import (
@@ -14,7 +16,7 @@ from share_dinkum_app.models import (
 class Command(BaseCommand):
     help = 'Record the capital gains figures for a fiscal year as they stand today.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument(
             '--fiscal-year',
@@ -25,7 +27,7 @@ class Command(BaseCommand):
                  'are capturing a year you have already filed.')
         parser.add_argument('--dry-run', action='store_true')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
         if options['account']:
             accounts = accounts.filter(description=options['account'])
@@ -35,7 +37,7 @@ class Command(BaseCommand):
         for account in accounts:
             self._handle_account(account, options)
 
-    def _handle_account(self, account, options):
+    def _handle_account(self, account: Account, options: dict[str, Any]) -> None:
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         years = self._years(account, options['fiscal_year'])
@@ -74,7 +76,7 @@ class Command(BaseCommand):
         verb = 'would record' if options['dry_run'] else 'recorded'
         self.stdout.write(self.style.SUCCESS(f'  {verb} {recorded} year(s).'))
 
-    def _years(self, account, wanted):
+    def _years(self, account: Account, wanted: str | None) -> list[FiscalYear]:
         """The named fiscal year, or every year with a sale."""
         if wanted:
             fiscal_year = FiscalYear.objects.filter(name=wanted).first()

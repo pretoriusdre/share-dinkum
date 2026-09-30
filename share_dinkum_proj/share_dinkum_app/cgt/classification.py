@@ -4,8 +4,13 @@ This classifies capital gains for the Australian CGT schedule.
 An instrument with no legal form is UNCLASSIFIED rather than guessed.
 """
 
+from typing import TYPE_CHECKING, Any
+
 from share_dinkum_app.choices import CGTAssetCategory, LegalForm
 from share_dinkum_app.cgt import reference
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Instrument, Market
 
 AUSTRALIA = 'AU'
 
@@ -16,7 +21,7 @@ SHARE_LIKE = {LegalForm.COMPANY}
 UNIT_LIKE = {LegalForm.UNIT_TRUST, LegalForm.STAPLED}
 
 
-def market_country(market):
+def market_country(market: 'Market | None') -> str | None:
     """The country a market is in, preferring what the user recorded over a guess."""
     if market is None:
         return None
@@ -25,7 +30,7 @@ def market_country(market):
     return reference.country_for_market(code=market.code, suffix=market.suffix)
 
 
-def asset_category(instrument):
+def asset_category(instrument: 'Instrument | None') -> str:
     """The CGT schedule category for gains on this instrument.
 
     A valid override wins; an invalid one gives UNCLASSIFIED. Otherwise it follows from the
@@ -74,7 +79,7 @@ def asset_category(instrument):
     return CGTAssetCategory.OTHER_ASSETS
 
 
-def is_real_property(instrument):
+def is_real_property(instrument: 'Instrument | None') -> bool:
     """Whether the instrument's legal form is real property.
 
     Its gains are residential under s102-6, whose quarantining is not implemented, so the
@@ -83,7 +88,7 @@ def is_real_property(instrument):
     return getattr(instrument, 'legal_form', None) == LegalForm.REAL_PROPERTY
 
 
-def suggest_legal_form(instrument, market_data=None):
+def suggest_legal_form(instrument: 'Instrument | None', market_data: dict[str, Any] | None = None) -> str | None:
     """A suggested legal form, or None.
 
     From the seed list, else a yfinance-style `market_data` quoteType of ETF or MUTUALFUND
@@ -107,7 +112,7 @@ def suggest_legal_form(instrument, market_data=None):
     return None
 
 
-def suggest_legal_form_from_activity(instrument):
+def suggest_legal_form_from_activity(instrument: 'Instrument | None') -> str | None:
     """Infer the legal form from income history, or None if there is none.
 
     Dividends only: company. Distributions only: unit trust. Both: stapled security.
@@ -129,7 +134,7 @@ def suggest_legal_form_from_activity(instrument):
     return None
 
 
-def suggested_country(market):
+def suggested_country(market: 'Market | None') -> str | None:
     """A suggested country for a market that has none recorded."""
     if market is None or market.country:
         return None

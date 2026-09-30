@@ -13,6 +13,7 @@ business concessions.
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any, cast
 
 from djmoney.money import Money
 
@@ -23,6 +24,11 @@ from share_dinkum_app.constants import (
     CGT_GAIN_DEFERRED_RESIDENTIAL,
     CGT_GAIN_RESIDENTIAL,
 )
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account, AttributionStatement, FiscalYear, Sell
+
+    FiscalYearRef = FiscalYear | str | None
 
 #: The single pool for gains with no s102-6 category (pre-cutover).
 UNCATEGORISED = 'capital gain'
@@ -47,7 +53,7 @@ class Schedule:
 
     fiscal_year: str | None
     basis: str
-    lines: list
+    lines: list[ScheduleLine]
     gross_gains: Money
     gross_losses: Money
     disregarded_gains: Money
@@ -58,31 +64,31 @@ class Schedule:
     losses_carried_forward: Money
     #: Division 119 minimum tax base: the net gain, before Division 30 and 31 deductions.
     minimum_tax_capital_gain_base: Money
-    warnings: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
-    def is_draft(self):
+    def is_draft(self) -> bool:
         """True if there are any `warnings`."""
         return bool(self.warnings)
 
 
-def _zero(currency):
+def _zero(currency: str) -> Money:
     return Money(Decimal('0'), currency)
 
 
-def _category_of(event):
+def _category_of(event: events_module.CGTEvent) -> str:
     """The event's s102-6 category, or UNCATEGORISED."""
     return event.gain_category or UNCATEGORISED
 
 
-def _ordered_categories(present):
+def _ordered_categories(present: list[str]) -> list[str]:
     """`present` categories in statutory loss order, then any others."""
     ordered = [c for c in CGT_LOSS_ABSORPTION_ORDER if c in present]
     ordered += [c for c in present if c not in CGT_LOSS_ABSORPTION_ORDER]
     return ordered
 
 
-def _spend(pool, gains):
+def _spend(pool: Decimal, gains: list[tuple[Decimal, Decimal]]) -> tuple[list[Decimal], Decimal]:
     """Apply `pool` to `(amount, discount rate)` gains, lowest rate first.
 
     Returns `(applied_by_index, remaining_pool)`.
@@ -98,7 +104,7 @@ def _spend(pool, gains):
     return applied, pool
 
 
-def _carried_forward_into(account, fiscal_year, zero):
+def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero: Money) -> Money:
     """Carried-forward losses still available to `fiscal_year` (every recorded loss if None).
 
     A recorded loss becomes available the year after it was made, less whatever the years
@@ -109,28 +115,28 @@ def _carried_forward_into(account, fiscal_year, zero):
 
     rows = CapitalLossCarryForward.objects.filter(account=account, is_active=True)
 
-    year = fiscal_year
+    year: Any = fiscal_year
     if year is not None and not hasattr(year, 'start_year'):
         year = FiscalYear.objects.filter(name=str(year)).first()
     if year is None:
-        return sum((row.amount for row in rows), zero)
+        return cast(Money, sum((row.amount for row in rows), zero))
 
-    rows = list(
+    earlier_rows = list(
         rows.filter(fiscal_year__start_year__lt=year.start_year)
         .select_related('fiscal_year')
         .order_by('fiscal_year__start_year'))
-    if not rows:
+    if not earlier_rows:
         return zero
 
     # Only years with a FiscalYear row can hold events, so the rest use nothing.
     years_between = FiscalYear.objects.filter(
         fiscal_year_type=year.fiscal_year_type,
-        start_year__gt=rows[0].fiscal_year.start_year,
+        start_year__gt=earlier_rows[0].fiscal_year.start_year,
         start_year__lt=year.start_year,
     ).order_by('start_year')
 
-    pool = zero
-    pending = list(rows)
+    pool: Any = zero
+    pending = list(earlier_rows)
     for between in years_between:
         while pending and pending[0].fiscal_year.start_year < between.start_year:
             pool += pending.pop(0).amount
@@ -141,7 +147,7 @@ def _carried_forward_into(account, fiscal_year, zero):
     return pool
 
 
-def build(account, fiscal_year, prior_year_losses=None):
+def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: Money | None = None) -> Schedule:
     """Build the Schedule for one fiscal year.
 
     `prior_year_losses` overrides the total read from `CapitalLossCarryForward`.
@@ -151,7 +157,7 @@ def build(account, fiscal_year, prior_year_losses=None):
 
     # Every year's events, since the warnings look back at earlier years. Narrowing to one
     # year saves nothing: `all_events` works every year out before it filters.
-    year_name = getattr(fiscal_year, 'name', fiscal_year)
+    year_name = cast('str | None', getattr(fiscal_year, 'name', fiscal_year))
     every_year = events_module.all_events(account)
     all_events = [e for e in every_year if year_name is None or e.fiscal_year == year_name]
 
@@ -166,7 +172,7 @@ def build(account, fiscal_year, prior_year_losses=None):
     disregarded_gains = sum((e.gross_gain for e in disregarded if e.gross_gain), zero)
 
     # (amount, discount percentage) per gain, grouped by category.
-    by_category = {}
+    by_category: dict[str, list[tuple[Decimal, Decimal]]] = {}
     for event in live:
         amount = getattr(event.gross_gain, 'amount', Decimal('0'))
         if amount <= 0:
@@ -181,7 +187,7 @@ def build(account, fiscal_year, prior_year_losses=None):
         prior_year_losses = _carried_forward_into(account, fiscal_year, zero)
     prior_pool = getattr(prior_year_losses, 'amount', Decimal('0'))
 
-    lines = []
+    lines: list[ScheduleLine] = []
     total_net = Decimal('0')
     total_discount = Decimal('0')
     total_current_applied = Decimal('0')
@@ -241,7 +247,7 @@ def build(account, fiscal_year, prior_year_losses=None):
     )
 
 
-def _year_still_running(fiscal_year):
+def _year_still_running(fiscal_year: 'FiscalYearRef') -> date | None:
     """The fiscal year's end date if it has not passed yet, else None (and None for None)."""
     from share_dinkum_app.models import FiscalYear
 
@@ -251,7 +257,7 @@ def _year_still_running(fiscal_year):
         # return always name a year, so there is nothing useful to say here.
         return None
 
-    year = fiscal_year
+    year: Any = fiscal_year
     if not hasattr(year, 'start_year'):
         year = FiscalYear.objects.filter(name=str(year)).first()
     if year is None:
@@ -261,7 +267,7 @@ def _year_still_running(fiscal_year):
     return end_date if end_date and date.today() <= end_date else None
 
 
-def _s115_105_applies(account, event):
+def _s115_105_applies(account: 'Account', event: events_module.CGTEvent) -> bool:
     """Whether the event's discount is governed by s115-105 (a foreign or temporary holder).
 
     For a disposal, any such day after 8 May 2012 while it was held. For a trust
@@ -273,7 +279,7 @@ def _s115_105_applies(account, event):
     return event.residency_status in (residency.FOREIGN, residency.TEMPORARY)
 
 
-def _sales_not_fully_allocated(account, year_name):
+def _sales_not_fully_allocated(account: 'Account', year_name: str | None) -> list[Any]:  # each Sell carries the `allocated` annotation
     """Sales in the year (every year if None) with units allocated to no parcel."""
     from share_dinkum_app.models import Sell
 
@@ -283,7 +289,7 @@ def _sales_not_fully_allocated(account, year_name):
     return list(sales)
 
 
-def _statements_disagreeing_on_cost_base(account, year_name):
+def _statements_disagreeing_on_cost_base(account: 'Account', year_name: str | None) -> list['AttributionStatement']:
     """Statements in the year whose stated cost base movement disagrees with their linked
     adjustment.
 
@@ -292,7 +298,7 @@ def _statements_disagreeing_on_cost_base(account, year_name):
     """
     from share_dinkum_app.models import AttributionStatement
 
-    disagreeing = []
+    disagreeing: list[AttributionStatement] = []
     statements = (
         AttributionStatement.objects
         .filter(account=account, is_active=True, cost_base_adjustment__isnull=False)
@@ -307,7 +313,8 @@ def _statements_disagreeing_on_cost_base(account, year_name):
     return disagreeing
 
 
-def _unrecorded_losses(account, every_year, year_name):
+def _unrecorded_losses(account: 'Account', every_year: list[events_module.CGTEvent],
+                       year_name: str | None) -> list[tuple[str, Decimal]]:
     """Earlier years that ended in a net capital loss with no carry-forward recorded for them.
 
     Returns `(year name, loss)` pairs, oldest first. Carried-forward losses are only ever
@@ -330,9 +337,9 @@ def _unrecorded_losses(account, every_year, year_name):
         CapitalLossCarryForward.objects.filter(account=account, is_active=True)
         .values_list('fiscal_year__name', flat=True))
 
-    net = {}
+    net: dict[str, Decimal] = {}
     for event in every_year:
-        if event.is_disregarded or event.fiscal_year not in earlier:
+        if event.is_disregarded or event.fiscal_year is None or event.fiscal_year not in earlier:
             continue
         if event.fiscal_year in recorded:
             continue
@@ -347,13 +354,15 @@ def _unrecorded_losses(account, every_year, year_name):
     ]
 
 
-def _warnings(account, live_events, all_events, year_name=None, every_year=None):
+def _warnings(account: 'Account', live_events: list[events_module.CGTEvent],
+              all_events: list[events_module.CGTEvent], year_name: str | None = None,
+              every_year: list[events_module.CGTEvent] | None = None) -> list[str]:
     """Every reason this schedule is not final, as messages.
 
     Most checks use `live_events`; the cutover and TAP override checks use `all_events`,
     which includes disregarded rows. `every_year` is every year's events, disregarded or not.
     """
-    warnings = []
+    warnings: list[str] = []
 
     # First, because it qualifies everything below it. The other warnings say a figure may
     # be wrong; this one says the year is not over, so the figure is not yet the answer to
@@ -435,7 +444,7 @@ def _warnings(account, live_events, all_events, year_name=None, every_year=None)
     if disagreeing:
         detail = '; '.join(
             f'{s.instrument.name} states {s.stated_cost_base_movement} '
-            f'and the adjustment records {s.cost_base_adjustment.cost_base_increase.amount}'
+            f'and the adjustment records {s.cost_base_adjustment.cost_base_increase.amount}'  # type: ignore[union-attr]
             for s in sorted(disagreeing, key=lambda s: s.instrument.name))
         warnings.append(
             'These annual statements disagree with the cost base adjustment recorded '

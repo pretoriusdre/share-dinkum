@@ -65,7 +65,7 @@ SEED_LEGAL_FORMS = {
 }
 
 
-def country_for_market(code=None, suffix=None):
+def country_for_market(code: str | None = None, suffix: str | None = None) -> str | None:
     """The market's country from its suffix, else its code, or None if unrecognised."""
     if suffix is not None:
         cleaned = str(suffix).strip().lstrip('.').upper()
@@ -78,7 +78,7 @@ def country_for_market(code=None, suffix=None):
     return None
 
 
-def seed_legal_form(instrument_name):
+def seed_legal_form(instrument_name: str | None) -> str | None:
     """A suggested legal form for a well known code, or None."""
     if not instrument_name:
         return None

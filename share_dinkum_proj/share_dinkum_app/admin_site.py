@@ -4,9 +4,12 @@
 instance of it and `admin.site.register(...)` works as usual.
 """
 
+from typing import Any
+
 from django.contrib import admin
+from django.http import HttpRequest
 from django.template.response import TemplateResponse
-from django.urls import path
+from django.urls import URLPattern, URLResolver, path
 
 
 class ShareDinkumAdminSite(admin.AdminSite):
@@ -16,14 +19,14 @@ class ShareDinkumAdminSite(admin.AdminSite):
     site_title = 'Share Dinkum'
     index_title = 'Share Dinkum. An open-source share tracker.'
 
-    def get_urls(self):
+    def get_urls(self) -> list[URLPattern | URLResolver]:
         """Admin URLs plus the dashboard and one route per dashboard action.
 
         `dashboard` is imported here, as this module loads before the app registry is ready.
         """
         from share_dinkum_app.dashboard import DASHBOARD_ACTIONS, dashboard_view
 
-        custom_urls = [
+        custom_urls: list[URLPattern | URLResolver] = [
             path('dashboard/', self.admin_view(dashboard_view), name='dashboard'),
         ]
         custom_urls += [
@@ -37,12 +40,12 @@ class ShareDinkumAdminSite(admin.AdminSite):
         # Custom URLs first, so a model never named `dashboard` could shadow them.
         return custom_urls + super().get_urls()
 
-    def index(self, request, extra_context=None):
+    def index(self, request: HttpRequest, extra_context: dict[str, Any] | None = None) -> TemplateResponse:
         """The admin index is the dashboard."""
         from share_dinkum_app.dashboard import prepare_dashboard_context
 
         app_list = self.get_app_list(request)
-        context = {
+        context: dict[str, Any] = {
             **self.each_context(request),
             'title': self.index_title,
             'subtitle': None,

@@ -7,10 +7,12 @@
 `update` backs up your data, pulls the latest code, syncs dependencies and applies any migrations.
 """
 
+import io
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / "share_dinkum_proj"
@@ -26,7 +28,7 @@ sys.path.insert(0, str(PROJECT))
 from share_dinkum_app import backup  # noqa: E402
 
 
-def _call(command, cwd=None):
+def _call(command: list[str], cwd: Path | None = None) -> int:
     """Run a command and return its exit code, surviving Ctrl+C.
 
     The child also receives Ctrl+C, so the first one waits for it to exit cleanly. A second
@@ -44,12 +46,12 @@ def _call(command, cwd=None):
                 process.terminate()
 
 
-def main():
+def main() -> None:
     argv = sys.argv[1:] or ["runserver"]
     raise SystemExit(_call([sys.executable, str(MANAGE), *argv]))
 
 
-def _run(description, command):
+def _run(description: str, command: list[str]) -> None:
     """Run one step, stopping the update if it fails."""
     print(f"\n==> {description}")
     print(f"    {' '.join(command)}")
@@ -59,19 +61,19 @@ def _run(description, command):
         raise SystemExit(1)
 
 
-def _git(*args):
+def _git(*args: str) -> str | None:
     """Read-only git command. Returns None if git cannot answer."""
     result = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else None
 
 
-def _local_changes():
+def _local_changes() -> set[str] | None:
     """Locally changed paths, including untracked ones (which can also block a pull)."""
     status = _git("status", "--porcelain")
     if status is None:
         return None
 
-    paths = set()
+    paths: set[str] = set()
     for line in status.splitlines():
         path = line[3:].strip()
         if " -> " in path:  # renames are reported as "old -> new"
@@ -81,7 +83,7 @@ def _local_changes():
     return paths
 
 
-def _incoming_changes():
+def _incoming_changes() -> set[str] | None:
     """Paths the update would change. Returns None if there is no upstream to compare against."""
     upstream = _git("rev-parse", "--abbrev-ref", "@{u}")
     if not upstream:
@@ -93,7 +95,7 @@ def _incoming_changes():
     return {line.strip() for line in changed.splitlines() if line.strip()}
 
 
-def conflicting_paths(local_changes, incoming_changes):
+def conflicting_paths(local_changes: set[str], incoming_changes: set[str] | None) -> list[str]:
     """Paths changed both locally and by the update.
 
     If `incoming_changes` is None (no upstream), every local change counts.
@@ -103,7 +105,7 @@ def conflicting_paths(local_changes, incoming_changes):
     return sorted(local_changes & incoming_changes)
 
 
-def _backup():
+def _backup() -> Path | None:
     """Back up the database and media to the shared backup folder. Returns its path, or None."""
     result = backup.make_backup(DATABASE, MEDIA)
     if result is None:
@@ -121,13 +123,13 @@ def _backup():
     return result["path"]
 
 
-def update():
+def update() -> None:
     """Back up, pull the latest code, sync dependencies, and apply migrations."""
 
     # Each step below prints before handing off to a child process that writes to the same terminal.
     # Without line buffering this output is block-buffered when redirected, and the steps appear
     # out of order relative to the output of the commands they describe.
-    sys.stdout.reconfigure(line_buffering=True)
+    cast(io.TextIOWrapper, sys.stdout).reconfigure(line_buffering=True)
 
     local_changes = _local_changes()
     if local_changes is None:

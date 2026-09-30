@@ -9,6 +9,7 @@ Sources:
 from dataclasses import dataclass, fields, replace
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from djmoney.money import Money
 
@@ -27,6 +28,11 @@ from share_dinkum_app.constants import (
     CGT_GAIN_NON_RESIDENTIAL,
     CGT_GAIN_RESIDENTIAL,
 )
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import (
+        Account, AttributionStatement, FiscalYear, Instrument, Parcel, Buy, Sell, SellAllocation,
+    )
 
 #: A disposal of a parcel: one SellAllocation.
 SOURCE_DISPOSAL = 'disposal'
@@ -149,19 +155,27 @@ TOTAL_PLACES = Decimal('0.0001')
 UNIT_PLACES = Decimal('0.000001')
 
 
-def _money(value, places=TOTAL_PLACES):
+@overload
+def _money(value: Money, places: Decimal = ...) -> Money: ...
+
+
+@overload
+def _money(value: None, places: Decimal = ...) -> None: ...
+
+
+def _money(value: Money | None, places: Decimal = TOTAL_PLACES) -> Money | None:
     """Round a Money to `places`, ROUND_HALF_UP to match `convert_to_decimal_field`."""
     if value is None:
         return None
     return Money(value.amount.quantize(places, rounding=ROUND_HALF_UP), value.currency)
 
 
-def event_fields():
+def event_fields() -> list[str]:
     """CGTEvent field names in declaration order, for report columns."""
     return [f.name for f in fields(CGTEvent)]
 
 
-def _gain_category(instrument, deferred=False):
+def _gain_category(instrument: 'Instrument | None', deferred: bool = False) -> str:
     """The s102-6 category a gain falls into.
 
     Residential only for real property; the Subdivision 26-155 quarantining that category
@@ -172,18 +186,19 @@ def _gain_category(instrument, deferred=False):
     return CGT_GAIN_DEFERRED_NON_RESIDENTIAL if deferred else CGT_GAIN_NON_RESIDENTIAL
 
 
-def models_2027_regime(account):
+def models_2027_regime(account: 'Account | None') -> bool:
     """Whether this portfolio models the 2027 regime. False for None."""
     return bool(getattr(account, 'model_2027_regime', False))
 
 
-def _regime_for(event_date):
+def _regime_for(event_date: date | None) -> str:
     if event_date is None:
         return REGIME_PRE_CUTOVER
     return REGIME_POST_CUTOVER if event_date >= CGT_CUTOVER_DATE else REGIME_PRE_CUTOVER
 
 
-def _events_from_allocation(allocation, account=None, declared=None):
+def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | None' = None,
+                            declared: residency_module.Periods | None = None) -> list[CGTEvent]:
     """Events for one SellAllocation: one row, or two if split at the 2027 cutover.
 
     Proceeds are the sale's apportioned by quantity; the cost base is the parcel's total.
@@ -279,7 +294,8 @@ def _events_from_allocation(allocation, account=None, declared=None):
     return _apply_cutover(whole, allocation, account=account, declared=declared)
 
 
-def _apply_cutover(whole, allocation, account=None, declared=None):
+def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Account | None' = None,
+                   declared: residency_module.Periods | None = None) -> list[CGTEvent]:
     """Characterise a disposal on or after 1 July 2027.
 
     Two rows where s112-155 deems the parcel sold at the cutover: a deferred slice keeping the
@@ -317,7 +333,7 @@ def _apply_cutover(whole, allocation, account=None, declared=None):
         whole, buy, sell, market_value, indexation_eligible)
 
 
-def _outcome(proceeds, indexed_cost_base, plain_cost_base):
+def _outcome(proceeds: Money, indexed_cost_base: Money, plain_cost_base: Money) -> tuple[Money, Money]:
     """Return `(signed gain, cost_base_used)` given indexed and unindexed cost bases.
 
     Indexation can reduce a gain but never create a loss: a loss uses the reduced cost base,
@@ -331,7 +347,8 @@ def _outcome(proceeds, indexed_cost_base, plain_cost_base):
     return zero, proceeds
 
 
-def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
+def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexation_eligible: bool,
+                               reason: str | None) -> CGTEvent:
     """A post-cutover disposal that s112-155 does not split.
 
     If indexation is available it is mandatory (s110-36(1A)) and removes the discount
@@ -351,8 +368,10 @@ def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
         # That message describes the other outcome, an apportioned discount unindexed.
         reason = cutover_module.PENDING_S115_105_INDEXED
 
+    net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
+    assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
     gain, cost_base_used = _outcome(
-        whole.net_proceeds, _money(whole.cost_base * factor), whole.cost_base)
+        net_proceeds, _money(cast(Money, plain_cost_base * factor)), plain_cost_base)
     return replace(
         whole,
         cost_base=cost_base_used,
@@ -368,16 +387,19 @@ def _single_post_cutover_event(whole, buy, sell, indexation_eligible, reason):
     )
 
 
-def _split_events(whole, buy, sell, market_value, indexation_eligible):
+def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money,
+                  indexation_eligible: bool) -> list[CGTEvent]:
     """The deferred and post-cutover gains from an s112-155 deemed sale at `market_value`.
 
     Before indexation they sum to the whole gain. The deferred slice keeps the discount; the
     post-cutover slice is indexed from 1 July 2027 and gets no discount.
     """
-    deferred_gain = _money(market_value - whole.cost_base)
+    net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
+    assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
+    deferred_gain = _money(market_value - plain_cost_base)
 
-    factor = Decimal('1.000')
-    pending = None
+    factor: Decimal | None = Decimal('1.000')
+    pending: str | None = None
     indexed_reacquisition_cost = market_value
     if indexation_eligible:
         try:
@@ -388,7 +410,7 @@ def _split_events(whole, buy, sell, market_value, indexation_eligible):
             pending = str(exc)
 
     post_gain, post_cost_base = _outcome(
-        whole.net_proceeds, indexed_reacquisition_cost, market_value)
+        net_proceeds, indexed_reacquisition_cost, market_value)
     post_gain = _money(post_gain)
 
     # s114-10(9): the deemed reacquisition is disregarded for the 12-month rule, so the
@@ -437,11 +459,11 @@ def _split_events(whole, buy, sell, market_value, indexation_eligible):
     return [deferred, post]
 
 
-def _zero_like(money):
+def _zero_like(money: Money) -> Money:
     return Money(Decimal('0'), money.currency)
 
 
-def share_of_parcel(parcel, quantity):
+def share_of_parcel(parcel: 'Parcel', quantity: Decimal) -> Decimal:
     """`quantity` as a fraction of the parcel's quantity; zero for an empty parcel."""
     parcel_quantity = parcel.parcel_quantity
     if not parcel_quantity:
@@ -449,19 +471,20 @@ def share_of_parcel(parcel, quantity):
     return quantity / parcel_quantity
 
 
-def _attribution_events(statement, account=None, declared=None):
+def _attribution_events(statement: 'AttributionStatement', account: 'Account | None' = None,
+                        declared: residency_module.Periods | None = None) -> list[CGTEvent]:
     """Events for one trust statement: up to one discounted and one other-method gain.
 
     Discounted gains are grossed up (doubled), because the trust reports them halved and the
     member applies their own discount after losses.
     """
-    events = []
+    events: list[CGTEvent] = []
     event_date = statement.financial_year_end_date
     instrument = statement.instrument
     fiscal_year = statement.fiscal_year
     zero = Money(Decimal('0'), instrument.currency)
 
-    common = dict(
+    common: dict[str, Any] = dict(
         source=SOURCE_ATTRIBUTION,
         event_date=event_date,
         fiscal_year=fiscal_year.name if fiscal_year else None,
@@ -495,7 +518,7 @@ def _attribution_events(statement, account=None, declared=None):
         discount_basis=residency_module.basis(account, declared=declared),
     )
 
-    def attributed(amount, status, method, discount_percentage):
+    def attributed(amount: Money, status: str, method: str, discount_percentage: Decimal) -> None:
         disregarded, reason = tap_module.disregard_attribution(
             account, status, event_date, declared=declared)
         events.append(CGTEvent(
@@ -534,7 +557,7 @@ def _attribution_events(statement, account=None, declared=None):
     return events
 
 
-def _attributed_discount_percentage(account, declared):
+def _attributed_discount_percentage(account: 'Account | None', declared: residency_module.Periods | None) -> Decimal:
     """The taxpayer type's flat discount rate, not apportioned for residency.
 
     s115-105 apportions over the trust's ownership period, which the statement does not
@@ -544,7 +567,7 @@ def _attributed_discount_percentage(account, declared):
     return discount_module.base_rate(account)
 
 
-def attribution_events(account, fiscal_year=None):
+def attribution_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' = None) -> list[CGTEvent]:
     """Capital gains attributed to this account by managed investment trusts."""
     from share_dinkum_app.models import AttributionStatement
 
@@ -552,7 +575,7 @@ def attribution_events(account, fiscal_year=None):
 
     declared = residency_module.periods(account)
 
-    events = []
+    events: list[CGTEvent] = []
     statements = (
         AttributionStatement.objects.filter(account=account, is_active=True)
         .select_related('instrument', 'instrument__market')
@@ -566,14 +589,14 @@ def attribution_events(account, fiscal_year=None):
     return events
 
 
-def all_events(account, fiscal_year=None):
+def all_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' = None) -> list[CGTEvent]:
     """Every capital gains event for an account, from whatever source, oldest first."""
     events = disposal_events(account, fiscal_year=fiscal_year)
     events += attribution_events(account, fiscal_year=fiscal_year)
     return sorted(events, key=lambda event: (event.event_date, event.source, event.instrument))
 
 
-def disposal_events(account, fiscal_year=None):
+def disposal_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' = None) -> list[CGTEvent]:
     """Every disposal event for an account, oldest sale first.
 
     `fiscal_year` (a FiscalYear or its name) narrows the result to that year.
@@ -584,7 +607,7 @@ def disposal_events(account, fiscal_year=None):
 
     declared = residency_module.periods(account)
 
-    events = []
+    events: list[CGTEvent] = []
     sells = (
         Sell.objects.filter(account=account, is_active=True)
         .select_related('instrument')

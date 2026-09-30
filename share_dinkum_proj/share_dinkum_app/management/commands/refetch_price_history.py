@@ -14,7 +14,9 @@ and is listed so you know those are still adjusted.
     uv run dev refetch_price_history --account "Default Portfolio"
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from typing import Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db.models import Min
 
 from share_dinkum_app.choices import ValuationSource
@@ -25,11 +27,11 @@ from share_dinkum_app.models import (
 class Command(BaseCommand):
     help = 'Fetch every stored price again, as traded rather than adjusted. Deletes nothing.'
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument('--dry-run', action='store_true')
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
         if options['account']:
             accounts = accounts.filter(description=options['account'])
@@ -39,7 +41,7 @@ class Command(BaseCommand):
         for account in accounts:
             self._handle_account(account, options['dry_run'])
 
-    def _handle_account(self, account, dry_run):
+    def _handle_account(self, account: Account, dry_run: bool) -> None:
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         kept = []

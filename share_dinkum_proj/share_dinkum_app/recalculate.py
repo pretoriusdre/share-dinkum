@@ -7,11 +7,16 @@ live properties and are unaffected; the admin lists and exports read the copies.
 """
 
 import logging
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account, Buy, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell
 
 logger = logging.getLogger(__name__)
 
 
-def parcels(parcels):
+def parcels(parcels: 'Iterable[Parcel]') -> int:
     """Save each parcel, then the allocations that sold it (their gain uses its cost base)."""
     count = 0
     for parcel in parcels:
@@ -23,7 +28,7 @@ def parcels(parcels):
     return count
 
 
-def trades(buys=(), sells=()):
+def trades(buys: 'Iterable[Buy]' = (), sells: 'Iterable[Sell]' = ()) -> int:
     """Save each trade and the parcels and allocations derived from it."""
     from share_dinkum_app.models import Parcel
 
@@ -40,7 +45,7 @@ def trades(buys=(), sells=()):
     return count
 
 
-def derived_from(trade):
+def derived_from(trade: 'Buy | Sell') -> int:
     """The parcels and allocations derived from `trade`, after its price was corrected."""
     from share_dinkum_app.models import Buy, Parcel
 
@@ -53,7 +58,7 @@ def derived_from(trade):
     return count
 
 
-def after_rate_change(rate):
+def after_rate_change(rate: 'ExchangeRate') -> int:
     """Everything converted at `rate`, after its multiplier changed."""
     count = trades(buys=rate.buy.all(), sells=rate.sell.all())
     for record in [*rate.cost_base_adjustment.all(), *rate.dividend.all(),
@@ -63,7 +68,7 @@ def after_rate_change(rate):
     return count
 
 
-def reattach_adjustments(account):
+def reattach_adjustments(account: 'Account') -> int:
     """Carry adjustments left on parcels a share split replaced to what replaced them.
 
     Returns the number of allocations carried. See `data_checks.orphaned_adjustment_allocations`.
@@ -76,7 +81,7 @@ def reattach_adjustments(account):
     return len(orphans)
 
 
-def _push_down(allocation):
+def _push_down(allocation: 'CostBaseAdjustmentAllocation') -> None:
     """Follow the allocation's parcel to the active parcels descended from it.
 
     One child is a split, so the allocation moves whole. Two are a partial sale, so it is
@@ -102,7 +107,7 @@ def _push_down(allocation):
             allocation.pk, parcel.pk, len(children))
 
 
-def refetch_placeholder_rates(account):
+def refetch_placeholder_rates(account: 'Account') -> int:
     """Fetch again every stand-in exchange rate. Returns the number now real."""
     from share_dinkum_app import data_checks
     from share_dinkum_app.models import ExchangeRate
@@ -117,7 +122,7 @@ def refetch_placeholder_rates(account):
     return replaced
 
 
-def account(account):
+def account(account: 'Account') -> int:
     """Every stored figure in `account`, dependencies first. Returns the records saved."""
     from share_dinkum_app.models import (
         Buy, CostBaseAdjustment, Distribution, Dividend, Instrument, Parcel, Sell)
