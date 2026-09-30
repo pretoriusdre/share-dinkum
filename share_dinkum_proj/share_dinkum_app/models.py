@@ -12,6 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.urls import reverse
 from django.db.models import Sum, F, Q
 from django.db.models.functions import Coalesce
@@ -51,6 +52,12 @@ from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid impo
 # Logging setup
 import logging
 logger = logging.getLogger(__name__)
+
+
+def validate_positive(value):
+    """More than zero. Parcels are multiplied and divided by these quantities."""
+    if value is not None and value <= 0:
+        raise ValidationError(f'This must be more than zero, not {value}.')
 
 
 
@@ -347,6 +354,21 @@ class BaseModel(models.Model):
     #: again, so once the record has been handled they cannot be changed.
     STRUCTURAL_FIELDS = ()
 
+    #: Fields that must be more than zero (`validate_positive`). A form checks them; an import
+    #: does not, so a new record is checked again on save. Zero otherwise failed as a division
+    #: by zero deep inside a signal, and a negative made a negative holding.
+    POSITIVE_FIELDS = ()
+
+    def _not_positive_message(self):
+        """Why this new record cannot be saved because of a POSITIVE_FIELDS value, or None."""
+        for name in self.POSITIVE_FIELDS:
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                field = self._meta.get_field(name)
+                return (f'The {field.verbose_name} of this {self._meta.verbose_name} must be '
+                        f'more than zero, not {value}.')
+        return None
+
     def structural_changes(self):
         """Names of the structural fields this unsaved state would change; [] if none."""
         if not self.STRUCTURAL_FIELDS or self._state.adding or self.pk is None:
@@ -399,6 +421,10 @@ class BaseModel(models.Model):
             changed = self.structural_changes()
             if changed:
                 raise ValueError(self._structural_change_message(changed))
+        if self._state.adding:
+            problem = self._not_positive_message()
+            if problem:
+                raise ValueError(problem)
         if self._is_new_event():
             problem = self.chronology_problem()
             if problem:
@@ -636,7 +662,20 @@ class ExchangeRate(AbstractExchangeRate):
         if was_placeholder:
             from share_dinkum_app import recalculate
             recalculate.after_rate_change(self)
-        
+
+    def rate_corrected(self):
+        """Settle a multiplier just changed by hand.
+
+        It is a real rate now, so it stops being a stand-in that the next refresh fetches over,
+        and whatever was converted at the old figure is worked out again.
+        """
+        if self.is_placeholder:
+            self.is_placeholder = False
+            self.save(update_fields=['is_placeholder'])
+        self.update_current()
+        from share_dinkum_app import recalculate
+        recalculate.after_rate_change(self)
+
     @classmethod
     def update_exchange_rate_history(cls, account, convert_from, convert_to):
 
@@ -918,11 +957,17 @@ class Instrument(BaseModel):
         else:
             return f'{self.name} - {self.description} (INACTIVE)'
 
-    def update_price_history(self, end_date=None):
+    #: Stored prices are replaced by what is fetched for the same day, not kept.
+    PRICE_HISTORY_FIELDS = ['open', 'high', 'low', 'close', 'volume', 'stock_splits']
+
+    def update_price_history(self, end_date=None, start_date=None):
         """Fetch price history up to `end_date` (default today) and update the current price.
 
-        Starts four days before the latest stored price, to cover weekends and suspensions,
-        or from the first buy if there is none.
+        Starts at `start_date` if given, else four days before the latest stored price, to
+        cover weekends and suspensions, or from the first buy if there is none. A day already
+        stored is overwritten: a price fetched while the market was open is not that day's
+        close, and one stored adjusted is not the price it traded at. Returns the number of
+        days stored.
         """
         end_date = end_date or date.today()
 
@@ -932,11 +977,11 @@ class Instrument(BaseModel):
             .first()
         )
 
-        if latest_price_history:
+        if start_date is None and latest_price_history:
             start_date = latest_price_history.date - timedelta(days=4)
             if start_date > end_date:
                 start_date = end_date
-        else:
+        elif start_date is None:
             earliest_buy = (
                 Buy.objects.filter(instrument=self)
                 .order_by('date')
@@ -948,7 +993,7 @@ class Instrument(BaseModel):
                 start_date = date(2020, 1, 1)
 
         if start_date > end_date:
-            return
+            return 0
 
         try:
             price_history = yfinanceinterface.get_instrument_price_history(
@@ -958,7 +1003,7 @@ class Instrument(BaseModel):
             )
             if price_history.empty:
                 logger.warning('No price history returned for %s between %s and %s', self, start_date, end_date)
-                return
+                return 0
 
             decimal_fields = {
                 field_name: InstrumentPriceHistory._meta.get_field(field_name)
@@ -976,7 +1021,7 @@ class Instrument(BaseModel):
             price_history = price_history.dropna(subset=['close'])
             if price_history.empty:
                 logger.warning('No valid close prices for %s between %s and %s', self, start_date, end_date)
-                return
+                return 0
 
             instrument_price_field = self._meta.get_field('current_unit_price')
 
@@ -1000,10 +1045,17 @@ class Instrument(BaseModel):
                 )
 
             with transaction.atomic():
-                InstrumentPriceHistory.objects.bulk_create(price_history_entries, ignore_conflicts=True)
+                InstrumentPriceHistory.objects.bulk_create(
+                    price_history_entries,
+                    update_conflicts=True,
+                    unique_fields=['account', 'instrument', 'date'],
+                    update_fields=self.PRICE_HISTORY_FIELDS,
+                )
+            return len(price_history_entries)
 
         except Exception as e:
             logger.error(f'Error getting price history for {self} between {start_date} and {end_date}, {e}', exc_info=True)
+            return 0
 
 
 
@@ -1046,7 +1098,7 @@ class Trade(BaseModel):
     description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
     instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
     date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
     unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     total_brokerage = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
     exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
@@ -1096,6 +1148,7 @@ class Trade(BaseModel):
 
     STRUCTURAL_FIELDS = (
         'instrument', 'date', 'quantity', 'unit_price_currency', 'total_brokerage_currency')
+    POSITIVE_FIELDS = ('quantity',)
 
     #: Can be corrected after the trade is entered. A change is carried to its parcels and
     #: allocations, whose stored figures would otherwise keep the old price.
@@ -1143,10 +1196,11 @@ class Buy(Trade):
     def chronology_problem(self):
         if not self.instrument_id or not self.date:
             return None
-        # A split reaches buys dated on or before it.
+        # A split is dated on its ex-date and reaches buys before it. A buy on the ex-date is
+        # already in post-split units, as a sale that day is, so only a later split matters.
         split = ShareSplit.objects.filter(
             account_id=self.account_id, instrument_id=self.instrument_id,
-            _creation_handled=True, date__gte=self.date,
+            _creation_handled=True, date__gt=self.date,
         ).order_by('date').first()
         if split is None:
             return None
@@ -1206,14 +1260,6 @@ class Sell(Trade):
             .select_related('instrument')
             .order_by('date')
         )
-
-    def clean(self):
-        super().clean()
-        # Ensure an exchange rate is provided for cross-currency sells
-        if self.instrument.currency != self.account.currency and not self.exchange_rate:
-            raise ValidationError(
-                "Exchange rate is required when instrument currency differs from account currency."
-            )
 
     def chronology_problem(self):
         if not self.instrument_id or not self.date:
@@ -1597,14 +1643,17 @@ class SellAllocation(BaseModel):
 class ShareSplit(BaseModel):
     MODEL_DESCRIPTION = 'Events which transform parcels into new parcels with different cost base and quantity.'
     instrument = models.ForeignKey(Instrument, related_name='share_split', on_delete=models.PROTECT)
-    quantity_before = models.DecimalField(max_digits=16, decimal_places=4)
-    quantity_after = models.DecimalField(max_digits=16, decimal_places=4)
-    date = models.DateField()
+    quantity_before = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
+    quantity_after = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
+    date = models.DateField(
+        help_text='The ex-date. Trades on it are already in post-split units, so only parcels '
+                  'bought before it are split.')
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
     affected_parcels = models.ManyToManyField(Parcel, editable=False)
     _creation_handled = models.BooleanField(default=False, editable=False)
 
     STRUCTURAL_FIELDS = ('instrument', 'date', 'quantity_before', 'quantity_after')
+    POSITIVE_FIELDS = ('quantity_before', 'quantity_after')
 
     calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False)
     
@@ -1621,17 +1670,20 @@ class ShareSplit(BaseModel):
     def chronology_problem(self):
         if not self.instrument_id or not self.date:
             return None
+        # A sale on the split's own date is in post-split units, so it needs the split applied
+        # first, just as a later one does. Only parcels bought before the split are split.
         sold_later = SellAllocation.objects.filter(
             account_id=self.account_id, is_active=True,
-            sell__instrument_id=self.instrument_id, sell__date__gt=self.date,
-            parcel__buy__date__lte=self.date,
+            sell__instrument_id=self.instrument_id, sell__date__gte=self.date,
+            parcel__buy__date__lt=self.date,
         ).select_related('sell').order_by('sell__date').first()
         if sold_later is None:
             return None
+        when = 'on the same day' if sold_later.sell.date == self.date else 'dated before it'
         return (
             f'The sale of {self.instrument.name} on {sold_later.sell.date} has already been '
-            f'allocated, and this split is dated before it, so that sale was worked out in '
-            f'pre-split units. Delete that sale, enter the split, then enter the sale again.')
+            f'allocated, and this split is {when}, so that sale was worked out in pre-split '
+            f'units. Delete that sale, enter the split, then enter the sale again.')
 
     def deletion_blocker(self):
         """Why this split cannot be deleted, or None if it can.
@@ -1824,7 +1876,7 @@ class Income(BaseModel):
     instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
 
     date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[MinValueValidator(0)])
     exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
 
     file = models.FileField(null=True, blank=True, upload_to=user_directory_path)

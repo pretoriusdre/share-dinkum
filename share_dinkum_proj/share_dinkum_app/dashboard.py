@@ -45,6 +45,7 @@ from share_dinkum_app.models import (
     LodgedSnapshotError,
     ResidencyPeriod,
     Sell,
+    ShareSplit,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,20 @@ def prepare_dashboard_context(request, context):
                 trade_adjustments[record['date']].setdefault(inst_id, Decimal('0'))
                 trade_adjustments[record['date']][inst_id] -= Decimal(record['quantity'])
 
+            # Holdings are in the units of each day, as the prices are, so a split is a step
+            # on its ex-date. Without it a holding stayed in pre-split units for good and went
+            # negative once the post-split units were sold.
+            split_ratios = defaultdict(dict)
+            for record in ShareSplit.objects.filter(
+                    account=account, is_active=True,
+                    instrument_id__in=area_instrument_ids,
+            ).values('instrument_id', 'date', 'quantity_before', 'quantity_after'):
+                if record['quantity_before']:
+                    ratios = split_ratios[record['date']]
+                    ratios[record['instrument_id']] = ratios.get(
+                        record['instrument_id'], Decimal('1')) * (
+                        Decimal(record['quantity_after']) / Decimal(record['quantity_before']))
+
             available_dates = set(trade_adjustments.keys())
 
             if available_dates:
@@ -362,6 +377,13 @@ def prepare_dashboard_context(request, context):
                 quantities_by_date = {}
 
                 for date_key in sorted_dates:
+                    # The split first: it reaches what was held before its ex-date, and the
+                    # day's own trades are already in post-split units.
+                    for inst_id, ratio in split_ratios.get(date_key, {}).items():
+                        quantities_current[inst_id] = (
+                            quantities_current[inst_id] * ratio
+                        ).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+
                     adjustments = trade_adjustments.get(date_key, {})
                     for inst_id, delta in adjustments.items():
                         quantities_current[inst_id] = (

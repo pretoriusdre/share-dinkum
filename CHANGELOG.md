@@ -61,6 +61,15 @@ To upgrade, stop the server and run `uv run update`.
 
 - **`docs/capital_gains_models.md`**: what each new model is for and the order to fill them in.
 
+- **`uv run dev refetch_price_history`** fetches every stored price again, as traded (see below).
+  It deletes nothing, and names any holding the provider no longer has, whose prices stay adjusted.
+
+- **A CGT schedule warns when an earlier year's net capital loss is not recorded** as carried
+  forward. Nothing is carried forward until it is, so the later year's net gain may be overstated.
+
+- **The dashboard warns about a parcel whose cost base has gone below zero** from AMIT decreases.
+  The excess is a capital gain in the year it arose (CGT event E10), which is not worked out here.
+
 ### Changed
 
 - **AMIT cost base adjustments are weighted by time held.** A parcel held for two months of a
@@ -86,6 +95,27 @@ To upgrade, stop the server and run `uv run update`.
 
 - **Import templates load sales, splits and adjustments in date order**, each sale followed by its
   own sell allocations. Previously every sale was allocated before any split loaded, in row order.
+
+- **A share split is dated on its ex-date.** A buy on that day is already in post-split units and
+  is no longer split, as a sale that day already was not. A split entered after a sale on its own
+  date is refused, like one entered after a later sale.
+
+- **Prices are stored as traded that day**, not adjusted for the dividends and splits since. Every
+  use of a stored price wants what a unit was worth on the day: the 30 June 2027 value was
+  understated by any distribution going ex on 1 July, and the value chart paired adjusted prices
+  with actual holdings. Stored prices change only when fetched again, so run
+  `uv run dev refetch_price_history` once. A day fetched again now replaces the stored one, so a
+  price taken while the market was open no longer stays as that day's close.
+
+- **AMIT adjustments weigh every parcel in the same units.** A parcel sold before a share split in
+  the same year, or one still held when an adjustment is entered after a later split, counted in
+  different units from the rest. Existing adjustments are not reallocated.
+
+- **A day with no exchange rate quoted (a weekend, a holiday) takes the last rate before it**, not
+  the next one after.
+
+- **Quantities must be more than zero** on buys, sales and splits, and a dividend's cannot be
+  negative. Zero used to fail deep inside a save with a division by zero.
 
 - **Loading a file again**:
   - A blank cell leaves the stored value alone, rather than clearing it. A blank `file` used to
@@ -145,6 +175,24 @@ To upgrade, stop the server and run `uv run update`.
 
 - **Reimporting a portfolio no longer fails on a blank user email.** Blank cells in optional text
   columns load as empty strings. A missing date or quantity still fails.
+
+- **Exchange rates and CPI quarters can be saved in the admin**, which saved every record twice
+  and rejected the second save's arguments on those. A rate corrected there stops being a stand-in,
+  and what was converted at it is worked out again.
+
+- **The admin no longer asks for an exchange rate on a foreign-currency sale.** One is attached on
+  save, as for a buy.
+
+- **Correcting a dividend's date or currency changes its exchange rate to match.** In a portfolio
+  not held in AUD, amounts left at zero no longer attach an AUD rate to a dividend.
+
+- **`capture_cutover_valuations --date` values the date given**, with `--purpose` to say what for.
+  It valued 30 June 2027 whatever date it was given.
+
+- **The dashboard charts follow share splits.** A holding stayed in pre-split units and went
+  negative once post-split units were sold.
+
+- **An offline update check is not retried for an hour**, rather than on every dashboard load.
 
 ## 0.2.0
 

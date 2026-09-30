@@ -149,8 +149,11 @@ def build(account, fiscal_year, prior_year_losses=None):
     currency = account.currency
     zero = _zero(currency)
 
-    all_events = events_module.all_events(account, fiscal_year=fiscal_year)
+    # Every year's events, since the warnings look back at earlier years. Narrowing to one
+    # year saves nothing: `all_events` works every year out before it filters.
     year_name = getattr(fiscal_year, 'name', fiscal_year)
+    every_year = events_module.all_events(account)
+    all_events = [e for e in every_year if year_name is None or e.fiscal_year == year_name]
 
     # s855-10 disregards a foreign resident's capital loss on non-TAP just as it disregards
     # the gain. Letting a disregarded loss shelter an assessable gain would be claiming a
@@ -234,7 +237,7 @@ def build(account, fiscal_year, prior_year_losses=None):
         # s119-5: the gains remaining after step 6. The Division 30 and 31 deductions that
         # reduce it are not portfolio data, so this is the base and not the final figure.
         minimum_tax_capital_gain_base=Money(total_net, currency),
-        warnings=_warnings(account, live, all_events, year_name),
+        warnings=_warnings(account, live, all_events, year_name, every_year=every_year),
     )
 
 
@@ -304,11 +307,51 @@ def _statements_disagreeing_on_cost_base(account, year_name):
     return disagreeing
 
 
-def _warnings(account, live_events, all_events, year_name=None):
+def _unrecorded_losses(account, every_year, year_name):
+    """Earlier years that ended in a net capital loss with no carry-forward recorded for them.
+
+    Returns `(year name, loss)` pairs, oldest first. Carried-forward losses are only ever
+    read from `CapitalLossCarryForward`, so a loss made in a year the application holds
+    reaches no later year until it is recorded there.
+    """
+    from share_dinkum_app.models import CapitalLossCarryForward, FiscalYear
+
+    if year_name is None:
+        return []
+    year = FiscalYear.objects.filter(name=str(year_name)).first()
+    if year is None:
+        return []
+
+    earlier = dict(
+        FiscalYear.objects.filter(
+            fiscal_year_type=year.fiscal_year_type, start_year__lt=year.start_year)
+        .values_list('name', 'start_year'))
+    recorded = set(
+        CapitalLossCarryForward.objects.filter(account=account, is_active=True)
+        .values_list('fiscal_year__name', flat=True))
+
+    net = {}
+    for event in every_year:
+        if event.is_disregarded or event.fiscal_year not in earlier:
+            continue
+        if event.fiscal_year in recorded:
+            continue
+        gain = getattr(event.gross_gain, 'amount', Decimal('0')) or Decimal('0')
+        loss = getattr(event.gross_loss, 'amount', Decimal('0')) or Decimal('0')
+        net[event.fiscal_year] = net.get(event.fiscal_year, Decimal('0')) + gain - loss
+
+    return [
+        (name, -amount)
+        for name, amount in sorted(net.items(), key=lambda item: earlier[item[0]])
+        if amount < 0
+    ]
+
+
+def _warnings(account, live_events, all_events, year_name=None, every_year=None):
     """Every reason this schedule is not final, as messages.
 
     Most checks use `live_events`; the cutover and TAP override checks use `all_events`,
-    which includes disregarded rows.
+    which includes disregarded rows. `every_year` is every year's events, disregarded or not.
     """
     warnings = []
 
@@ -431,6 +474,16 @@ def _warnings(account, live_events, all_events, year_name=None):
             f'is missing from this schedule: {detail}. The usual causes are a sale larger '
             'than the holding, a sale dated before its purchase, or a MANUAL sale with no '
             'sell allocations entered.')
+
+    unrecorded = _unrecorded_losses(account, every_year or [], year_name)
+    if unrecorded:
+        detail = '; '.join(
+            f'{name}: {account.currency} {amount:,.2f}' for name, amount in unrecorded)
+        warnings.append(
+            'These earlier years ended with a net capital loss that has not been recorded as '
+            f'carried forward, so none of it is applied here: {detail}. If the loss is still '
+            'available, this net capital gain is overstated. Once a year\'s return is lodged, '
+            'record its loss under Capital loss carry forwards.')
 
     for reason in sorted({e.pending_reason for e in live_events if e.pending_reason}):
         warnings.append(reason)

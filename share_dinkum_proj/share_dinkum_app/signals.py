@@ -11,6 +11,7 @@ from django.db import transaction
 from django.db.models import Sum, Q, Max, Min
 from django.forms.models import model_to_dict
 
+from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
 from share_dinkum_app import excelinterface
@@ -260,11 +261,32 @@ def allocate_cost_base_adjustment_now(instance):
     end = instance.financial_year_end_date
     cutoff_date = _fiscal_year_start(instance, end)
 
+    splits = list(ShareSplit.objects.filter(
+        account=instance.account, instrument=instance.instrument, is_active=True))
+
     def days_held_in_year(parcel):
         """Days the parcel was held within the adjustment's year, inclusive."""
         start = max(cutoff_date, parcel.buy.date)
         finish = min(end, parcel.sale_date) if parcel.sale_date else end
         return max((finish - start).days + 1, 0)
+
+    def units_at_year_end(parcel):
+        """The parcel's quantity counted in units as they stood at the end of the year.
+
+        Parcels are split when a split happens, so one sold before it is still in the old
+        units and one entered after a later split is in the new ones. Weighted by their own
+        quantities, a unit sold before a 2-for-1 split counted for half as much as a unit
+        still held. So each is taken back to the units it was bought in, then forward by the
+        splits up to the year end.
+        """
+        bought_units = parcel.parcel_quantity / parcel.cumulative_split_multiplier
+        for split in splits:
+            if parcel.buy.date < split.date <= end:
+                bought_units *= split.ratio
+        return bought_units
+
+    def weight(parcel):
+        return units_at_year_end(parcel) * days_held_in_year(parcel)
 
     with transaction.atomic():
         affected_parcels = list(Parcel.objects.filter(
@@ -280,7 +302,7 @@ def allocate_cost_base_adjustment_now(instance):
         parcel_set_to_save = set()
 
         for parcel in affected_parcels:
-            total_weighted_sum += parcel.parcel_quantity * days_held_in_year(parcel)
+            total_weighted_sum += weight(parcel)
 
         if not total_weighted_sum:
             # Nothing was held during the year, so there is nothing to allocate against.
@@ -293,8 +315,7 @@ def allocate_cost_base_adjustment_now(instance):
         # adjustment -- a few hundredths of a cent each time, but it is cost base going
         # quietly missing, and it accumulates over every adjustment a holding receives.
         weighted = sorted(
-            ((parcel, parcel.parcel_quantity * days_held_in_year(parcel))
-             for parcel in affected_parcels),
+            ((parcel, weight(parcel)) for parcel in affected_parcels),
             key=lambda pair: pair[1],
         )
 
@@ -364,11 +385,12 @@ def handle_share_split(sender, instance, created, **kwargs):
     with transaction.atomic():
         multiplier = instance.ratio
 
+        # The split is dated on its ex-date. A buy on that day is already in post-split units.
         for parcel in Parcel.objects.filter(
             account=instance.account,
             deactivation_date__isnull=True,
             buy__instrument=instance.instrument,
-            buy__date__lte=instance.date
+            buy__date__lt=instance.date
         ):
             if not parcel.is_sold:
                 new_parcel = parcel.split_or_consolidate(
@@ -536,39 +558,93 @@ def delete_file_on_change(sender, instance, **kwargs):
         _delete_file_after_commit(old_file)
 
 
+def _money_fields(model):
+    """The record's own money fields, in declaration order. The calculated_ copies are the
+    application's output, already converted."""
+    return [
+        field for field in model._meta.fields
+        if isinstance(field, MoneyField) and not field.name.startswith('calculated_')]
+
+
+def _date_field_name(model):
+    names = {field.name for field in model._meta.fields}
+    for name in ('date', 'financial_year_end_date'):
+        if name in names:
+            return name
+    return None
+
+
+def _record_currency(instance):
+    """The currency the record's amounts are in, or None if it has none.
+
+    The first amount that is not zero decides. A field left at zero keeps the column default
+    (AUD) whatever the record is in, so it would name the wrong currency. Only when every
+    amount is zero does the first field decide: a worthless sale still needs its zero
+    proceeds converted, or they cannot be set against a cost base.
+    """
+    amounts = [getattr(instance, field.name, None) for field in _money_fields(type(instance))]
+    amounts = [money for money in amounts if money is not None]
+    for money in amounts:
+        if money.amount:
+            return str(money.currency)
+    return str(amounts[0].currency) if amounts else None
+
+
+def _saves_conversion_inputs(model, update_fields):
+    """Whether a save limited to `update_fields` writes anything the rate depends on."""
+    inputs = {'exchange_rate', _date_field_name(model)}
+    for field in _money_fields(model):
+        inputs |= {field.name, f'{field.name}_currency'}
+    return bool(set(update_fields) & inputs)
+
+
+def _moved_off_rate_date(instance, rate):
+    """Whether this save moves a stored record off the date its rate was fetched for.
+
+    A rate the user chose for another date on purpose is left alone: only a rate for the date
+    the record had before this save is taken to be the one it was given automatically.
+    """
+    name = _date_field_name(type(instance))
+    if name is None or instance._state.adding or instance.pk is None:
+        return False
+    stored = type(instance).objects.filter(pk=instance.pk).values_list(name, flat=True).first()
+    return stored is not None and stored != getattr(instance, name) and rate.date == stored
+
+
 @receiver(pre_save)
-def attach_exchange_rate(sender, instance, raw=False, **kwargs):
-    """Give a foreign-currency record its exchange rate before it is saved.
+def attach_exchange_rate(sender, instance, raw=False, update_fields=None, **kwargs):
+    """Give a foreign-currency record the exchange rate for its currency and date.
 
     This has to happen before post_save: the parcel, sell allocations and cost base
     allocations are built from the record by post_save handlers, and they would otherwise
     see its amounts unconverted.
+
+    A rate already attached is kept unless it no longer fits: it converts another currency
+    than the record is now in (applying it would fail), or the record has moved off the date
+    it was fetched for. A dividend's date and currency can be corrected after it is entered.
     """
     if raw or not isinstance(instance, BaseModel) or not hasattr(instance, 'exchange_rate'):
         return
+    if update_fields is not None and not _saves_conversion_inputs(sender, update_fields):
+        # Storing calculated figures, say. A rate changed here would not even be written.
+        return
 
-    currency_val = None
-    for attr_name in dir(instance):
-        if attr_name.endswith('_currency'):
-            try:
-                val = getattr(instance, attr_name, None)
-                if (
-                    val and
-                    val != instance.account.currency and not
-                    getattr(instance, 'exchange_rate', None)
-                ):
-                    currency_val = val
-                    break
-            except AttributeError:
-                continue
+    account_currency = str(instance.account.currency)
+    currency = _record_currency(instance)
+    wanted = currency if currency and currency != account_currency else None
 
-    if currency_val:
-        instance.exchange_rate = ExchangeRate.get_or_create(
-            account=instance.account,
-            convert_from=currency_val,
-            convert_to=instance.account.currency,
-            exchange_date=getattr(instance, 'date', None),
-        )
+    rate = instance.exchange_rate
+    if rate is not None and wanted is not None:
+        fits = (str(rate.convert_from), str(rate.convert_to)) == (wanted, account_currency)
+        if fits and not _moved_off_rate_date(instance, rate):
+            return
+
+    instance.exchange_rate = None if wanted is None else ExchangeRate.get_or_create(
+        account=instance.account,
+        convert_from=wanted,
+        convert_to=account_currency,
+        exchange_date=getattr(instance, 'date', None),
+    )
 
 
 @receiver(post_save)

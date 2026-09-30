@@ -29,6 +29,9 @@ RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
 # Short enough that a slow or unreachable network is not noticeable on the page which triggers it.
 REQUEST_TIMEOUT_SECONDS = 3
 CHECK_INTERVAL = timedelta(hours=24)
+# A check that could not reach GitHub is remembered for this long, so an offline machine is not
+# made to wait on the request every time the dashboard loads.
+FAILED_CHECK_RETRY = timedelta(hours=1)
 
 
 def get_version():
@@ -58,23 +61,28 @@ def parse_version(text):
 
 
 def read_cache():
-    """The cached check if under CHECK_INTERVAL old, else None."""
+    """The cached check if still current, else None.
+
+    Current for CHECK_INTERVAL after reaching GitHub, FAILED_CHECK_RETRY after failing to.
+    """
     try:
         cached = json.loads(get_cache_path().read_text(encoding='utf-8'))
-        checked_at = datetime.fromisoformat(cached['checked_at'])
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(cached['checked_at'])
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
-    if datetime.now(timezone.utc) - checked_at > CHECK_INTERVAL:
+    interval = CHECK_INTERVAL if cached.get('reached', True) else FAILED_CHECK_RETRY
+    if age > interval:
         return None
     return cached
 
 
-def write_cache(latest_version, release_url):
+def write_cache(latest_version, release_url, reached=True):
     payload = {
         'checked_at': datetime.now(timezone.utc).isoformat(),
         'latest_version': latest_version,
         'release_url': release_url,
+        'reached': reached,
     }
     try:
         get_cache_path().write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -122,8 +130,11 @@ def check_for_update(force=False):
     if cached is None:
         reached_github, tag_name, release_url = fetch_latest_release()
         if not reached_github:
+            write_cache(latest_version=None, release_url=None, reached=False)
             return result
         cached = write_cache(latest_version=tag_name, release_url=release_url)
+    if not cached.get('reached', True):
+        return result
 
     latest_version = cached.get('latest_version')
     result['latest_version'] = latest_version

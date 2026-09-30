@@ -330,7 +330,7 @@ class GetInstrumentPriceHistoryTests(TestCase):
         self.assertIn('open', result.columns)
         self.assertIn('volume', result.columns)
         self.assertIn('stock_splits', result.columns)
-        mock_ticker.history.assert_called_once_with(start='2024-01-01')
+        mock_ticker.history.assert_called_once_with(start='2024-01-01', auto_adjust=False)
 
 
     def test_returns_empty_dataframe_on_exception(self, mock_yf):
@@ -342,19 +342,20 @@ class GetInstrumentPriceHistoryTests(TestCase):
         result = yfinanceinterface.get_instrument_price_history(instrument, start_date=date(2024, 1, 1))
         self.assertTrue(result.empty)
         self.assertIsInstance(result, pd.DataFrame)
-        mock_ticker.history.assert_called_once_with(start='2024-01-01')
+        mock_ticker.history.assert_called_once_with(start='2024-01-01', auto_adjust=False)
 
 
 
-    def test_end_date_is_inclusive_and_forwarded_to_history(self, mock_yf):
+    def test_end_date_is_inclusive(self, mock_yf):
+        """Fetched to today, so later splits can be undone, then cut at the end date."""
         mock_ticker = MagicMock()
         mock_yf.Ticker.return_value = mock_ticker
         instrument = MagicMock()
         instrument.yfinance_ticker_code = 'BHP.AX'
         df = pd.DataFrame({
-            'Open': [50.0], 'High': [51.0], 'Low': [49.0], 'Close': [50.5],
-            'Volume': [1000000], 'Stock Splits': [0],
-        }, index=pd.DatetimeIndex([pd.Timestamp('2024-01-31')]))
+            'Open': [50.0, 25.0], 'High': [51.0, 26.0], 'Low': [49.0, 24.0],
+            'Close': [50.5, 25.5], 'Volume': [1000000, 2000000], 'Stock Splits': [0, 2.0],
+        }, index=pd.DatetimeIndex([pd.Timestamp('2024-01-31'), pd.Timestamp('2024-03-01')]))
         df.index.name = 'Date'
         mock_ticker.history.return_value = df.copy()
         result = yfinanceinterface.get_instrument_price_history(
@@ -362,8 +363,50 @@ class GetInstrumentPriceHistoryTests(TestCase):
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 31),
         )
-        self.assertFalse(result.empty)
-        mock_ticker.history.assert_called_once_with(start='2024-01-01', end='2024-02-01')
+        self.assertEqual(list(result['date']), [date(2024, 1, 31)])
+        # Yahoo had already halved it for the 2-for-1 split in March.
+        self.assertEqual(result['close'].iloc[0], Decimal('101'))
+        mock_ticker.history.assert_called_once_with(
+            start='2024-01-01', end=(date.today() + timedelta(days=1)).isoformat(),
+            auto_adjust=False)
+
+    def test_an_end_date_of_today_is_forwarded(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'BHP.AX'
+        mock_ticker.history.return_value = pd.DataFrame()
+        yfinanceinterface.get_instrument_price_history(
+            instrument, start_date=date(2024, 1, 1), end_date=date.today())
+        mock_ticker.history.assert_called_once_with(
+            start='2024-01-01', end=(date.today() + timedelta(days=1)).isoformat(),
+            auto_adjust=False)
+
+    def test_prices_are_stored_as_traded(self, mock_yf):
+        """Yahoo divides earlier prices by later splits; each is multiplied back.
+
+        The rows are from NVDA around its 10-for-1 split on 10 June 2024, as Yahoo returns them
+        unadjusted: the 7 June close comes back as 120.888, not the 1,208.88 it traded at.
+        """
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        instrument = MagicMock()
+        instrument.yfinance_ticker_code = 'NVDA'
+        df = pd.DataFrame({
+            'Open': [121.0, 120.0], 'High': [122.0, 122.5], 'Low': [119.0, 119.5],
+            'Close': [120.888, 121.79], 'Adj Close': [120.54, 121.44],
+            'Volume': [412386000, 314162700], 'Dividends': [0.0, 0.0],
+            'Stock Splits': [0.0, 10.0],
+        }, index=pd.DatetimeIndex([pd.Timestamp('2024-06-07'), pd.Timestamp('2024-06-10')]))
+        df.index.name = 'Date'
+        mock_ticker.history.return_value = df.copy()
+
+        result = yfinanceinterface.get_instrument_price_history(
+            instrument, start_date=date(2024, 6, 7))
+
+        self.assertEqual(list(result['close']), [Decimal('1208.88'), Decimal('121.79')])
+        self.assertEqual(list(result['volume']), [41238600, 314162700])
+        self.assertNotIn('adj_close', result.columns)
 
 
 @patch('share_dinkum_app.yfinanceinterface.yf')
@@ -2949,14 +2992,40 @@ class VersionTests(TestCase):
         self.assertIsNone(version.parse_version(''))
         self.assertIsNone(version.parse_version('not-a-version'))
 
+    def _temporary_cache(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        cache = patch.object(version, 'get_cache_path', return_value=folder / 'check.json')
+        cache.start()
+        self.addCleanup(cache.stop)
+
     def test_an_unreachable_github_reports_no_update(self):
+        self._temporary_cache()
         with patch.object(version.requests, 'get', side_effect=OSError('no network')):
-            with patch.object(version, 'read_cache', return_value=None):
-                result = version.check_for_update()
+            result = version.check_for_update()
 
         self.assertFalse(result['update_available'])
         self.assertIsNone(result['latest_version'])
         self.assertEqual(result['current_version'], version.__version__)
+
+    def test_an_unreachable_github_is_not_asked_again_on_the_next_page(self):
+        """Offline, every dashboard load waited on the request, since a failure was not kept."""
+        self._temporary_cache()
+        with patch.object(version.requests, 'get', side_effect=OSError('no network')) as get:
+            version.check_for_update()
+            result = version.check_for_update()
+
+        self.assertEqual(get.call_count, 1)
+        self.assertFalse(result['update_available'])
+
+    def test_an_unreachable_github_is_asked_again_after_an_hour(self):
+        self._temporary_cache()
+        version.write_cache(latest_version=None, release_url=None, reached=False)
+        stale = json.loads(version.get_cache_path().read_text(encoding='utf-8'))
+        stale['checked_at'] = (timezone.now() - timedelta(hours=2)).isoformat()
+        version.get_cache_path().write_text(json.dumps(stale), encoding='utf-8')
+
+        self.assertIsNone(version.read_cache())
 
     def test_no_published_release_reports_no_update(self):
         response = MagicMock(status_code=404)
@@ -6780,3 +6849,636 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         self.assertEqual(
             later.losses_carried_forward.amount,
             Decimal('1568.6881') + Decimal('5000') - Decimal('4401.3617'))
+
+
+# =============================================================================
+# Error sweep regressions
+# =============================================================================
+
+
+def _superuser_request():
+    from django.test import RequestFactory
+    request = RequestFactory().post('/')
+    request.user = AppUser.objects.create_superuser('sweep', 'sweep@example.com', 'x')
+    return request
+
+
+class AdminSavesEveryModelTests(TransactionTestCase):
+    """The admin saved each record twice, the first time passing `user`, which a model with no
+    save() of its own rejects."""
+
+    def test_a_cpi_quarter_can_be_added(self):
+        entry = CPIIndex(quarter_start_date=date(2027, 7, 1), index_number=Decimal('140.2'))
+        admin.site._registry[CPIIndex].save_model(
+            _superuser_request(), entry, form=None, change=False)
+        self.assertTrue(CPIIndex.objects.filter(quarter_start_date=date(2027, 7, 1)).exists())
+
+    def test_rates_cannot_be_added_by_hand(self):
+        """Its account is not editable, so a rate added in the admin could never be saved."""
+        self.assertFalse(
+            admin.site._registry[ExchangeRate].has_add_permission(_superuser_request()))
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=None)
+class ExchangeRateCorrectedInAdminTests(TransactionTestCase):
+    """A rate corrected by hand is a real rate, and what was converted at it is redone."""
+
+    def _usd_buy(self):
+        account = create_account()
+        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        return Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 15),
+            quantity=Decimal('10'), unit_price=Money(100, 'USD'), total_brokerage=Money(0, 'USD'),
+        )
+
+    def _correct(self, rate, multiplier):
+        model_admin = admin.site._registry[ExchangeRate]
+        request = _superuser_request()
+        form = model_admin.get_form(request, rate)(data={
+            'convert_from': 'USD', 'convert_to': 'AUD', 'date': rate.date.isoformat(),
+            'exchange_rate_multiplier': multiplier,
+        }, instance=rate)
+        self.assertTrue(form.is_valid(), form.errors)
+        model_admin.save_model(request, form.save(commit=False), form, change=True)
+
+    def test_a_stand_in_corrected_by_hand_stops_being_one(self, mock_get_rate):
+        buy = self._usd_buy()
+        rate = buy.exchange_rate
+        self.assertTrue(rate.is_placeholder)
+
+        self._correct(rate, '1.4')
+
+        rate.refresh_from_db()
+        self.assertFalse(rate.is_placeholder)
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.calculated_total_cost_base.amount, Decimal('1400'))
+
+    def test_a_fetched_rate_corrected_by_hand_is_worked_through(self, mock_get_rate):
+        mock_get_rate.return_value = Decimal('1.5')
+        buy = self._usd_buy()
+        self.assertFalse(buy.exchange_rate.is_placeholder)
+
+        self._correct(buy.exchange_rate, '1.6')
+
+        buy.refresh_from_db()
+        self.assertEqual(buy.calculated_unit_price_converted.amount, Decimal('160'))
+        self.assertEqual(
+            Parcel.objects.get(buy=buy).calculated_total_cost_base.amount, Decimal('1600'))
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class ForeignSaleEntryTests(TransactionTestCase):
+    """A foreign-currency sale is given its rate on save, as a buy is."""
+
+    def _holding(self):
+        account = create_account()
+        instrument = create_instrument(account=account, name='IBIT', currency='USD')
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(50, 'USD'), total_brokerage=Money(0, 'USD'),
+        )
+        return account, instrument
+
+    def test_it_validates_without_a_rate_and_is_given_one(self, mock_get_rate):
+        account, instrument = self._holding()
+        sell = Sell(
+            account=account, instrument=instrument, date=date(2025, 3, 10),
+            quantity=Decimal('40'), unit_price=Money(60, 'USD'), total_brokerage=Money(10, 'USD'),
+            strategy='FIFO',
+        )
+        sell.full_clean()
+        sell.save()
+        self.assertEqual(sell.exchange_rate.exchange_rate_multiplier, Decimal('1.5'))
+
+    def test_a_sale_with_no_instrument_is_a_form_error(self, mock_get_rate):
+        sell = Sell(
+            account=create_account(), date=date(2025, 3, 10), quantity=Decimal('40'),
+            unit_price=Money(60, 'AUD'), total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+        with self.assertRaises(ValidationError) as caught:
+            sell.full_clean()
+        self.assertIn('instrument', caught.exception.message_dict)
+
+    def test_a_worthless_foreign_sale_is_still_converted(self, mock_get_rate):
+        """Its amounts are all zero, but its proceeds still meet an AUD cost base."""
+        account, instrument = self._holding()
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2025, 3, 10),
+            quantity=Decimal('100'), unit_price=Money(0, 'USD'), total_brokerage=Money(0, 'USD'),
+            strategy='FIFO',
+        )
+        self.assertIsNotNone(sell.exchange_rate)
+        gain = sell.sale_allocation.get().calculated_total_capital_gain
+        self.assertEqual(gain, Money(Decimal('-7500'), 'AUD'))
+
+
+class CaptureValuationOnAGivenDateTests(TransactionTestCase):
+    """`--date` values the day given. It used to value 30 June 2027 whatever it was told."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='CUT')
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2020, 1, 15),
+            quantity=Decimal('1000'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        for day, close in ((date(2021, 7, 1), '12.25'), (date(2027, 6, 30), '15.5')):
+            InstrumentPriceHistory.objects.create(
+                account=self.account, instrument=self.instrument, date=day, open=Decimal(close),
+                high=Decimal(close), low=Decimal(close), close=Decimal(close), volume=1000,
+                stock_splits=Decimal('0'),
+            )
+
+    def _capture(self, *args):
+        call_command(
+            'capture_cutover_valuations', '--account', self.account.description, *args,
+            stdout=io.StringIO())
+
+    def test_the_date_given_is_the_date_valued(self):
+        self._capture('--date', '2021-07-01')
+        valuation = InstrumentValuation.objects.get()
+        self.assertEqual(valuation.valuation_date, date(2021, 7, 1))
+        self.assertEqual(valuation.unit_value, Money(Decimal('12.25'), 'AUD'))
+        self.assertEqual(valuation.purpose, 'OTHER')
+
+    def test_its_purpose_can_be_given(self):
+        self._capture('--date', '2021-07-01', '--purpose', 'DEPARTURE')
+        self.assertEqual(InstrumentValuation.objects.get().purpose, 'DEPARTURE')
+
+
+class TradesOnASplitDateTests(TransactionTestCase):
+    """A split is dated on its ex-date: trades that day are already in post-split units."""
+
+    SPLIT_DAY = date(2021, 1, 4)
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2020, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _split(self):
+        return ShareSplit.objects.create(
+            account=self.account, instrument=self.instrument, date=self.SPLIT_DAY,
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+
+    def _buy_on_the_split_day(self):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=self.SPLIT_DAY,
+            quantity=Decimal('50'), unit_price=Money(5, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _sale_on_the_split_day(self, quantity):
+        return Sell(
+            account=self.account, instrument=self.instrument, date=self.SPLIT_DAY,
+            quantity=Decimal(quantity), unit_price=Money(6, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO',
+        )
+
+    def _held(self):
+        return Instrument.objects.get(pk=self.instrument.pk).quantity_held
+
+    def test_a_buy_on_the_split_date_is_not_split(self):
+        buy = self._buy_on_the_split_day()
+        self._split()
+        self.assertEqual(
+            Parcel.objects.get(buy=buy, deactivation_date__isnull=True).parcel_quantity,
+            Decimal('50'))
+        self.assertEqual(self._held(), Decimal('250'))
+
+    def test_a_buy_on_the_split_date_can_be_entered_after_the_split(self):
+        self._split()
+        self._buy_on_the_split_day()
+        self.assertEqual(self._held(), Decimal('250'))
+
+    def test_a_split_entered_after_a_same_day_sale_is_refused(self):
+        self._sale_on_the_split_day('40').save()
+        split = ShareSplit(
+            account=self.account, instrument=self.instrument, date=self.SPLIT_DAY,
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'))
+        with self.assertRaisesMessage(ValidationError, 'on the same day'):
+            split.full_clean()
+        with self.assertRaisesMessage(ValueError, 'on the same day'):
+            split.save()
+
+    def test_a_sale_on_the_split_date_sells_split_units(self):
+        self._split()
+        self._sale_on_the_split_day('150').save()
+        self.assertEqual(self._held(), Decimal('50'))
+
+
+class TrustOnlyYearInWorkbookTests(TransactionTestCase):
+    """A year whose only capital gains a trust attributed is still in the CGT workbook."""
+
+    def test_the_year_is_included(self):
+        account = create_account()
+        instrument = create_instrument(account=account, name='VGS')
+        statement = AttributionStatement.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2025, 6, 30))
+        AttributionComponent.objects.create(
+            account=account, statement=statement, component='DISCOUNTED_TAP',
+            amount=Money(Decimal('100'), 'AUD'))
+        path = Path(tempfile.mkdtemp()) / 'schedule.xlsx'
+        self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
+
+        reports.cgt_schedule_workbook(account, path)
+
+        index = pd.read_excel(path, sheet_name='Index')
+        sheet = index.loc[index['table_name'] == 'Summary', 'sheet_name'].iloc[0]
+        summary = pd.read_excel(path, sheet_name=str(sheet).zfill(2))
+        self.assertEqual(list(summary['fiscal_year']), ['FY2024/25'])
+        self.assertEqual(summary['total_current_year_capital_gains'].iloc[0], 200)
+
+
+def _rate_for(convert_from, convert_to, exchange_date=None):
+    """A stand-in for the market: USD 1.5 up to 1 March 2024 and 1.6 after; GBP 2.0."""
+    if convert_from == 'GBP':
+        return Decimal('2.0')
+    if exchange_date is not None and exchange_date <= date(2024, 3, 1):
+        return Decimal('1.5')
+    return Decimal('1.6')
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', side_effect=_rate_for)
+class ExchangeRateFollowsTheRecordTests(TransactionTestCase):
+    """A dividend's date and currency can be corrected, and its rate has to follow."""
+
+    def _dividend(self, account=None, **amounts):
+        account = account or create_account()
+        instrument = create_instrument(account=account, name='AAPL', currency='USD')
+        return Dividend.objects.create(
+            account=account, instrument=instrument, date=date(2024, 3, 1),
+            quantity=Decimal('100'), dividend_type='FOREIGN', **amounts)
+
+    def test_moving_it_to_another_date_converts_it_at_that_date(self, mock_get_rate):
+        dividend = self._dividend(unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'))
+        self.assertEqual(dividend.total_dividend_converted, Money(Decimal('75'), 'AUD'))
+
+        dividend.date = date(2024, 4, 2)
+        dividend.save()
+
+        dividend.refresh_from_db()
+        self.assertEqual(dividend.exchange_rate.date, date(2024, 4, 2))
+        self.assertEqual(dividend.total_dividend_converted, Money(Decimal('80'), 'AUD'))
+
+    def test_changing_its_currency_changes_its_rate(self, mock_get_rate):
+        dividend = self._dividend(unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'))
+
+        dividend.unfranked_amount_per_share = Money(Decimal('0.5'), 'GBP')
+        dividend.save()
+
+        self.assertEqual(str(dividend.exchange_rate.convert_from), 'GBP')
+        self.assertEqual(dividend.total_dividend_converted, Money(Decimal('100'), 'AUD'))
+
+    def test_changing_it_to_the_accounts_currency_drops_its_rate(self, mock_get_rate):
+        dividend = self._dividend(unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'))
+
+        dividend.unfranked_amount_per_share = Money(Decimal('0.5'), 'AUD')
+        dividend.save()
+
+        self.assertIsNone(dividend.exchange_rate)
+        self.assertEqual(dividend.total_dividend_converted, Money(Decimal('50'), 'AUD'))
+
+    def test_zero_amounts_left_in_the_default_currency_do_not_decide(self, mock_get_rate):
+        """In a US dollar portfolio the unused amounts still default to AUD 0."""
+        account = create_account(currency='USD')
+        dividend = self._dividend(
+            account=account, unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'))
+
+        self.assertIsNone(dividend.exchange_rate)
+        self.assertEqual(dividend.total_dividend_converted, Money(Decimal('50'), 'USD'))
+
+    def test_a_rate_chosen_for_a_trade_is_kept(self, mock_get_rate):
+        account = create_account()
+        instrument = create_instrument(account=account, name='AAPL', currency='USD')
+        chosen = create_exchange_rate(
+            account, 'USD', 'AUD', rate=Decimal('1.7'), exchange_date=date(2024, 1, 5))
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10),
+            quantity=Decimal('10'), unit_price=Money(100, 'USD'),
+            total_brokerage=Money(0, 'USD'), exchange_rate=chosen,
+        )
+
+        buy.save()
+
+        buy.refresh_from_db()
+        self.assertEqual(buy.exchange_rate, chosen)
+
+
+class PositiveQuantityTests(TransactionTestCase):
+    """Quantities are divided by, so zero failed deep inside a signal and a negative made a
+    negative holding. Both are refused with a reason, by the form and on save."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+
+    def _buy(self, quantity):
+        return Buy(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 10),
+            quantity=Decimal(quantity), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+    def _split(self, before, after):
+        return ShareSplit(
+            account=self.account, instrument=self.instrument, date=date(2024, 3, 1),
+            quantity_before=Decimal(before), quantity_after=Decimal(after))
+
+    def _refused(self, record, field):
+        with self.assertRaises(ValidationError) as caught:
+            record.full_clean()
+        self.assertIn(field, caught.exception.message_dict)
+        with self.assertRaisesMessage(ValueError, 'must be more than zero'):
+            record.save()
+
+    def test_a_buy_of_nothing_is_refused(self):
+        self._refused(self._buy('0'), 'quantity')
+        self.assertFalse(Buy.objects.exists())
+
+    def test_a_negative_buy_is_refused(self):
+        self._refused(self._buy('-5'), 'quantity')
+
+    def test_a_split_from_nothing_is_refused(self):
+        self._refused(self._split('0', '2'), 'quantity_before')
+
+    def test_a_split_to_nothing_is_refused(self):
+        self._refused(self._split('1', '0'), 'quantity_after')
+
+    def test_a_negative_dividend_quantity_is_a_form_error(self):
+        dividend = Dividend(
+            account=self.account, instrument=self.instrument, date=date(2024, 3, 1),
+            quantity=Decimal('-1'))
+        with self.assertRaises(ValidationError) as caught:
+            dividend.full_clean()
+        self.assertIn('quantity', caught.exception.message_dict)
+
+
+class DashboardHoldingsAcrossASplitTests(TransactionTestCase):
+    """The charts count a holding in each day's units, so a split is a step on its ex-date."""
+
+    def setUp(self):
+        today = date.today()
+        self.bought, self.split, self.sold = (
+            today - timedelta(days=30), today - timedelta(days=20), today - timedelta(days=10))
+        self.account = create_account()
+        instrument = create_instrument(account=self.account, name='SPL')
+        Buy.objects.create(
+            account=self.account, instrument=instrument, date=self.bought,
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        ShareSplit.objects.create(
+            account=self.account, instrument=instrument, date=self.split,
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+        Sell.objects.create(
+            account=self.account, instrument=instrument, date=self.sold,
+            quantity=Decimal('150'), unit_price=Money(5, 'AUD'), total_brokerage=Money(0, 'AUD'),
+            strategy='FIFO',
+        )
+        # As traded: 10 a share before the split, 5 after it.
+        for day, close in ((self.bought, '10'), (self.split, '5')):
+            InstrumentPriceHistory.objects.create(
+                account=self.account, instrument=instrument, date=day, open=Decimal(close),
+                high=Decimal(close), low=Decimal(close), close=Decimal(close), volume=0,
+                stock_splits=Decimal('0'),
+            )
+
+    def _context(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = AppUser.objects.get(pk=self.account.owner_id)
+        update = {'current_version': '0', 'latest_version': None, 'release_url': '',
+                  'update_available': False}
+        with patch.object(dashboard.version, 'check_for_update', return_value=update):
+            return dashboard.prepare_dashboard_context(request, {})
+
+    def _on(self, context, series, day):
+        labels = context[f'{series}_chart_labels']
+        return context[f'{series}_chart_datasets'][0]['data'][labels.index(day.isoformat())]
+
+    def test_the_split_steps_the_holding_up_and_the_sale_leaves_it_positive(self):
+        context = self._context()
+        self.assertEqual(self._on(context, 'area', self.split - timedelta(days=1)), 100)
+        self.assertEqual(self._on(context, 'area', self.split), 200)
+        self.assertEqual(self._on(context, 'area', self.sold), 50)
+        self.assertGreaterEqual(min(context['area_chart_datasets'][0]['data']), 0)
+
+    def test_the_value_does_not_jump_at_the_split(self):
+        context = self._context()
+        self.assertEqual(self._on(context, 'value', self.split - timedelta(days=1)), 1000)
+        self.assertEqual(self._on(context, 'value', self.split), 1000)
+
+
+class StoredPricesAreAsTradedTests(TransactionTestCase):
+    """A stored day is replaced by a fresh fetch, and valuations read as-traded prices."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='VAS')
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2020, 1, 15),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _store(self, day, close):
+        return InstrumentPriceHistory.objects.create(
+            account=self.account, instrument=self.instrument, date=day, open=Decimal(close),
+            high=Decimal(close), low=Decimal(close), close=Decimal(close), volume=0,
+            stock_splits=Decimal('0'),
+        )
+
+    def _fetched(self, day, close):
+        return pd.DataFrame([{
+            'instrument': self.instrument, 'date': day, 'open': close, 'high': close,
+            'low': close, 'close': close, 'volume': 10, 'stock_splits': 0.0,
+        }])
+
+    def test_a_day_already_stored_is_replaced(self):
+        """It used to be kept: a price fetched mid-session, or adjusted, stayed for good."""
+        day = date(2027, 6, 30)
+        self._store(day, '98.50')
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history',
+                   return_value=self._fetched(day, 100.25)), \
+                patch('share_dinkum_app.models.yfinanceinterface.get_current_price',
+                      return_value=None):
+            stored = self.instrument.update_price_history(start_date=day, end_date=day)
+
+        self.assertEqual(stored, 1)
+        self.assertEqual(
+            InstrumentPriceHistory.objects.get(instrument=self.instrument, date=day).close,
+            Decimal('100.25'))
+
+    def test_a_value_from_before_a_split_is_brought_into_todays_units(self):
+        self._store(date(2027, 6, 30), '20')
+        ShareSplit.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2028, 1, 10),
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+        parcel = Parcel.objects.get(deactivation_date__isnull=True)
+
+        value, source = parcel.market_value_at(date(2027, 6, 30))
+
+        self.assertEqual(parcel.parcel_quantity, Decimal('200'))
+        self.assertEqual(value, Money(Decimal('2000'), 'AUD'))
+
+    def _refetch(self, fetched):
+        output = io.StringIO()
+        with patch.object(Instrument, 'update_price_history', return_value=fetched) as update:
+            call_command(
+                'refetch_price_history', '--account', self.account.description, stdout=output)
+        return output.getvalue(), update
+
+    def test_the_refetch_starts_from_the_earliest_stored_day(self):
+        self._store(date(2021, 3, 1), '11')
+        self._store(date(2024, 3, 1), '12')
+
+        _, update = self._refetch(fetched=800)
+
+        update.assert_called_once_with(start_date=date(2021, 3, 1))
+
+    def test_what_the_provider_no_longer_has_is_kept_and_named(self):
+        self._store(date(2021, 3, 1), '11')
+        InstrumentValuation.objects.create(
+            account=self.account, instrument=self.instrument, valuation_date=date(2021, 3, 1),
+            unit_value=Money(Decimal('11'), 'AUD'), source='PRICE_HISTORY')
+
+        output, _ = self._refetch(fetched=0)
+
+        self.assertTrue(InstrumentPriceHistory.objects.filter(instrument=self.instrument).exists())
+        self.assertIn('still adjusted', output)
+        self.assertIn('VAS', output)
+        self.assertIn('copied from a stored price', output)
+
+    def test_a_dry_run_fetches_nothing(self):
+        self._store(date(2021, 3, 1), '11')
+        output = io.StringIO()
+        with patch.object(Instrument, 'update_price_history') as update:
+            call_command('refetch_price_history', '--dry-run', stdout=output)
+        update.assert_not_called()
+        self.assertIn('would fetch from 2021-03-01', output.getvalue())
+
+
+class UnrecordedLossWarningTests(TransactionTestCase):
+    """A loss the application worked out reaches no later year until it is recorded."""
+
+    def setUp(self):
+        self.account = create_golden_master_portfolio()['account']
+        self.loss_year = FiscalYear.objects.get(name='FY2024/25')  # all losses in the fixture
+        self.account.fiscal_year_type.classify_date(date(2025, 8, 1))
+
+    def _warnings(self):
+        return ' '.join(cgt.build_schedule(self.account, 'FY2025/26').warnings)
+
+    def test_a_later_year_says_it_is_missing(self):
+        warnings = self._warnings()
+        self.assertIn('not been recorded as carried forward', warnings)
+        self.assertIn('FY2024/25: AUD 1,568.69', warnings)
+
+    def test_recording_it_clears_the_warning(self):
+        CapitalLossCarryForward.objects.create(
+            account=self.account, fiscal_year=self.loss_year,
+            amount=Money(Decimal('1568.69'), 'AUD'))
+        self.assertNotIn('FY2024/25:', self._warnings())
+
+
+class CostBaseAdjustmentAcrossASplitTests(TransactionTestCase):
+    """An adjustment is spread by units held, counted in the same units for every parcel.
+
+    Two parcels of 100 units each: one sold on 30 December 2023, after 183 days of FY2023/24,
+    and one held all 366. The one held all year takes two thirds of the adjustment, whichever
+    side of a 2-for-1 split the sale and the adjustment fall.
+    """
+
+    YEAR_END = date(2024, 6, 30)
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='SPL')
+        self.sold = self._buy(date(2023, 1, 10))
+        self.held = self._buy(date(2023, 1, 11))
+        Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2023, 12, 30),
+            quantity=Decimal('100'), unit_price=Money(12, 'AUD'), total_brokerage=Money(0, 'AUD'),
+            strategy='FIFO',
+        )
+
+    def _buy(self, day):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=day,
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _split(self, day):
+        ShareSplit.objects.create(
+            account=self.account, instrument=self.instrument, date=day,
+            quantity_before=Decimal('1'), quantity_after=Decimal('2'),
+        )
+
+    def _allocated(self):
+        CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=self.YEAR_END, cost_base_increase=Money(300, 'AUD'),
+        )
+        return {
+            buy: sum(allocation.cost_base_increase.amount
+                     for allocation in CostBaseAdjustmentAllocation.objects.filter(
+                         parcel__buy=buy, is_active=True))
+            for buy in (self.sold, self.held)
+        }
+
+    def test_a_split_during_the_year(self):
+        self._split(date(2024, 3, 1))
+        allocated = self._allocated()
+        self.assertEqual(allocated[self.sold], Decimal('100'))
+        self.assertEqual(allocated[self.held], Decimal('200'))
+
+    def test_a_split_after_the_year_but_before_the_adjustment_is_entered(self):
+        self._split(date(2024, 8, 1))
+        allocated = self._allocated()
+        self.assertEqual(allocated[self.sold], Decimal('100'))
+        self.assertEqual(allocated[self.held], Decimal('200'))
+
+
+class NegativeCostBaseCheckTests(TransactionTestCase):
+    """A cost base taken below zero by decreases is flagged, since E10 is not worked out."""
+
+    def test_it_is_found(self):
+        from share_dinkum_app import data_checks
+
+        account = create_account()
+        instrument = create_instrument(account=account, name='VAS')
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2023, 1, 10),
+            quantity=Decimal('10'), unit_price=Money(1, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+        self.assertNotIn('negative_cost_base_parcels', {f.key for f in data_checks.run(account)})
+
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(-50, 'AUD'),
+        )
+
+        finding = {f.key: f for f in data_checks.run(account)}['negative_cost_base_parcels']
+        self.assertEqual(finding.count, 1)
+        self.assertTrue(finding.affects_gains)
+        self.assertFalse(finding.repairable)
+
+
+@patch('share_dinkum_app.yfinanceinterface.yf')
+class ExchangeRateOnADayWithNoQuoteTests(TestCase):
+    """A weekend or holiday takes the last rate before it, as a stand-in's replacement does."""
+
+    def test_the_last_rate_on_or_before_the_day_is_used(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+        mock_ticker.history.return_value = pd.DataFrame(
+            {'Close': [1.50, 1.52]},
+            index=pd.DatetimeIndex([pd.Timestamp('2024-06-27'), pd.Timestamp('2024-06-28')]))
+
+        # 30 June 2024 was a Sunday.
+        rate = yfinanceinterface.get_exchange_rate('USD', 'AUD', exchange_date=date(2024, 6, 30))
+
+        self.assertEqual(rate.quantize(Decimal('0.01')), Decimal('1.52'))
+        mock_ticker.history.assert_called_once_with(start='2024-06-23', end='2024-07-01')

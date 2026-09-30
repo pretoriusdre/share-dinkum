@@ -3,7 +3,8 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from djmoney.money import Money
 
-from share_dinkum_app.models import Sell, Account, Parcel, CurrentExchangeRate, CGTReturnSnapshot
+from share_dinkum_app.models import (
+    AttributionStatement, Sell, Account, Parcel, CurrentExchangeRate, CGTReturnSnapshot)
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface
@@ -344,15 +345,19 @@ def _plain(value):
 def cgt_schedule_workbook(account, output_path, fiscal_years=None):
     """Write the CGT schedule workbook to `output_path` and return the path.
 
-    Covers `fiscal_years`, default every year with a sale. Draft years are included, with
-    an `is_draft` column and a Warnings sheet.
+    Covers `fiscal_years`, default every year with a sale or a trust's annual statement.
+    Draft years are included, with an `is_draft` column and a Warnings sheet.
     """
     if fiscal_years is None:
-        fiscal_years = sorted({
-            sell.fiscal_year.name
-            for sell in Sell.objects.filter(account=account, is_active=True)
-            if sell.fiscal_year
-        })
+        # A statement counts on its own: a year whose only gains a trust attributed is still a
+        # year with capital gains to report.
+        records = [
+            *Sell.objects.filter(account=account, is_active=True),
+            *AttributionStatement.objects.filter(account=account, is_active=True),
+        ]
+        years = {record.fiscal_year for record in records if record.fiscal_year}
+        fiscal_years = [
+            year.name for year in sorted(years, key=lambda year: year.start_year)]
 
     summaries, lines, warnings = [], [], []
     for year in fiscal_years:

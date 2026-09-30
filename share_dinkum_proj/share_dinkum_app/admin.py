@@ -16,6 +16,7 @@ from share_dinkum_app.choices import LegalForm, LegalFormSource
 from share_dinkum_app.models import (
     AppUser,
     Account,
+    ExchangeRate,
     Parcel,
     Instrument,
 )
@@ -113,10 +114,6 @@ class GenericModelAdmin(admin.ModelAdmin):
         filterable_fields = ['instrument', 'account']
         return [field.name for field in self.model._meta.get_fields() if field.name in filterable_fields]
     
-    def save_model(self, request, obj, form, change):
-        obj.save(user=request.user)  # Ensure the user is passed
-        super().save_model(request, obj, form, change)
-
     def has_delete_permission(self, request, obj=None):
         # A record that knows why it cannot be deleted (a share split whose parcels have
         # since been sold) hides the button rather than failing on the confirmation page.
@@ -230,6 +227,21 @@ class AccountAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
 
 
+class ExchangeRateAdmin(GenericModelAdmin):
+    """Rates come from the market data provider; a wrong or stand-in one is corrected here."""
+
+    def has_add_permission(self, request):
+        # The account is not editable, so a rate added here could never be saved. A missing
+        # rate is fetched when a record needs it, and a stand-in is corrected in place.
+        return False
+
+    def save_model(self, request, obj, form, change):
+        corrected = change and 'exchange_rate_multiplier' in form.changed_data
+        super().save_model(request, obj, form, change)
+        if corrected:
+            obj.rate_corrected()
+
+
 
 CONFIRM_LEGAL_FORM_FIELD = 'confirm_legal_form'
 
@@ -336,6 +348,7 @@ class InstrumentAdmin(GenericModelAdmin):
 model_admin_map = {
 
     Account : AccountAdmin,
+    ExchangeRate : ExchangeRateAdmin,
     Instrument : InstrumentAdmin,
     AppUser : AppUserAdmin,
     Group : HiddenModelAdmin,

@@ -52,6 +52,19 @@ def stale_sold_parcels(account):
         | Q(calculated_is_sold=True, sold__lt=F('parcel_quantity')))
 
 
+def negative_cost_base_parcels(account):
+    """Parcels whose cost base has gone below zero, from cost base decreases.
+
+    A cost base cannot go below zero: the excess is a capital gain in the year it arises
+    (CGT event E10), which is not worked out here. Until it is dealt with, that gain turns up
+    only when the parcel is sold, in the wrong year.
+    """
+    from share_dinkum_app.models import Parcel
+    return Parcel.objects.filter(
+        account=account, deactivation_date__isnull=True, calculated_total_cost_base__lt=0,
+    ).select_related('buy__instrument')
+
+
 def orphaned_adjustment_allocations(account):
     """Adjustments still attached to a parcel a share split replaced, so in no cost base."""
     from share_dinkum_app.models import CostBaseAdjustmentAllocation
@@ -96,6 +109,10 @@ def run(account):
         ('unconverted_adjustments', CostBaseAdjustment.with_unconverted_allocations(account).count(),
          'cost base adjustment(s) allocated without being converted to '
          f'{account.currency}, which must be deleted and entered again',
+         False, True),
+        ('negative_cost_base_parcels', negative_cost_base_parcels(account).count(),
+         'parcel(s) whose cost base adjustments take their cost base below zero; the excess '
+         'is a capital gain in the year it arose (CGT event E10), which is not worked out here',
          False, True),
         ('unbalanced_adjustments', unbalanced_adjustments(account).count(),
          'cost base adjustment(s) whose allocations do not add up to them, which must be '

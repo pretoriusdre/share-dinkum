@@ -11,7 +11,7 @@ from datetime import date
 from django.core.management.base import BaseCommand, CommandError
 
 from share_dinkum_app.cgt import cutover, residency
-from share_dinkum_app.choices import ValuationSource
+from share_dinkum_app.choices import ValuationPurpose, ValuationSource
 from share_dinkum_app.models import Account, Instrument, InstrumentValuation
 
 
@@ -23,6 +23,10 @@ class Command(BaseCommand):
         parser.add_argument(
             '--date', help='A single date to value, as YYYY-MM-DD. Omit for every reset '
                            'date the account has, which includes any departure or arrival.')
+        parser.add_argument(
+            '--purpose', choices=ValuationPurpose.values, default=ValuationPurpose.OTHER,
+            help='What a --date valuation is for. The reset dates found without --date carry '
+                 'their own.')
         parser.add_argument(
             '--overwrite', action='store_true',
             help='Replace values already recorded. Off by default, so a value the user '
@@ -43,9 +47,16 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         if options['date']:
-            targets = [(date.fromisoformat(options['date']), cutover.PURPOSE_CUTOVER)]
+            # The day given is the day valued. Only the reset dates below are moved.
+            targets = [(date.fromisoformat(options['date']), options['purpose'])]
         else:
-            targets = cutover.deemed_reset_dates(account)
+            # The deemed sale happens just before the cutover, so it is the previous day
+            # that has to be valued, not the day the new regime starts.
+            targets = [
+                (cutover.DEEMED_SALE_DATE if purpose == cutover.PURPOSE_CUTOVER else day,
+                 purpose)
+                for day, purpose in cutover.deemed_reset_dates(account)
+            ]
             if not residency.periods(account):
                 self.stdout.write(
                     '  Residency is not declared, so only the 1 July 2027 cutover is '
@@ -54,11 +65,7 @@ class Command(BaseCommand):
         instruments = Instrument.objects.filter(account=account, is_active=True)
         recorded = skipped = missing = 0
 
-        for valuation_date, purpose in targets:
-            # The deemed sale happens just before the cutover, so it is the previous day
-            # that has to be valued, not the day the new regime starts.
-            day = (cutover.DEEMED_SALE_DATE
-                   if purpose == cutover.PURPOSE_CUTOVER else valuation_date)
+        for day, purpose in targets:
 
             for instrument in instruments:
                 existing = InstrumentValuation.objects.filter(

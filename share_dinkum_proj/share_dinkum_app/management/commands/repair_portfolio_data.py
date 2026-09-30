@@ -10,8 +10,9 @@ Repaired:
 * Exchange rates standing in for one that could not be fetched are fetched again.
 
 Listed, because only the person who entered them knows the answer: sales with units
-allocated to no parcel, parcels allocated for more than they hold, and cost base adjustments
-spread unconverted or at a stand-in rate (delete each and enter it again).
+allocated to no parcel, parcels allocated for more than they hold, parcels whose cost base
+has gone below zero, and cost base adjustments spread unconverted or at a stand-in rate
+(delete each and enter it again).
 """
 
 from django.core.management.base import BaseCommand, CommandError
@@ -92,6 +93,16 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f'    {parcel.buy.instrument.name} bought {parcel.buy.date}: '
                     f'{parcel.sold.normalize():f} sold of {parcel.parcel_quantity.normalize():f}')
+
+        negative = list(data_checks.negative_cost_base_parcels(account))
+        if negative:
+            self.stdout.write(self.style.WARNING(
+                '  Parcels whose cost base is below zero. The excess is a capital gain in the '
+                'year the decrease took it there (CGT event E10); report it for that year:'))
+            for parcel in negative:
+                self.stdout.write(
+                    f'    {parcel.buy.instrument.name} bought {parcel.buy.date}: '
+                    f'{parcel.calculated_total_cost_base}')
 
         adjustments = (
             list(CostBaseAdjustment.with_unconverted_allocations(account))

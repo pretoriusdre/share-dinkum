@@ -17,8 +17,37 @@ def to_snake_case(text):
     return snake_case
 
 
+PRICE_COLUMNS = ['open', 'high', 'low', 'close']
+
+
+def as_traded(price_history):
+    """Undo the split adjustment Yahoo applies to its unadjusted prices.
+
+    Even with `auto_adjust=False`, Yahoo's prices are divided by every split since (and its
+    volumes multiplied), as of the day they are fetched: NVDA's close on 7 June 2024, before
+    its 10-for-1 split, comes back as 120.89 rather than 1,208.88. Each row is multiplied back
+    by the splits strictly after it, since a split's own row is already post-split. That is
+    right only if the rows run to the day of the fetch, so every such split is among them.
+    """
+    price_history = price_history.sort_values('date').reset_index(drop=True)
+    ratios = pd.to_numeric(price_history['stock_splits'], errors='coerce').fillna(0)
+    ratios = ratios.where(ratios > 0, 1.0)
+    later = ratios.iloc[::-1].cumprod().iloc[::-1].shift(-1, fill_value=1.0)
+    for column in PRICE_COLUMNS:
+        price_history[column] = price_history[column] * later
+    price_history['volume'] = price_history['volume'] / later
+    return price_history
+
+
 def get_instrument_price_history(instrument, start_date, end_date=None):
-    
+    """Daily prices as traded that day, from `start_date` to `end_date` (default today).
+
+    Not adjusted for dividends or splits: every use of a stored price asks what a unit was
+    worth on the day, whether for a deemed disposal or for the value of a holding counted in
+    that day's units. An adjusted close answers a different question (total return), and
+    its dividend adjustment understated a 30 June value by any distribution going ex on
+    1 July, as most ASX funds' June distributions do.
+    """
     ticker_code = instrument.yfinance_ticker_code
     logger.info('Fetching price history for %s', ticker_code)
 
@@ -51,8 +80,14 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
                 )
                 return pd.DataFrame([])
 
-        history_kwargs = {'start': start_date.isoformat()}
-        if end_date:
+        # Fetched to today whatever the end date, so every split that Yahoo has already
+        # divided these prices by is in the rows and can be multiplied back out. Rows after
+        # the end date are dropped once that is done.
+        history_kwargs = {'start': start_date.isoformat(), 'auto_adjust': False}
+        today = date.today()
+        if end_date and end_date < today:
+            history_kwargs['end'] = (today + timedelta(days=1)).isoformat()
+        elif end_date:
             history_kwargs['end'] = (end_date + timedelta(days=1)).isoformat()
 
         yfinance_obj = yf.Ticker(ticker_code)
@@ -72,12 +107,13 @@ def get_instrument_price_history(instrument, start_date, end_date=None):
         if 'stock_splits' not in price_history.columns:
             price_history['stock_splits'] = 0
 
-        price_history['open'] = pd.to_numeric(price_history['open'], errors='coerce')
-        price_history['high'] = pd.to_numeric(price_history['high'], errors='coerce')
-        price_history['low'] = pd.to_numeric(price_history['low'], errors='coerce')
-        price_history['close'] = pd.to_numeric(price_history['close'], errors='coerce')
-        price_history['volume'] = pd.to_numeric(price_history['volume'], errors='coerce')
-        price_history['stock_splits'] = pd.to_numeric(price_history['stock_splits'], errors='coerce')
+        for column in [*PRICE_COLUMNS, 'volume', 'stock_splits']:
+            price_history[column] = pd.to_numeric(price_history[column], errors='coerce')
+
+        price_history = as_traded(price_history)
+        if end_date:
+            price_history = price_history[price_history['date'] <= end_date].copy()
+        price_history['volume'] = price_history['volume'].fillna(0).round()
 
         price_history = price_history[['instrument', 'date', 'open', 'high', 'low', 'close', 'volume', 'stock_splits']]
 
@@ -162,16 +198,18 @@ def get_exchange_rate(convert_from, convert_to, exchange_date=None):
         )
         exchange_date = today
 
-    # Get a few days in case of gaps, then take first record.
-    start_date_str = exchange_date.isoformat()
-    end_date_str = (exchange_date + timedelta(days=3)).isoformat()
+    # The day's rate, or the last one before it where there was none (a weekend, a holiday):
+    # a rate that was known on the day, as the history refresh also uses for a stand-in. This
+    # used to take the next trading day's, so 30 June on a Sunday got Monday's rate.
+    start_date_str = (exchange_date - timedelta(days=7)).isoformat()
+    end_date_str = (exchange_date + timedelta(days=1)).isoformat()
     try:
         exchange_rate_history = yfinance_obj.history(start=start_date_str, end=end_date_str)
-        close_values = exchange_rate_history['Close'].values
+        close_values = exchange_rate_history['Close'].dropna().values
         if len(close_values) == 0:
             logger.warning('No exchange rate data returned for %s between %s and %s', ticker_code, start_date_str, end_date_str)
             return None
-        return convert_to_decimal(close_values[0], 16, 6)
+        return convert_to_decimal(close_values[-1], 16, 6)
     except Exception as e:
         logger.error(f"Error fetching exchange rate for {ticker_code}: {e}", exc_info=True)
         logger.error('Try to update yfinance package to latest version if the issue persists.')

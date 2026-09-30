@@ -173,6 +173,12 @@ reconstructed later from a provider that has delisted the security.
 
 Values are per unit, never per parcel, so a later share split does not corrupt them.
 
+The prices it reads are stored as traded that day. Prices stored before 0.3.0 were adjusted for
+the dividends and splits since, which understates a 30 June value by any distribution going ex on
+1 July, so run `uv run dev refetch_price_history` once before capturing.
+
+To value some other day, give it: `--date 2021-07-01 --purpose DEPARTURE`.
+
 The same model covers three other deemed disposals that work identically and differ only in
 what happens to the gain: leaving Australia (s104-165), arriving (s855-45), and pre-CGT assets
 (s112-175).
