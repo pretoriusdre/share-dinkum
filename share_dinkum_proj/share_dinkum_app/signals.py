@@ -18,7 +18,7 @@ from django.forms.models import model_to_dict
 from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
-from share_dinkum_app import excelinterface
+from share_dinkum_app import column_help, excelinterface
 from share_dinkum_app import loading
 from share_dinkum_app.reports import RealisedCapitalGainReport
 from share_dinkum_app import cgt
@@ -504,7 +504,8 @@ def generate_export_file(sender: type[Model], instance: DataExport, created: boo
             df = loading.queryset_to_df(queryset)
             desc = getattr(model, 'MODEL_DESCRIPTION', 'No description available')
             if not df.empty:
-                gen.add_table(df, table_name=model.__name__, description=desc)
+                gen.add_table(df, table_name=model.__name__, description=desc,
+                              column_descriptions=column_help.describe_columns(model, [str(c) for c in df.columns]))
 
         logger.info('    - Realised Capital Gains Report')
         rcg_report = RealisedCapitalGainReport(account=instance.account)

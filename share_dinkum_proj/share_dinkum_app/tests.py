@@ -3,6 +3,7 @@ import io
 import json
 import shutil
 import sqlite3
+import pickle
 import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
@@ -10,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
 
+import openpyxl
 import pandas as pd
 
 from django.core.exceptions import ValidationError
@@ -67,8 +69,8 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, constants, dashboard, excelinterface, loading, reports, version, yfinanceinterface)
-from share_dinkum_app.management.commands import make_import_template
+    cgt, column_help, constants, dashboard, excelinterface, loading, reports, version, yfinanceinterface)
+from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
 # --- Test data factories (minimal objects for isolation) ---
@@ -3078,6 +3080,460 @@ class ImportTemplateCommandTests(TestCase):
             self.assertFalse([column for column in columns if column.startswith('calculated_')])
 
 
+class OptionalTemplateTablesTests(TransactionTestCase):
+    """The optional template tables: marked as optional, and loadable from a filled-in template."""
+
+    OPTIONAL = ('ResidencyPeriod', 'InstrumentValuation', 'CapitalLossCarryForward',
+                'AttributionStatement', 'AttributionComponent')
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.path = Path(self.temp_dir.name) / 'optional.xlsx'
+        self.account = create_account()
+
+    def _template(self, **overrides):
+        """A template with a buy, an adjustment, and one row in each optional table."""
+        data = {
+            'Market': pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]),
+            'Instrument': pd.DataFrame([{'name': 'BHP', 'currency': 'AUD', 'market__code': 'ASX'}]),
+            'Buy': pd.DataFrame([{
+                'legacy_id': 'B001', 'instrument__name': 'BHP', 'date': date(2022, 7, 1),
+                'quantity': Decimal('100'), 'unit_price': Decimal('10'), 'unit_price_currency': 'AUD',
+                'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}]),
+            'CostBaseAdjustment': pd.DataFrame([{
+                'legacy_id': 'A001', 'cost_base_increase': Decimal('50'), 'cost_base_increase_currency': 'AUD',
+                'instrument__name': 'BHP', 'financial_year_end_date': date(2024, 6, 30),
+                'allocation_method': 'QTY_HELD'}]),
+            'ResidencyPeriod': pd.DataFrame([{
+                'legacy_id': 'R001', 'status': 'RESIDENT', 'start_date': date(2022, 1, 1)}]),
+            'InstrumentValuation': pd.DataFrame([{
+                'legacy_id': 'V001', 'instrument__name': 'BHP', 'valuation_date': date(2027, 6, 30),
+                'unit_value': Decimal('45'), 'unit_value_currency': 'AUD', 'purpose': 'CUTOVER_2027'}]),
+            'CapitalLossCarryForward': pd.DataFrame([{
+                'legacy_id': 'L001', 'financial_year_end_date': date(2024, 6, 30),
+                'amount': Decimal('1500'), 'amount_currency': 'AUD'}]),
+            'AttributionStatement': pd.DataFrame([{
+                'legacy_id': 'AS001', 'instrument__name': 'BHP',
+                'financial_year_end_date': date(2024, 6, 30), 'lookup_legacy_adjustment': 'A001'}]),
+            'AttributionComponent': pd.DataFrame([{
+                'legacy_id': 'AC001', 'component': 'COSTBASE_INCREASE', 'amount': Decimal('50'),
+                'amount_currency': 'AUD', 'lookup_legacy_statement': 'AS001'}]),
+        }
+        data.update(overrides)
+        generator = excelinterface.ExcelGen(title='Optional tables')
+        for table_name, frame in data.items():
+            generator.add_table(frame, table_name=table_name)
+        generator.save(self.path)
+        return self.path
+
+    def test_the_template_marks_exactly_the_optional_tables(self):
+        call_command('make_import_template', output=str(self.path))
+
+        workbook = openpyxl.load_workbook(self.path)
+        descriptions = {
+            row[1].value: row[2].value for row in workbook['Index'].iter_rows(min_row=2)}
+        tab_colours = {
+            list(sheet.tables)[0]: sheet.sheet_properties.tabColor for sheet in workbook.worksheets
+            if sheet.tables and sheet.title != 'Index'}
+
+        for model in make_import_template.TEMPLATE_MODELS:
+            name = model.__name__
+            optional = name in self.OPTIONAL
+            self.assertEqual(str(descriptions[name]).startswith('Optional:'), optional, name)
+            self.assertEqual(tab_colours[name] is not None, optional, name)
+
+    def test_the_template_offers_the_links_and_hides_the_foreign_keys(self):
+        columns = make_import_template.get_template_columns
+        self.assertIn('lookup_legacy_adjustment', columns(AttributionStatement))
+        self.assertIn('lookup_legacy_statement', columns(AttributionComponent))
+        loss_columns = columns(CapitalLossCarryForward)
+        self.assertIn('financial_year_end_date', loss_columns)
+        self.assertNotIn('fiscal_year__name', loss_columns)
+
+    def test_every_optional_table_loads_and_links_up(self):
+        loading.DataLoader(account=self.account, input_file=self._template())
+
+        residency = ResidencyPeriod.objects.get(account=self.account)
+        self.assertEqual(residency.status, 'RESIDENT')
+
+        valuation = InstrumentValuation.objects.get(account=self.account)
+        self.assertEqual(valuation.source, 'USER')  # blank cell: the default, not a NOT NULL failure
+
+        loss = CapitalLossCarryForward.objects.get(account=self.account)
+        self.assertEqual(loss.fiscal_year.start_year, 2023)  # the year ending 30 June 2024
+        self.assertFalse(loss.is_opening_balance)  # blank cell: the default
+
+        statement = AttributionStatement.objects.get(account=self.account)
+        self.assertEqual(statement.cost_base_adjustment.legacy_id, 'A001')
+        component = AttributionComponent.objects.get(account=self.account)
+        self.assertEqual(component.statement, statement)
+
+    def test_loading_the_same_template_again_adds_nothing(self):
+        loading.DataLoader(account=self.account, input_file=self._template())
+        loading.DataLoader(account=self.account, input_file=self.path)
+
+        for model in (ResidencyPeriod, InstrumentValuation, CapitalLossCarryForward,
+                      AttributionStatement, AttributionComponent):
+            self.assertEqual(model.objects.filter(account=self.account).count(), 1, model.__name__)
+
+    def test_an_empty_optional_table_loads_nothing(self):
+        call_command('make_import_template', output=str(self.path))
+        loading.DataLoader(account=self.account, input_file=self.path)
+
+        for model in (ResidencyPeriod, InstrumentValuation, CapitalLossCarryForward,
+                      AttributionStatement, AttributionComponent):
+            self.assertEqual(model.objects.filter(account=self.account).count(), 0, model.__name__)
+
+    def test_a_statement_naming_an_unknown_adjustment_says_so(self):
+        template = self._template(AttributionStatement=pd.DataFrame([{
+            'legacy_id': 'AS001', 'instrument__name': 'BHP',
+            'financial_year_end_date': date(2024, 6, 30), 'lookup_legacy_adjustment': 'NOPE'}]))
+
+        with self.assertRaisesMessage(ValueError, 'no CostBaseAdjustment with that legacy_id'):
+            loading.DataLoader(account=self.account, input_file=template)
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)  # nothing loaded
+
+    def test_a_loss_with_no_year_says_so(self):
+        template = self._template(CapitalLossCarryForward=pd.DataFrame([{
+            'legacy_id': 'L001', 'amount': Decimal('1500'), 'amount_currency': 'AUD',
+            'financial_year_end_date': None}]))
+
+        with self.assertRaisesMessage(ValueError, 'has no financial_year_end_date'):
+            loading.DataLoader(account=self.account, input_file=template)
+
+    def test_a_fiscal_year_name_is_looked_up_within_the_portfolios_type(self):
+        other = create_fiscal_year_type(description='Another July year')
+        FiscalYear.objects.create(fiscal_year_type=other, start_year=2023)
+        mine, _ = self.account.fiscal_year_type.classify_date(date(2024, 6, 30))
+
+        loader = loading.DataLoader(account=self.account)
+        found = loader.get_related_obj_by_name(
+            related_model=FiscalYear, account=self.account, filters={'name': mine.name})
+
+        self.assertEqual(found, mine)
+
+
+class MakeFakeDataCommandTests(TestCase):
+    """The fake portfolio generator, run on synthetic market data so it needs no network."""
+
+    AS_OF = '2026-10-02'
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.folder = Path(self.temp_dir.name)
+
+        days = pd.bdate_range('2016-06-01', self.AS_OF)
+        market = {}
+        for holding in make_fake_data.HOLDINGS.values():
+            frame = pd.DataFrame({
+                'Close': [50 + 0.01 * i for i in range(len(days))],
+                'Dividends': [0.0] * len(days),
+                'Stock Splits': [0.0] * len(days),
+            }, index=days)
+            # A payment on the first trading day of each quarter's first month.
+            for day in days:
+                if day.month in (1, 4, 7, 10) and day.day <= 3 and day.weekday() == 0:
+                    frame.loc[day, 'Dividends'] = 0.5
+            market[holding.ticker] = frame
+        market['AAPL'].loc[pd.Timestamp('2020-08-31'), 'Stock Splits'] = 4.0
+        market['AUDUSD=X'] = pd.DataFrame({'Close': [0.7] * len(days)}, index=days)
+        self.cache = self.folder / 'market.pkl'
+        with open(self.cache, 'wb') as f:
+            pickle.dump(market, f)
+
+    def _run(self, name, **options):
+        output = self.folder / name
+        call_command('make_import_template', output=str(output))
+        options.setdefault('force', True)
+        call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache), **options)
+        return output, excelinterface.get_all_tables_in_excel(output)
+
+    def test_it_will_not_overwrite_without_force(self):
+        output = self.folder / 'template.xlsx'
+        call_command('make_import_template', output=str(output))
+
+        with self.assertRaisesMessage(CommandError, '--force'):
+            call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache))
+
+    def test_it_needs_a_file_to_fill_in(self):
+        with self.assertRaisesMessage(CommandError, 'does not exist'):
+            call_command('make_fake_data', output=str(self.folder / 'missing.xlsx'), force=True)
+
+    def test_every_populated_table_is_marked_as_fake_on_its_first_row(self):
+        _, tables = self._run('fake.xlsx')
+
+        for name in ('Buy', 'Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment', 'Dividend',
+                     'Distribution', 'ResidencyPeriod'):
+            self.assertTrue(len(tables[name]) > 0, name)
+            self.assertIn(make_fake_data.FAKE_NOTE, tables[name].iloc[0]['notes'], name)
+
+    def test_the_optional_tables_the_portfolio_does_not_use_stay_empty(self):
+        _, tables = self._run('fake.xlsx')
+
+        for name in ('InstrumentValuation', 'CapitalLossCarryForward', 'AttributionStatement',
+                     'AttributionComponent'):
+            self.assertEqual(len(tables[name]), 0, name)
+
+    def test_the_same_seed_gives_the_same_file_and_another_seed_a_different_one(self):
+        _, first = self._run('one.xlsx', seed=7)
+        _, again = self._run('two.xlsx', seed=7)
+        _, other = self._run('three.xlsx', seed=8)
+
+        pd.testing.assert_frame_equal(first['Buy'], again['Buy'])
+        self.assertFalse(first['Buy'].equals(other['Buy']))
+
+    def test_the_portfolio_holds_what_it_should(self):
+        _, tables = self._run('fake.xlsx')
+        buys, sells = tables['Buy'], tables['Sell']
+
+        self.assertTrue({'VGS', 'A200', 'MSFT', 'AMZN', 'AAPL', 'CBA', 'BHP'} <= set(buys['instrument__name']))
+        # Fully sold: every unit bought was sold, and nothing is bought afterwards.
+        for name in make_fake_data.FULLY_SOLD:
+            bought = buys[buys['instrument__name'] == name]
+            sold = sells[sells['instrument__name'] == name]
+            self.assertEqual(bought['quantity'].sum(), sold['quantity'].sum(), name)
+            self.assertLess(bought['date'].max(), sold['date'].max(), name)
+        # The USD satellites are priced in USD.
+        self.assertEqual(set(buys[buys['instrument__name'].isin(make_fake_data.SATELLITES)]['unit_price_currency']),
+                         {'USD'})
+        # The split comes from the market data.
+        self.assertEqual(list(tables['ShareSplit']['instrument__name']), ['AAPL'])
+
+    def test_a_manual_sale_has_allocations_that_add_up(self):
+        _, tables = self._run('fake.xlsx')
+        sells, allocations = tables['Sell'], tables['SellAllocation']
+
+        manual = sells[sells['strategy'] == 'MANUAL']
+        self.assertTrue(len(manual) > 0)
+        for _, sale in manual.iterrows():
+            taken = allocations[allocations['lookup_legacy_sell'] == sale['legacy_id']]['quantity'].sum()
+            self.assertEqual(taken, sale['quantity'], sale['legacy_id'])
+        self.assertIn('SellAllocation', str(manual.iloc[0]['notes']))
+
+
+class ColumnHelpTests(TransactionTestCase):
+    """Every column says what it is, on the model and as a note on its Excel header."""
+
+    # Fields the app does not declare: the currency beside each money amount is built by django-money,
+    # and the user model's own fields come from Django. column_help describes them instead.
+    NOT_DECLARED_HERE = ('password', 'last_login', 'first_name', 'last_name', 'email', 'date_joined')
+
+    def _models(self):
+        return apps.get_app_config('share_dinkum_app').get_models()
+
+    def _declared_fields(self):
+        from djmoney.models.fields import CurrencyField
+        for model in self._models():
+            for field in model._meta.fields:
+                if isinstance(field, CurrencyField) and field.name != 'currency' and getattr(field, 'price_field', None):
+                    continue
+                if model is AppUser and field.name in self.NOT_DECLARED_HERE:
+                    continue
+                yield model, field
+
+    def test_every_field_has_help_text(self):
+        missing = sorted(f'{model.__name__}.{field.name}' for model, field in self._declared_fields()
+                         if not field.help_text)
+        self.assertEqual(missing, [], 'These fields need a help_text, which becomes the note on their Excel header.')
+
+    def test_every_field_can_be_described(self):
+        missing = sorted(f'{model.__name__}.{field.name}' for model in self._models() for field in model._meta.fields
+                         if column_help.field_help(field) is None)
+        self.assertEqual(missing, [])
+
+    def test_every_template_header_has_a_note(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'blank.xlsx'
+            call_command('make_import_template', output=str(path))
+            workbook = openpyxl.load_workbook(path)
+
+        for sheet in workbook.worksheets:
+            for cell in sheet[1]:
+                if cell.value:
+                    self.assertIsNotNone(cell.comment, f'{sheet.title}.{cell.value} has no note')
+
+    def test_a_template_note_says_what_is_required_and_what_a_blank_means(self):
+        text = column_help.describe_columns(Sell, ['strategy', 'instrument__name', 'unit_price_currency'], template=True)
+
+        self.assertIn('One of: FIFO', text['strategy'])
+        self.assertIn('Blank = MIN_CGT', text['strategy'])
+        self.assertIn('Required.', text['instrument__name'])
+        self.assertIn("Blank = the instrument's currency", text['unit_price_currency'])
+
+    def test_the_extra_template_columns_are_described(self):
+        for model in make_import_template.TEMPLATE_MODELS:
+            columns = make_import_template.get_template_columns(model)
+            described = column_help.describe_columns(model, columns, template=True)
+            self.assertEqual(sorted(set(columns) - set(described)), [], model.__name__)
+
+    def test_a_column_nothing_is_known_about_is_left_out(self):
+        self.assertEqual(column_help.describe_columns(Sell, ['no_such_column']), {})
+
+    def test_an_export_puts_a_note_on_every_header(self):
+        data = create_golden_master_portfolio()
+        export = DataExport.objects.create(account=data['account'])
+        export.refresh_from_db()
+        workbook = openpyxl.load_workbook(export.file.path)
+
+        model_names = {model.__name__ for model in self._models()}
+        checked = 0
+        for sheet in workbook.worksheets:
+            tables = list(sheet.tables)
+            if not tables or tables[0] not in model_names:
+                continue
+            for cell in sheet[1]:
+                if cell.value:
+                    checked += 1
+                    self.assertIsNotNone(cell.comment, f'{tables[0]}.{cell.value} has no note')
+        self.assertGreater(checked, 100)
+
+    def test_add_table_attaches_the_description_to_its_header(self):
+        generator = excelinterface.ExcelGen(title='Notes')
+        generator.add_table(
+            pd.DataFrame([{'a': 1, 'b': 2}]), table_name='Demo',
+            column_descriptions={'a': 'The first column.'})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'notes.xlsx'
+            generator.save(path)
+            sheet = openpyxl.load_workbook(path)['01']
+
+        self.assertEqual(sheet['A1'].comment.text, 'The first column.')
+        self.assertIsNone(sheet['B1'].comment)
+
+
+class ExcelReaderTests(TestCase):
+    """What the reader makes of a hand-edited sheet."""
+
+    def _read(self, rows, headers=('name', 'market__code'), table='Instrument', ref=None):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(list(headers))
+        for row in rows:
+            sheet.append(row)
+        from openpyxl.worksheet.table import Table
+        sheet.add_table(Table(displayName=table, ref=ref or f'A1:{chr(64 + len(headers))}{len(rows) + 1}'))
+        stream = io.BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        return excelinterface.get_all_tables_in_excel(stream)
+
+    def test_surrounding_spaces_are_stripped(self):
+        frame = self._read([[' BHP ', 'ASX '], ['VGS', 'ASX']])['Instrument']
+
+        self.assertEqual(list(frame['name']), ['BHP', 'VGS'])
+        self.assertEqual(list(frame['market__code']), ['ASX', 'ASX'])
+
+    def test_a_cell_of_only_spaces_is_blank(self):
+        frame = self._read([['BHP', '   '], ['VGS', 'ASX']])['Instrument']
+
+        self.assertIsNone(frame['market__code'].iloc[0])
+
+    def test_a_name_column_is_read_as_text_even_when_excel_made_it_a_number(self):
+        frame = self._read([[4013, 'HKEX'], [700.0, 'HKEX'], ['BHP', 'ASX']])['Instrument']
+
+        self.assertEqual(list(frame['name']), ['4013', '700', 'BHP'])
+
+    def test_other_columns_keep_their_numbers(self):
+        frame = self._read([['BHP', 12.5]], headers=('name', 'unit_price'), table='Buy')['Buy']
+
+        self.assertEqual(frame['unit_price'].iloc[0], 12.5)
+
+    def test_a_table_claiming_an_enormous_range_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'limit'):
+            self._read([['BHP', 'ASX']], ref='A1:B1048576')
+
+class DropdownTests(TestCase):
+    """Choice columns get a dropdown, backed by a list on the value assistance sheet."""
+
+    def _validations(self, workbook):
+        """Each sheet's list validations as {column letter: [allowed values]}."""
+        assistance = workbook[excelinterface.VALUE_ASSISTANCE_SHEET]
+        found = {}
+        for sheet in workbook.worksheets:
+            for validation in sheet.data_validations.dataValidation:
+                range_ref = validation.formula1.split('!')[1].replace('$', '')
+                values = [cell.value for row in assistance[range_ref] for cell in row]
+                for cell_range in validation.sqref.ranges:
+                    found[(sheet.title, cell_range.coord)] = values
+        return found
+
+    def _template(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'blank.xlsx'
+            call_command('make_import_template', output=str(path))
+            return openpyxl.load_workbook(path), excelinterface.get_all_tables_in_excel(path)
+
+    def test_add_table_validates_a_column_against_its_list(self):
+        generator = excelinterface.ExcelGen(title='Dropdowns')
+        generator.add_table(pd.DataFrame([{'colour': 'red', 'size': 1}]), table_name='Demo',
+                            dropdowns={'colour': ['red', 'green', 'blue']})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'dropdowns.xlsx'
+            generator.save(path)
+            workbook = openpyxl.load_workbook(path)
+
+        found = self._validations(workbook)
+
+        # Rows 2 to the one row of data plus the spare rows beneath it.
+        self.assertEqual(found, {('01', f'A2:A{1 + 1 + excelinterface.DROPDOWN_SPARE_ROWS}'): ['red', 'green', 'blue']})
+
+    def test_a_list_shared_by_name_is_written_once(self):
+        generator = excelinterface.ExcelGen(title='Shared')
+        for table in ('One', 'Two'):
+            generator.add_table(pd.DataFrame([{'c': 'AUD'}]), table_name=table,
+                                dropdowns={'c': ('currency', ['AUD', 'USD'])})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'shared.xlsx'
+            generator.save(path)
+            workbook = openpyxl.load_workbook(path)
+
+        self.assertEqual(workbook[excelinterface.VALUE_ASSISTANCE_SHEET].max_column, 1)
+        self.assertEqual(len(self._validations(workbook)), 2)
+
+    def test_a_dropdown_for_a_missing_column_is_skipped(self):
+        generator = excelinterface.ExcelGen(title='Missing')
+        generator.add_table(pd.DataFrame([{'a': 1}]), table_name='Demo', dropdowns={'nope': ['x']})
+
+        with tempfile.TemporaryDirectory() as folder:
+            generator.save(Path(folder) / 'missing.xlsx')  # no error
+
+    def test_every_choice_column_in_the_template_has_a_dropdown(self):
+        workbook, _ = self._template()
+        validated = {(sheet, coord[0]) for sheet, coord in self._validations(workbook)}
+        titles = {list(sheet.tables)[0]: sheet.title for sheet in workbook.worksheets if sheet.tables}
+
+        for model in make_import_template.TEMPLATE_MODELS:
+            columns = make_import_template.get_template_columns(model)
+            for column in make_import_template.get_dropdowns(model, columns):
+                letter = openpyxl.utils.get_column_letter(columns.index(column) + 1)
+                self.assertIn((titles[model.__name__], letter), validated, f'{model.__name__}.{column}')
+
+    def test_the_lists_hold_the_keys_the_loader_accepts(self):
+        workbook, _ = self._template()
+        lists = {name: [cell.value for cell in column[1:] if cell.value]
+                 for name, column in ((column[0].value, column) for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns)}
+
+        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+        self.assertEqual(lists['Dividend.dividend_type'], ['LOCAL', 'FOREIGN'])
+        self.assertEqual(lists['ResidencyPeriod.status'], ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
+        self.assertIn('AUD', lists['currency'])
+        self.assertIn('USD', lists['currency'])
+
+    def test_a_lookup_column_gets_no_dropdown(self):
+        """An instrument loaded in an earlier file is a legitimate answer, so lookups stay free text."""
+        columns = make_import_template.get_template_columns(Buy)
+
+        self.assertNotIn('instrument__name', make_import_template.get_dropdowns(Buy, columns))
+
+    def test_the_reader_does_not_take_the_value_sheet_for_a_table(self):
+        _, tables = self._template()
+
+        self.assertNotIn(excelinterface.VALUE_ASSISTANCE_SHEET, tables)
+        self.assertIn('Buy', tables)
+
+
 # --- Phase 4: residency, apportionment and the foreign resident disregard ---
 
 def declare(account, status, start, end=None, i1=None):
@@ -4580,6 +5036,35 @@ class ExportRoundTripTests(TransactionTestCase):
             self.assertEqual(
                 apps.get_model('share_dinkum_app', name).objects.count(), count,
                 f'{name} did not come back with the same number of rows')
+
+    def test_the_optional_tables_restore_with_their_links(self):
+        """Losses, valuations and attribution statements come back, still linked, from an export."""
+        data = create_golden_master_portfolio()
+        account, instrument = data['account'], data['instrument']
+        year, _ = account.fiscal_year_type.classify_date(date(2024, 6, 30))
+        CapitalLossCarryForward.objects.create(
+            account=account, fiscal_year=year, amount=Money(Decimal('1500'), 'AUD'), is_opening_balance=True)
+        InstrumentValuation.objects.create(
+            account=account, instrument=instrument, valuation_date=date(2027, 6, 30),
+            unit_value=Money(Decimal('45'), 'AUD'))
+        statement = AttributionStatement.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2024, 6, 30),
+            cost_base_adjustment=data['adjustment'])
+        AttributionComponent.objects.create(
+            account=account, statement=statement, component='COSTBASE_INCREASE',
+            amount=Money(Decimal('50'), 'AUD'))
+        path = self._detached_export(account)
+
+        self._wipe()
+        loading.DataLoader(input_file=path)
+
+        loss = CapitalLossCarryForward.objects.get()
+        self.assertEqual(loss.fiscal_year.start_year, 2023)
+        self.assertTrue(loss.is_opening_balance)
+        self.assertEqual(InstrumentValuation.objects.get().unit_value, Money(Decimal('45'), 'AUD'))
+        restored = AttributionStatement.objects.get()
+        self.assertEqual(restored.cost_base_adjustment_id, data['adjustment'].id)
+        self.assertEqual(AttributionComponent.objects.get().statement, restored)
 
     def test_restoring_does_not_derive_what_the_file_already_holds(self):
         """A restore keeps the file's parcels and does not derive a second set by signal."""

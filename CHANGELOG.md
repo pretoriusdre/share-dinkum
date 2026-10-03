@@ -4,7 +4,40 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
-## 0.3.0
+## Unreleased
+
+A minor release focused on documentation and ease of importing. Support for the 2027 CGT changes
+was previouly added in 0.3.0.
+
+### Added
+
+- The import template now has optional tables for residency periods, instrument valuations, capital
+  loss carry-forwards and managed fund annual statements (with their components). They are marked
+  optional on the index sheet and can be left empty or entered in the app later.
+- `uv run dev make_fake_data` rebuilds the sample file as a fake 10-year portfolio: monthly core ETF
+  buys, USD satellites, small holdings, fully and partly sold positions, and dividends and
+  distributions from real per-share history.
+- `data_import.ipynb` portfolios accept `taxpayer_type` and `tax_settings_reviewed`, so a portfolio
+  can start without the undeclared tax settings warning.
+- Every column header in an export, and in the import template, now has a note saying what the column
+  is. In the template it also says whether the column is required, what a blank cell means, and the
+  values a choice column accepts. Every model field now has a `help_text`, which these come from.
+- Columns of the import template that take a fixed set of values (sell strategy, dividend type,
+  residency status, currency and so on) now have a dropdown in Excel.
+
+### Changed
+
+- Loading a file now strips spaces around text cells, reads numeric stock codes
+  (as on the Hong Kong exchange) as text, and refuses a table or sheet claiming more than 2,000,000 cells.
+
+### Fixed
+
+- A blank cell in a yes/no import column that has a default (such as `is_exchange_listed`) failed the
+  load with a NOT NULL error. It now takes the default.
+- Fiscal year names are looked up within the portfolio's own fiscal year type, so another portfolio's
+  year of the same name cannot be matched by mistake.
+
+## 0.3.0 - 2026-09-30
 
 ### Added
 
@@ -187,9 +220,9 @@ To upgrade, stop the server and run `uv run update`.
 
 - **An offline update check is not retried for an hour**, rather than on every dashboard load.
 
-## 0.2.0
+## 0.2.0 - 2026-08-28
 
-Version 0.2.0 is the start of formal version tagging, although the tool has been under development for quite some time prior to this point.
+Version 0.2.0 is the start of formal version tagging, although the tool has been under development since July 2025.
 
 ### Added
 
