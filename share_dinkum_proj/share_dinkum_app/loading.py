@@ -23,7 +23,6 @@ from djmoney.money import Money
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
 from share_dinkum_app.choices import SellStrategy
-from share_dinkum_app import yfinanceinterface
 from django.db import models
 
 import share_dinkum_app.models as app_models
@@ -768,24 +767,6 @@ class DataLoader():
                     return existing
 
         return None
-
-
-    def get_or_create_exchange_rate(self, convert_from: str, exchange_date: date | str) -> 'app_models.ExchangeRate | None':
-        assert self.account is not None
-        convert_to = self.account.currency
-        if convert_from == convert_to:
-            return None
-        
-        exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=exchange_date)
-        record = {
-            'account' : self.account,
-            'date' : date.fromisoformat(str(exchange_date)),
-            'convert_from' : convert_from,
-            'convert_to' : convert_to,
-            'exchange_rate_multiplier' : exchange_rate_multiplier
-            }
-        exchange_rate, created = app_models.ExchangeRate.objects.get_or_create(**{'convert_from': convert_from, 'convert_to' : convert_to, 'date' : exchange_date}, defaults=record)
-        return exchange_rate
 
 
     def get_available_parcels(self, legacy_id: str) -> list['app_models.Parcel']:
