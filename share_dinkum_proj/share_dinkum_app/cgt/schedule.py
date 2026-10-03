@@ -104,6 +104,20 @@ def _spend(pool: Decimal, gains: list[tuple[Decimal, Decimal]]) -> tuple[list[De
     return applied, pool
 
 
+def _fiscal_year(account: 'Account', fiscal_year: 'FiscalYearRef') -> 'FiscalYear | None':
+    """`fiscal_year` as a FiscalYear, looked up by name within the account's fiscal year type.
+
+    By name alone, another portfolio's year of the same name could be matched, with its own
+    start and end dates.
+    """
+    from share_dinkum_app.models import FiscalYear
+
+    if fiscal_year is None or isinstance(fiscal_year, FiscalYear):
+        return fiscal_year
+    return FiscalYear.objects.filter(
+        fiscal_year_type=account.fiscal_year_type, name=str(fiscal_year)).first()
+
+
 def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero: Money) -> Money:
     """Carried-forward losses still available to `fiscal_year` (every recorded loss if None).
 
@@ -115,9 +129,7 @@ def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero
 
     rows = CapitalLossCarryForward.objects.filter(account=account, is_active=True)
 
-    year: Any = fiscal_year
-    if year is not None and not hasattr(year, 'start_year'):
-        year = FiscalYear.objects.filter(name=str(year)).first()
+    year = _fiscal_year(account, fiscal_year)
     if year is None:
         return cast(Money, sum((row.amount for row in rows), zero))
 
@@ -247,19 +259,15 @@ def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: M
     )
 
 
-def _year_still_running(fiscal_year: 'FiscalYearRef') -> date | None:
+def _year_still_running(account: 'Account', fiscal_year: 'FiscalYearRef') -> date | None:
     """The fiscal year's end date if it has not passed yet, else None (and None for None)."""
-    from share_dinkum_app.models import FiscalYear
-
     if fiscal_year is None:
         # The all-years view, which is a position rather than a return, and is provisional
         # for the same reason if it reaches into the current year. Callers that mean a
         # return always name a year, so there is nothing useful to say here.
         return None
 
-    year: Any = fiscal_year
-    if not hasattr(year, 'start_year'):
-        year = FiscalYear.objects.filter(name=str(year)).first()
+    year = _fiscal_year(account, fiscal_year)
     if year is None:
         return None
 
@@ -325,7 +333,7 @@ def _unrecorded_losses(account: 'Account', every_year: list[events_module.CGTEve
 
     if year_name is None:
         return []
-    year = FiscalYear.objects.filter(name=str(year_name)).first()
+    year = _fiscal_year(account, year_name)
     if year is None:
         return []
 
@@ -367,7 +375,7 @@ def _warnings(account: 'Account', live_events: list[events_module.CGTEvent],
     # First, because it qualifies everything below it. The other warnings say a figure may
     # be wrong; this one says the year is not over, so the figure is not yet the answer to
     # anything.
-    still_running = _year_still_running(year_name)
+    still_running = _year_still_running(account, year_name)
     if still_running:
         warnings.append(
             f'The {year_name} fiscal year has not ended -- it runs to '

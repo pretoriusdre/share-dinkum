@@ -6544,6 +6544,24 @@ class PostCutoverWarningTests(TransactionTestCase):
         self.assertNotIn('projections rather than settled amounts', joined)
 
 
+class ScheduleFiscalYearScopeTests(TransactionTestCase):
+    """The schedule looks a year up by name within the account's own fiscal year type."""
+
+    def test_another_types_year_of_the_same_name_is_not_matched(self):
+        from share_dinkum_app.cgt.schedule import _fiscal_year
+
+        # Created first, so a lookup by name alone would find it. It ends 30 September 2024.
+        other_type = create_fiscal_year_type(description='October Year', start_month=10)
+        FiscalYear.objects.create(fiscal_year_type=other_type, start_year=2023)
+        account = create_account()
+        FiscalYear.objects.create(fiscal_year_type=account.fiscal_year_type, start_year=2023)
+
+        year = _fiscal_year(account, 'FY2023/24')
+
+        self.assertEqual(year.fiscal_year_type, account.fiscal_year_type)
+        self.assertEqual(year.end_date, date(2024, 6, 30))
+
+
 class YearInProgressIsADraftTests(TransactionTestCase):
     """A fiscal year that has not ended is a draft."""
 
@@ -6586,7 +6604,7 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         current = self._year_covering(date.today())
         with patch('share_dinkum_app.cgt.schedule.date') as fake:
             fake.today.return_value = current.end_date
-            self.assertEqual(_year_still_running(current.name), current.end_date)
+            self.assertEqual(_year_still_running(self.account, current.name), current.end_date)
 
     def test_the_day_after_a_year_ends_it_is_closed(self):
         from share_dinkum_app.cgt.schedule import _year_still_running
@@ -6594,13 +6612,13 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         current = self._year_covering(date.today())
         with patch('share_dinkum_app.cgt.schedule.date') as fake:
             fake.today.return_value = current.end_date + timedelta(days=1)
-            self.assertIsNone(_year_still_running(current.name))
+            self.assertIsNone(_year_still_running(self.account, current.name))
 
     def test_the_all_years_view_says_nothing_about_time(self):
         """The all-years view gets no year-in-progress warning."""
         from share_dinkum_app.cgt.schedule import _year_still_running
 
-        self.assertIsNone(_year_still_running(None))
+        self.assertIsNone(_year_still_running(self.account, None))
 
 
 class FullBackupTests(TransactionTestCase):
