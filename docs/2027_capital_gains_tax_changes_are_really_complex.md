@@ -367,7 +367,7 @@ So a tracker still won't *compute* the top-up, but it now has to surface the one
 
 ## Part 3: Implementing this in share-dinkum
 
-The detailed implementation plan for share-dinkum is broken out into a separate document: [`capital_gains_changes_plan.md`](./capital_gains_changes_plan.md).
+This is now implemented. See [`capital_gains_models.md`](./capital_gains_models.md) for the tables involved and the order to fill them in, and version 0.3.0 in the [changelog](../CHANGELOG.md) for the behaviour.
 
 ---
 
