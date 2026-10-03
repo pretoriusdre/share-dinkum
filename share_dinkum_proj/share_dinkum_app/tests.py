@@ -901,6 +901,101 @@ class ForeignCurrencyTradeTests(TransactionTestCase):
 
 
 @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class MixedCurrencyTradeTests(TransactionTestCase):
+    """Price and brokerage are each converted by their own currency's rate.
+
+    An Australian broker commonly charges AUD brokerage on a USD trade. Converting the
+    brokerage at the price's rate failed on the currency mismatch.
+    """
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='IBIT', currency='USD')
+
+    def _buy(self, price_currency, brokerage_currency):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(Decimal('50'), price_currency),
+            total_brokerage=Money(Decimal('10'), brokerage_currency),
+        )
+
+    def _cost_base(self, buy):
+        return Parcel.objects.get(buy=buy).calculated_total_cost_base
+
+    def test_a_usd_price_with_aud_brokerage(self, mock_get_rate):
+        buy = self._buy('USD', 'AUD')
+
+        self.assertEqual(str(buy.exchange_rate.convert_from), 'USD')
+        # 100 x 50 USD x 1.5, plus 10 AUD as it is.
+        self.assertEqual(self._cost_base(buy), Money(Decimal('7510'), 'AUD'))
+        self.assertEqual(buy.total_brokerage_converted, Money(Decimal('10'), 'AUD'))
+
+    def test_an_aud_price_with_usd_brokerage(self, mock_get_rate):
+        buy = self._buy('AUD', 'USD')
+
+        self.assertIsNone(buy.exchange_rate)
+        # 100 x 50 AUD, plus 10 USD x 1.5.
+        self.assertEqual(self._cost_base(buy), Money(Decimal('5015'), 'AUD'))
+
+    def test_both_in_usd(self, mock_get_rate):
+        buy = self._buy('USD', 'USD')
+        self.assertEqual(self._cost_base(buy), Money(Decimal('7515'), 'AUD'))
+
+    def test_a_sale_with_aud_brokerage_on_a_usd_price(self, mock_get_rate):
+        self._buy('USD', 'USD')
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2025, 3, 10),
+            quantity=Decimal('40'), unit_price=Money(Decimal('60'), 'USD'),
+            total_brokerage=Money(Decimal('10'), 'AUD'), strategy='FIFO',
+        )
+        # 40 x 60 USD x 1.5, less 10 AUD.
+        self.assertEqual(sell.proceeds, Money(Decimal('3590'), 'AUD'))
+
+    def test_correcting_the_second_rate_reaches_the_trade(self, mock_get_rate):
+        """The brokerage's rate is not linked to the trade, but a change to it is carried."""
+        buy = self._buy('AUD', 'USD')
+        rate = ExchangeRate.objects.get(
+            account=self.account, convert_from='USD', convert_to='AUD', date=buy.date)
+
+        rate.exchange_rate_multiplier = Decimal('1.6')
+        rate.save()
+        rate.rate_corrected()
+
+        self.assertEqual(self._cost_base(buy), Money(Decimal('5016'), 'AUD'))
+
+
+class DividendCompanyTaxRateTests(TestCase):
+    """Franking credits divide by 1 less the company rate, so 100% is refused."""
+
+    def _dividend(self, rate):
+        account = create_account()
+        return Dividend(
+            account=account, instrument=create_instrument(account=account),
+            date=date(2024, 4, 1), quantity=Decimal('100'),
+            franked_amount_per_share=Money(Decimal('0.50'), 'AUD'),
+            unfranked_amount_per_share=Money(0, 'AUD'),
+            corporate_tax_rate_percentage=Decimal(rate),
+        )
+
+    def test_a_rate_of_100_is_refused(self):
+        dividend = self._dividend('100')
+        with self.assertRaisesMessage(ValidationError, 'less than 100'):
+            dividend.full_clean()
+        with self.assertRaisesMessage(ValueError, 'less than 100'):
+            dividend.save()
+
+    def test_a_negative_rate_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'at least 0'):
+            self._dividend('-1').save()
+
+    def test_a_rate_below_100_is_accepted(self):
+        dividend = self._dividend('25')
+        dividend.save()
+        # 50 franked at 25%: 50 x 0.25 / 0.75.
+        self.assertAlmostEqual(dividend.total_franking_credits.amount, Decimal('16.6667'), places=4)
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
 class RepairPortfolioDataTests(TransactionTestCase):
     """Records left wrong by bugs fixed in 0.3.0: the dashboard warns, the command repairs."""
 

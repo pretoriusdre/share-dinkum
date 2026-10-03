@@ -65,6 +65,13 @@ def validate_positive(value: Any) -> None:
         raise ValidationError(f'This must be more than zero, not {value}.')
 
 
+def validate_company_tax_rate(value: Any) -> None:
+    """From 0 up to but not including 100. Franking credits divide by 1 less the rate."""
+    if value is not None and not 0 <= value < 100:
+        raise ValidationError(
+            f'A company tax rate must be at least 0 and less than 100, not {value}.')
+
+
 
 
 class AppUser(AbstractUser):
@@ -1214,12 +1221,41 @@ class Trade(BaseModel):
     calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
         help_text='Total brokerage in the portfolio currency. Set by the app; do not edit.')
     
+    def rate_for(self, currency: str) -> 'ExchangeRate | None':
+        """The rate converting `currency` to the portfolio currency on the trade date.
+
+        None for the portfolio currency itself. The attached rate covers the currency of the
+        price (or of the brokerage, if the price is zero). Brokerage charged in another
+        currency, such as USD brokerage on a GBP trade, is converted at that currency's own
+        rate for the day: a stored one if there is one, as this is read by every report,
+        otherwise fetched and stored. `recalculate.after_rate_change` finds trades converted
+        at it this way, as they are not linked to it.
+        """
+        account_currency = str(self.account.currency)
+        if currency == account_currency:
+            return None
+        rate = self.exchange_rate
+        if rate is not None and str(rate.convert_from) == currency:
+            return rate
+        stored = ExchangeRate.objects.filter(
+            account=self.account, convert_from=currency, convert_to=account_currency,
+            date=self.date).first()
+        return stored or ExchangeRate.get_or_create(
+            account=self.account, convert_from=currency, convert_to=account_currency,
+            exchange_date=self.date)
+
+    def convert(self, money: Money) -> Money:
+        """`money` in the portfolio currency, at its own currency's rate on the trade date."""
+        if not money.amount:
+            # No rate is needed for nothing, and an unused brokerage column keeps its default
+            # currency whatever the trade is in.
+            return Money(Decimal('0'), str(self.account.currency))
+        rate = self.rate_for(str(money.currency))
+        return money if rate is None else rate.apply(money)
+
     @safe_property
     def total_brokerage_converted(self) -> Money:
-        total_brokerage_converted =  self.total_brokerage
-        if self.exchange_rate:
-            total_brokerage_converted = self.exchange_rate.apply(total_brokerage_converted)
-        return total_brokerage_converted
+        return self.convert(self.total_brokerage)
     
     calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text='Brokerage per unit in the portfolio currency. Set by the app; do not '
@@ -1227,24 +1263,25 @@ class Trade(BaseModel):
     
     @safe_property
     def unit_brokerage_converted(self) -> Money:
-        unit_brokerage_converted =  self.total_brokerage / self.quantity
-        if self.exchange_rate:
-            unit_brokerage_converted = self.exchange_rate.apply(unit_brokerage_converted)
-        return unit_brokerage_converted
+        return self.convert(self.total_brokerage / self.quantity)
     
     calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text='Price per unit in the portfolio currency. Set by the app; do not edit.')
     
     @safe_property
     def unit_price_converted(self) -> Money:
-        logger.debug('Calculating unit price converted on %s', self)
-        unit_price_converted =  self.unit_price
-        if self.exchange_rate:
-            unit_price_converted = self.exchange_rate.apply(unit_price_converted)
-            logger.debug('Converted unit price is %s', unit_price_converted)
-        else:
-            logger.debug('No exchange rate available for %s', self)
-        return unit_price_converted
+        return self.convert(self.unit_price)
+
+    @classmethod
+    def converted_at(cls, rate: 'ExchangeRate') -> 'QuerySet[Any]':
+        """Trades with an amount converted at `rate`: attached to it, or with a second
+        currency it covers on its date."""
+        if str(rate.convert_to) != str(rate.account.currency):
+            return cls._default_manager.filter(exchange_rate=rate)
+        on_its_date = Q(account=rate.account, date=rate.date) & (
+            Q(unit_price_currency=rate.convert_from)
+            | Q(total_brokerage_currency=rate.convert_from))
+        return cls._default_manager.filter(Q(exchange_rate=rate) | on_its_date).distinct()
 
     def __str__(self) -> str:
         return f'{self.description}'
@@ -2153,8 +2190,18 @@ class Dividend(Income):
         max_digits=5,  # Total digits, including decimal places
         decimal_places=2,  # Number of digits after the decimal
         default=Decimal('30.0'),
+        validators=[validate_company_tax_rate],
         help_text="Enter a percentage value (e.g., 25.00 for 25%)"
     )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        # The validator runs only in a form. An import saves directly, and would otherwise
+        # fail on dividing by zero with nothing to say which row.
+        try:
+            validate_company_tax_rate(self.corporate_tax_rate_percentage)
+        except ValidationError as error:
+            raise ValueError(f'{error.messages[0]} ({self.instrument.name} on {self.date})') from error
+        super().save(*args, **kwargs)
     
     @safe_property
     def company_rate(self) -> Decimal:

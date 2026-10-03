@@ -39,6 +39,9 @@ was previouly added in 0.3.0.
 - Refuse trades dated before an applied cost base adjustment. You need to delete the adjustment, and
   apply after you've added the trades.
 - The dashboard now warns about a cost base adjustment for a year the instrument wasn't held.
+- Trades with brokerage in a different currency from the price (such as AUD brokerage on a USD trade)
+  can now be saved. Each amount is converted at its own currency's rate.
+- A dividend's company tax rate is validated to be less than 100%
 
 ## 0.3.0 - 2026-09-30
 

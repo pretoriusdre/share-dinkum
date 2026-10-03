@@ -60,7 +60,11 @@ def derived_from(trade: 'Buy | Sell') -> int:
 
 def after_rate_change(rate: 'ExchangeRate') -> int:
     """Everything converted at `rate`, after its multiplier changed."""
-    count = trades(buys=rate.buy.all(), sells=rate.sell.all())
+    from share_dinkum_app.models import Buy, Sell
+
+    # Not just rate.buy and rate.sell: a trade with brokerage in a second currency is
+    # converted at that currency's rate without being linked to it.
+    count = trades(buys=Buy.converted_at(rate), sells=Sell.converted_at(rate))
     for record in [*rate.cost_base_adjustment.all(), *rate.dividend.all(),
                    *rate.distribution.all()]:
         record.save()
