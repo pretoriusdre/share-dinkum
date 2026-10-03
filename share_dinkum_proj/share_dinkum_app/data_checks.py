@@ -96,6 +96,21 @@ def unbalanced_adjustments(account: 'Account') -> 'QuerySet[CostBaseAdjustment]'
     )
 
 
+def empty_adjustments(account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
+    """Adjustments spread by days held that reached no parcel, as nothing was held that year.
+
+    Usually a mistyped year, or the wrong instrument. The adjustment is in no cost base.
+    """
+    from share_dinkum_app.models import CostBaseAdjustment
+    return (
+        CostBaseAdjustment.objects
+        .filter(account=account, allocation_method='QTY_HELD', _creation_handled=True,
+                cost_base_adjustment_allocation__isnull=True)
+        .exclude(cost_base_increase=Decimal('0'))
+        .select_related('instrument')
+    )
+
+
 def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
@@ -123,6 +138,10 @@ def run(account: 'Account') -> list[Finding]:
         ('unbalanced_adjustments', unbalanced_adjustments(account).count(),
          'cost base adjustment(s) whose allocations do not add up to them, which must be '
          'deleted and entered again',
+         False, True),
+        ('empty_adjustments', empty_adjustments(account).count(),
+         'cost base adjustment(s) for a year when none of the instrument was held, so in no '
+         'cost base; check the year and instrument',
          False, True),
         ('orphaned_adjustment_allocations', orphaned_adjustment_allocations(account).count(),
          'cost base adjustment allocation(s) left behind by a share split, and so missing '

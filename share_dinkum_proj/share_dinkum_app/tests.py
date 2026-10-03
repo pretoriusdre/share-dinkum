@@ -1459,6 +1459,137 @@ class OutOfOrderEntryTests(TransactionTestCase):
             Instrument.objects.get(pk=self.instrument.pk).quantity_held, Decimal('160'))
 
 
+class AdjustmentOutOfOrderTests(TransactionTestCase):
+    """An adjustment is spread over the holding once, so a trade dated before it is refused."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2022, 7, 1),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _adjustment(self, year_end=date(2024, 6, 30), amount=200):
+        return CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=year_end,
+            cost_base_increase=Money(amount, 'AUD'),
+        )
+
+    def _buy(self, on):
+        return Buy(
+            account=self.account, instrument=self.instrument, date=on,
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+    def _sell(self, on):
+        return Sell(
+            account=self.account, instrument=self.instrument, date=on,
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO')
+
+    def _refused(self, record):
+        with self.assertRaisesMessage(ValidationError, 'cost base adjustment'):
+            record.full_clean()
+        with self.assertRaisesMessage(ValueError, 'cost base adjustment'):
+            record.save()
+
+    def test_a_buy_dated_before_an_applied_adjustments_year_end_is_refused(self):
+        """It would get none of the adjustment, though held in its year."""
+        self._adjustment()
+        self._refused(self._buy(date(2022, 7, 1)))
+        self._refused(self._buy(date(2024, 6, 30)))
+
+    def test_a_buy_is_refused_even_where_the_adjustment_reached_no_parcel(self):
+        self._adjustment(year_end=date(2022, 6, 30))
+        self._refused(self._buy(date(2021, 7, 1)))
+
+    def test_a_buy_after_the_year_end_is_fine(self):
+        self._adjustment()
+        self._buy(date(2024, 7, 1)).save()
+
+    def test_a_sale_dated_before_an_applied_adjustments_year_end_is_refused(self):
+        """The units sold would keep a share weighted as if held all year."""
+        self._adjustment()
+        self._refused(self._sell(date(2024, 6, 29)))
+
+    def test_a_sale_on_the_year_end_is_fine(self):
+        """The last day counts as held either way, so no weight changes."""
+        self._adjustment()
+        self._sell(date(2024, 6, 30)).save()
+        self.assertEqual(
+            Instrument.objects.get(pk=self.instrument.pk).quantity_held, Decimal('50'))
+
+    def test_a_sale_is_fine_where_the_adjustment_reached_no_parcel(self):
+        self._adjustment(year_end=date(2022, 6, 30))
+        self._sell(date(2022, 8, 1)).save()
+
+    def test_a_manual_adjustment_does_not_refuse_trades(self):
+        CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(200, 'AUD'), allocation_method='MANUAL',
+        )
+        self._buy(date(2023, 1, 1)).save()
+
+    def test_a_fresh_template_import_is_unaffected(self):
+        """Buys load first, then sales and adjustments in date order."""
+        account = create_account(
+            owner=create_user(username='fresh'), description='Fresh',
+            fy_type=create_fiscal_year_type(description='AU Tax Year fresh'))
+        path = Path(tempfile.mkdtemp()) / 'fresh.xlsx'
+        self.addCleanup(shutil.rmtree, path.parent)
+        trade = {'instrument__name': 'BHP', 'unit_price_currency': 'AUD',
+                 'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}
+        data = {
+            'Market': pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]),
+            'Instrument': pd.DataFrame([
+                {'name': 'BHP', 'currency': 'AUD', 'market__code': 'ASX'}]),
+            'Buy': pd.DataFrame([
+                {**trade, 'legacy_id': 'B1', 'date': date(2022, 7, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('10')},
+                {**trade, 'legacy_id': 'B2', 'date': date(2024, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('11')},
+                {**trade, 'legacy_id': 'B3', 'date': date(2025, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('12')},
+            ]),
+            'Sell': pd.DataFrame([
+                {**trade, 'legacy_id': 'S1', 'date': date(2023, 12, 1), 'strategy': 'FIFO',
+                 'quantity': Decimal('50'), 'unit_price': Decimal('12')},
+                {**trade, 'legacy_id': 'S2', 'date': date(2025, 1, 1), 'strategy': 'FIFO',
+                 'quantity': Decimal('50'), 'unit_price': Decimal('12')},
+            ]),
+            'CostBaseAdjustment': pd.DataFrame([
+                {'legacy_id': 'A1', 'cost_base_increase': Decimal('200'),
+                 'cost_base_increase_currency': 'AUD', 'instrument__name': 'BHP',
+                 'financial_year_end_date': date(2024, 6, 30), 'allocation_method': 'QTY_HELD'},
+            ]),
+        }
+        generator = excelinterface.ExcelGen(title='Fresh')
+        for table_name, frame in data.items():
+            generator.add_table(frame, table_name=table_name)
+        generator.save(path)
+
+        loading.DataLoader(account=account, input_file=path)
+
+        self.assertEqual(Sell.objects.filter(account=account).count(), 2)
+        adjustment = CostBaseAdjustment.objects.get(account=account)
+        allocated = sum(
+            allocation.cost_base_increase.amount
+            for allocation in adjustment.cost_base_adjustment_allocation.filter(is_active=True))
+        self.assertEqual(allocated, Decimal('200'))
+
+    def test_an_adjustment_that_reached_no_parcel_is_reported(self):
+        from share_dinkum_app import data_checks
+
+        self.assertNotIn('empty_adjustments', {f.key for f in data_checks.run(self.account)})
+        self._adjustment(year_end=date(2022, 6, 30))
+
+        finding = {f.key: f for f in data_checks.run(self.account)}['empty_adjustments']
+        self.assertEqual(finding.count, 1)
+        self.assertTrue(finding.affects_gains)
+        self.assertFalse(finding.repairable)
+
+
 class AttachedDocumentTests(TransactionTestCase):
     """A document is deleted only once the change that replaced or removed it commits."""
 
@@ -1717,21 +1848,12 @@ def create_golden_master_portfolio():
     )
 
     # Bought part way through FY2024, and after the split so it is never doubled. This
-    # parcel is what exercises the cost base allocation weighting: allocate_cost_base_
-    # adjustment bounds days held at the sale date but not at the buy date, so this parcel
-    # currently receives a full year's weight despite being held for two months.
+    # parcel exercises the cost base allocation weighting: held 61 days of the year, it
+    # gets that fraction of a full year's weight.
     buy_three = Buy.objects.create(
         account=account, instrument=instrument, date=date(2024, 5, 1),
         quantity=Decimal('200'), unit_price=Money(Decimal('7.00'), 'AUD'),
         total_brokerage=Money(Decimal('9.50'), 'AUD'),
-    )
-
-    # AMIT cost base increase, spread across parcels by quantity x days held.
-    adjustment = CostBaseAdjustment.objects.create(
-        account=account, instrument=instrument,
-        financial_year_end_date=date(2024, 6, 30),
-        cost_base_increase=Money(Decimal('150.00'), 'AUD'),
-        allocation_method='QTY_HELD',
     )
 
     # Partial sell at a gain; bifurcates the first parcel.
@@ -1739,6 +1861,16 @@ def create_golden_master_portfolio():
         account=account, instrument=instrument, date=date(2024, 3, 10),
         quantity=Decimal('1500'), unit_price=Money(Decimal('8.00'), 'AUD'),
         total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
+    )
+
+    # AMIT cost base increase, spread across parcels by quantity x days held. Entered after
+    # the sale before its year end, as an import's timeline does: the other way round is
+    # refused, since the sold units' share would be weighted as if held all year.
+    adjustment = CostBaseAdjustment.objects.create(
+        account=account, instrument=instrument,
+        financial_year_end_date=date(2024, 6, 30),
+        cost_base_increase=Money(Decimal('150.00'), 'AUD'),
+        allocation_method='QTY_HELD',
     )
     # Later sell at a loss, in the next fiscal year, spanning two parcels.
     sell_loss = Sell.objects.create(
@@ -1782,11 +1914,11 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # buy date,        quantity, unit cost base,       total cost base,      sale date
-            (date(2022, 8, 15), '1500', '5.059425533333333333333333333', '7589.1383', date(2024, 3, 10)),
-            (date(2022, 8, 15), '500',  '5.0594256', '2529.7128', date(2024, 11, 5)),
-            (date(2023, 2, 20), '500',  '6.0589506', '3029.4753', date(2024, 11, 5)),
-            (date(2023, 2, 20), '500',  '6.0589504', '3029.4752', None),
-            (date(2024, 5, 1),  '200',  '7.055742',  '1411.1484', None),
+            (date(2022, 8, 15), '1500', '5.050412266666666666666666667', '7575.6184', date(2024, 3, 10)),
+            (date(2022, 8, 15), '500',  '5.0682428', '2534.1214', date(2024, 11, 5)),
+            (date(2023, 2, 20), '500',  '6.067768',  '3033.8840', date(2024, 11, 5)),
+            (date(2023, 2, 20), '500',  '6.0677678', '3033.8839', None),
+            (date(2024, 5, 1),  '200',  '7.0572115', '1411.4423', None),
         ]
         for parcel, (buy_date, qty, unit_cb, total_cb, sale_date) in zip(parcels, expected):
             self.assertEqual(parcel.buy.date, buy_date)
@@ -1800,8 +1932,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
         allocations = [p.total_adjustments.amount for p in self._parcels()]
         self.assertEqual(
             allocations,
-            [Decimal('74.1758'), Decimal('24.7253'),
-             Decimal('24.7253'), Decimal('24.7252'), Decimal('1.6484')],
+            # The units sold on 10 March are weighted by the 254 days they were held.
+            [Decimal('60.6559'), Decimal('29.1339'),
+             Decimal('29.1340'), Decimal('29.1339'), Decimal('1.9423')],
         )
         # The whole adjustment is allocated, exactly: none lost to rounding, none
         # duplicated. The largest parcel absorbs the residual where the weights do not
@@ -1830,9 +1963,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # sell date,       qty,    days, proceeds,   cost base,              gain,                    fiscal year
-            (date(2024, 3, 10), '1500', 573, '11990.50', '7589.1383', '4401.3617',  'FY2023/24'),
-            (date(2024, 11, 5), '500',  813, '1995.25',  '2529.7128', '-534.4628',  'FY2024/25'),
-            (date(2024, 11, 5), '500',  624, '1995.25',  '3029.4753', '-1034.2253', 'FY2024/25'),
+            (date(2024, 3, 10), '1500', 573, '11990.50', '7575.6184', '4414.8816',  'FY2023/24'),
+            (date(2024, 11, 5), '500',  813, '1995.25',  '2534.1214', '-538.8714',  'FY2024/25'),
+            (date(2024, 11, 5), '500',  624, '1995.25',  '3033.8840', '-1038.6340', 'FY2024/25'),
         ]
         for (_, row), (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(df.iterrows(), expected):
             self.assertEqual(row['sell_date'], sell_date)
@@ -1854,8 +1987,8 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # buy date,       qty,   unit cost base,        cost base,              market value, unrealised gain
-            (date(2023, 2, 20), '500', '6.0589504', '3029.4752', '2750.00', '-279.4752'),
-            (date(2024, 5, 1),  '200', '7.055742',  '1411.1484', '1100.00', '-311.1484'),
+            (date(2023, 2, 20), '500', '6.0677678', '3033.8839', '2750.00', '-283.8839'),
+            (date(2024, 5, 1),  '200', '7.0572115', '1411.4423', '1100.00', '-311.4423'),
         ]
         for (_, row), (buy_date, qty, unit_cb, cost_base, value, gain) in zip(df.iterrows(), expected):
             self.assertEqual(row['buy_date'], buy_date)
@@ -1865,8 +1998,8 @@ class CGTGoldenMasterTests(TransactionTestCase):
             self.assertEqual(row['current_value'].amount, Decimal(value))
             self.assertEqual(row['unrealised_gain'].amount, Decimal(gain))
 
-        self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.0922520177752239, places=12)
-        self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22049303956975752, places=12)
+        self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.09357111522955773, places=12)
+        self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22065535374701467, places=12)
 
     def test_quantities_reconcile(self):
         """Every unit bought is either held or allocated to a sale."""
@@ -2503,17 +2636,17 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(snapshot.totals['row_count'], 1)
-        self.assertEqual(Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+        self.assertEqual(Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
         later = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2025)
         self.assertEqual(len(later.rows), 2)
-        self.assertEqual(Decimal(later.totals['total_capital_gain']), Decimal('-1568.6881'))
+        self.assertEqual(Decimal(later.totals['total_capital_gain']), Decimal('-1577.5054'))
 
     def test_captured_figures_keep_their_values(self):
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         row = snapshot.rows[0]
-        self.assertEqual(row['cost_base'].amount, Decimal('7589.1383'))
-        self.assertEqual(row['capital_gain'].amount, Decimal('4401.3617'))
+        self.assertEqual(row['cost_base'].amount, Decimal('7575.6184'))
+        self.assertEqual(row['capital_gain'].amount, Decimal('4414.8816'))
         self.assertEqual(row['proceeds'].amount, Decimal('11990.5000'))
         self.assertEqual(row['sell_date'], date(2024, 3, 10))
         # The fiscal year belongs to the snapshot, so it is not repeated on every row.
@@ -2552,7 +2685,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
 
         row.refresh_from_db()
         self.assertIsNotNone(row.sell_allocation_id)
-        self.assertEqual(row.capital_gain.amount, Decimal('4401.3617'))
+        self.assertEqual(row.capital_gain.amount, Decimal('4414.8816'))
 
     def test_recapturing_same_day_replaces_rather_than_duplicates(self):
         first = CGTReturnSnapshot.capture(
@@ -2590,10 +2723,10 @@ class CGTReturnSnapshotTests(TransactionTestCase):
             self.assertIn(column, rows.columns)
         self.assertEqual(len(rows), snapshot.captured_rows.count())
         self.assertEqual(
-            Decimal(str(rows.iloc[0]['capital_gain'])), Decimal('4401.3617'))
+            Decimal(str(rows.iloc[0]['capital_gain'])), Decimal('4414.8816'))
 
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
 
 class CGTBasisChangeReportTests(TransactionTestCase):
@@ -2649,8 +2782,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertEqual(set(df['status']), {'CHANGED'})
 
         cost_base_row = df[df['field'] == 'cost_base'].iloc[0]
-        self.assertEqual(cost_base_row['snapshot_value'], Decimal('7589.1383'))
-        self.assertGreater(cost_base_row['current_value'], Decimal('7589.1383'))
+        self.assertEqual(cost_base_row['snapshot_value'], Decimal('7575.6184'))
+        self.assertGreater(cost_base_row['current_value'], Decimal('7575.6184'))
         self.assertGreater(cost_base_row['difference'], Decimal('0'))
 
         # A higher cost base must show as a smaller gain, by the same amount.
@@ -2662,7 +2795,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
 
         Sell.objects.create(
             account=self.account, instrument=self.data['instrument'],
-            date=date(2024, 4, 2), quantity=Decimal('100'),
+            # On the adjustment's year end: an earlier sale would change its weights.
+            date=date(2024, 6, 30), quantity=Decimal('100'),
             unit_price=Money(Decimal('9.00'), 'AUD'),
             total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
         )
@@ -4618,22 +4752,22 @@ class CapitalGainScheduleTests(TransactionTestCase):
         """Losses net against gains across the year, not per disposal."""
         schedule = cgt.build_schedule(self.account, 'FY2024/25')
         self.assertEqual(schedule.gross_gains.amount, Decimal('0'))
-        self.assertEqual(schedule.gross_losses.amount, Decimal('1568.6881'))
+        self.assertEqual(schedule.gross_losses.amount, Decimal('1577.5054'))
         self.assertEqual(schedule.net_capital_gain.amount, Decimal('0'))
         # Nothing to absorb them, so the whole amount is carried forward.
-        self.assertEqual(schedule.losses_carried_forward.amount, Decimal('1568.6881'))
+        self.assertEqual(schedule.losses_carried_forward.amount, Decimal('1577.5054'))
 
     def test_the_discount_is_applied_after_losses_not_before(self):
         """Prior-year losses are applied before the discount."""
         schedule = cgt.build_schedule(
             self.account, 'FY2023/24', prior_year_losses=Money(Decimal('1000'), 'AUD'))
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1700.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1707.44080'))
 
     def test_a_year_with_a_gain_and_no_losses_is_simply_discounted(self):
         schedule = cgt.build_schedule(self.account, 'FY2023/24')
-        self.assertEqual(schedule.gross_gains.amount, Decimal('4401.3617'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.gross_gains.amount, Decimal('4414.8816'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_prior_year_losses_come_from_the_carry_forward_model(self):
         fiscal_year = FiscalYear.objects.first()
@@ -4870,10 +5004,10 @@ class CGTReportTests(TransactionTestCase):
         summary = CGTScheduleReport(
             account=self.account, fiscal_year='FY2023/24').summary()
         self.assertEqual(
-            summary['total_current_year_capital_gains'].amount, Decimal('4401.3617'))
-        self.assertEqual(summary['net_capital_gain'].amount, Decimal('2200.68085'))
+            summary['total_current_year_capital_gains'].amount, Decimal('4414.8816'))
+        self.assertEqual(summary['net_capital_gain'].amount, Decimal('2207.44080'))
         self.assertEqual(
-            summary['minimum_tax_capital_gain_base'].amount, Decimal('2200.68085'))
+            summary['minimum_tax_capital_gain_base'].amount, Decimal('2207.44080'))
 
 
 class LoadCPICommandTests(TestCase):
@@ -5523,7 +5657,7 @@ class CaptureCGTSnapshotCommandTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.objects.get(account=self.account)
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
     def test_it_records_which_basis_produced_the_figures(self):
         """A snapshot records the residency basis of its figures."""
@@ -5598,7 +5732,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.objects.get(fiscal_year__name='FY2023/24')
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
     def test_nothing_is_marked_as_lodged(self):
         """Snapshots from the button are not marked lodged."""
@@ -5703,7 +5837,7 @@ class SnapshotColumnPrecisionTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.capture(
             account=self.account, fiscal_year=self.fiscal_year)
         total = snapshot.totals['total_capital_gain']
-        self.assertEqual(Decimal(total), Decimal('-1568.6881'))
+        self.assertEqual(Decimal(total), Decimal('-1577.5054'))
         self.assertGreaterEqual(Decimal(total).as_tuple().exponent, -4)
 
 
@@ -7328,21 +7462,21 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         # FY2024/25 is all losses in this fixture, so nothing absorbs it and it rolls on.
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
         self.assertEqual(
-            schedule.losses_carried_forward.amount, Decimal('1568.6881') + Decimal('1000'))
+            schedule.losses_carried_forward.amount, Decimal('1577.5054') + Decimal('1000'))
 
     def test_a_loss_from_a_later_year_is_not_applied_to_an_earlier_one(self):
         """A later year's loss is not applied to an earlier year."""
         self._record(self.later, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_a_loss_from_the_same_year_is_not_double_counted(self):
         """A carry-forward recorded for the same year is not applied to it."""
         self._record(self.earlier, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_an_earlier_loss_reduces_a_later_gain(self):
         older = FiscalYear.objects.filter(start_year__lt=self.earlier.start_year).first()
@@ -7351,7 +7485,7 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         self._record(older, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1700.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1707.44080'))
 
     def test_an_explicit_override_still_wins(self):
         """An explicit prior_year_losses override is used as given."""
@@ -7372,7 +7506,7 @@ class CarryForwardYearScopeTests(TransactionTestCase):
 
         later = cgt.build_schedule(self.account, self.later)
 
-        self.assertEqual(later.losses_carried_forward.amount, Decimal('1568.6881'))
+        self.assertEqual(later.losses_carried_forward.amount, Decimal('1577.5054'))
 
     def test_only_what_is_left_of_a_loss_rolls_on(self):
         """A loss larger than the FY2023/24 gain carries only its remainder into FY2024/25."""
@@ -7381,10 +7515,10 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         earlier = cgt.build_schedule(self.account, self.earlier)
         later = cgt.build_schedule(self.account, self.later)
 
-        self.assertEqual(earlier.prior_year_losses_applied.amount, Decimal('4401.3617'))
+        self.assertEqual(earlier.prior_year_losses_applied.amount, Decimal('4414.8816'))
         self.assertEqual(
             later.losses_carried_forward.amount,
-            Decimal('1568.6881') + Decimal('5000') - Decimal('4401.3617'))
+            Decimal('1577.5054') + Decimal('5000') - Decimal('4414.8816'))
 
 
 # =============================================================================
@@ -7910,12 +8044,12 @@ class UnrecordedLossWarningTests(TransactionTestCase):
     def test_a_later_year_says_it_is_missing(self):
         warnings = self._warnings()
         self.assertIn('not been recorded as carried forward', warnings)
-        self.assertIn('FY2024/25: AUD 1,568.69', warnings)
+        self.assertIn('FY2024/25: AUD 1,577.51', warnings)
 
     def test_recording_it_clears_the_warning(self):
         CapitalLossCarryForward.objects.create(
             account=self.account, fiscal_year=self.loss_year,
-            amount=Money(Decimal('1568.69'), 'AUD'))
+            amount=Money(Decimal('1577.51'), 'AUD'))
         self.assertNotIn('FY2024/25:', self._warnings())
 
 

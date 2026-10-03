@@ -1308,12 +1308,21 @@ class Buy(Trade):
             account_id=self.account_id, instrument_id=self.instrument_id,
             _creation_handled=True, date__gt=self.date,
         ).order_by('date').first()
-        if split is None:
-            return None
-        return (
-            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
-            f'this buy is dated before it, so it would not be split with the rest. Delete the '
-            f'split, enter this buy, then enter the split again.')
+        if split is not None:
+            return (
+                f'A split of {self.instrument.name} on {split.date} has already been applied, '
+                f'and this buy is dated before it, so it would not be split with the rest. '
+                f'Delete the split, enter this buy, then enter the split again.')
+        # An adjustment is spread over the parcels held in its year once, when entered. A
+        # buy held on any day of that year, the year end included, would get none of it.
+        adjustment = CostBaseAdjustment.spread_on_or_after(self, self.date)
+        if adjustment is not None:
+            return (
+                f'A cost base adjustment of {self.instrument.name} for the year ending '
+                f'{adjustment.financial_year_end_date} has already been spread over the parcels '
+                f'held, and this buy is dated before that year end, so it would get none of it. '
+                f'Delete the adjustment, enter this buy, then enter the adjustment again.')
+        return None
 
 
 class Sell(Trade):
@@ -1385,12 +1394,24 @@ class Sell(Trade):
             account_id=self.account_id, instrument_id=self.instrument_id,
             _creation_handled=True, date__gt=self.date, affected_parcels__isnull=False,
         ).order_by('date').first()
-        if split is None:
-            return None
-        return (
-            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
-            f'this sale is dated before it, so it would be matched against the split parcels. '
-            f'Delete the split, enter this sale, then enter the split again.')
+        if split is not None:
+            return (
+                f'A split of {self.instrument.name} on {split.date} has already been applied, '
+                f'and this sale is dated before it, so it would be matched against the split '
+                f'parcels. Delete the split, enter this sale, then enter the split again.')
+        # A sale shortens the days its units were held, which weights the spread of any
+        # adjustment for a year it falls before the end of. A sale on the year end changes
+        # no weight, since the last day still counts as held.
+        adjustment = CostBaseAdjustment.spread_on_or_after(
+            self, self.date + timedelta(days=1), allocated=True)
+        if adjustment is not None:
+            return (
+                f'A cost base adjustment of {self.instrument.name} for the year ending '
+                f'{adjustment.financial_year_end_date} has already been spread over the parcels '
+                f'held, and this sale is dated before that year end, so the units sold would '
+                f'keep a share worked out as if still held. Delete the adjustment, enter this '
+                f'sale, then enter the adjustment again.')
+        return None
 
 
 class Parcel(BaseModel):
@@ -1924,6 +1945,24 @@ class CostBaseAdjustment(BaseModel):
     STRUCTURAL_FIELDS: tuple[str, ...] = (
         'instrument', 'financial_year_end_date', 'cost_base_increase',
         'cost_base_increase_currency', 'allocation_method')
+
+    @classmethod
+    def spread_on_or_after(cls, trade: 'Trade', day: Date,
+                           allocated: bool = False) -> 'CostBaseAdjustment | None':
+        """The earliest adjustment of `trade`'s instrument already spread by days held,
+        for a year ending on or after `day`, or None.
+
+        With `allocated`, only one that reached a parcel: an adjustment for a year nothing
+        was held changes with a new buy, but not with a new sale.
+        """
+        adjustments = cls.objects.filter(
+            account_id=trade.account_id, instrument_id=trade.instrument_id,
+            allocation_method=AllocationMethod.QTY_HELD, _creation_handled=True,
+            financial_year_end_date__gte=day,
+        )
+        if allocated:
+            adjustments = adjustments.filter(cost_base_adjustment_allocation__isnull=False)
+        return adjustments.order_by('financial_year_end_date').first()
 
     @classmethod
     def with_unconverted_allocations(cls, account: 'Account') -> 'QuerySet[CostBaseAdjustment]':

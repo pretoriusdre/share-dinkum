@@ -36,6 +36,9 @@ was previouly added in 0.3.0.
   load with a NOT NULL error. It now takes the default.
 - Fiscal year names are looked up within the portfolio's own fiscal year type, so another portfolio's
   year of the same name cannot be matched by mistake.
+- Refuse trades dated before an applied cost base adjustment. You need to delete the adjustment, and
+  apply after you've added the trades.
+- The dashboard now warns about a cost base adjustment for a year the instrument wasn't held.
 
 ## 0.3.0 - 2026-09-30
 
