@@ -4235,11 +4235,13 @@ class IndexationEligibilityTests(TransactionTestCase):
         self.assertEqual(event.method, cgt.events.METHOD_DISCOUNT)
 
 
-def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix=''):
+def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix='',
+                             adjustments=()):
     """A parcel bought well before the cutover and sold well after it.
 
     Cost base 10,019.95, cutover value 15,000, net proceeds 19,990.05. `suffix` allows a
-    second, independent portfolio in the same test.
+    second, independent portfolio in the same test. `adjustments` are
+    `(financial_year_end_date, amount)` pairs, entered before the sale.
     """
     account = create_account(
         owner=create_user(username=f'cutover{suffix}'),
@@ -4259,6 +4261,11 @@ def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', su
         unit_value=Money(Decimal(unit_value), 'AUD'),
         purpose='CUTOVER_2027', source='USER',
     )
+    for year_end, amount in adjustments:
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=year_end,
+            cost_base_increase=Money(Decimal(amount), 'AUD'),
+        )
     sell = Sell.objects.create(
         account=account, instrument=instrument, date=sell_date,
         quantity=Decimal('1000'), unit_price=Money(Decimal('20.00'), 'AUD'),
@@ -4375,6 +4382,50 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].slice, cgt.events.SLICE_WHOLE)
         self.assertEqual(events[0].capital_gain, Money(Decimal('9970.10'), 'AUD'))
+
+
+class CutoverAdjustmentSliceTests(TransactionTestCase):
+    """Adjustments for years after the cutover belong to the post-cutover slice."""
+
+    def _events(self, year_end, amount):
+        data = create_cutover_portfolio(adjustments=[(year_end, amount)])
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+        return cgt.disposal_events(data['account'])
+
+    def test_a_later_increase_moves_to_the_post_cutover_slice(self):
+        deferred, post = self._events(date(2028, 6, 30), '1000')
+
+        # The deferred slice is as if there were no adjustment.
+        self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
+        self.assertEqual(deferred.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
+        # 15,000 plus 1,000, lifted by 10% inflation.
+        self.assertEqual(post.buy_consideration, Money(Decimal('15000.00'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('1000.00'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('17600.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('2390.050'), 'AUD'))
+
+    def test_a_later_decrease_moves_to_the_post_cutover_slice(self):
+        """A decrease, common for property trusts, raises the undiscounted gain."""
+        deferred, post = self._events(date(2028, 6, 30), '-500')
+
+        self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('-500.00'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('15950.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('4040.050'), 'AUD'))
+
+    def test_an_adjustment_for_the_year_ending_at_the_cutover_stays_deferred(self):
+        """s104-107B applies it at the end of that year, the day of the deemed sale."""
+        deferred, post = self._events(date(2027, 6, 30), '1000')
+
+        self.assertEqual(deferred.cost_base_adjustments, Money(Decimal('1000.00'), 'AUD'))
+        self.assertEqual(deferred.cost_base, Money(Decimal('11019.95'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('3980.05'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('16500.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('3490.050'), 'AUD'))
 
 
 class ReturnedExpatIndexationTests(TransactionTestCase):
