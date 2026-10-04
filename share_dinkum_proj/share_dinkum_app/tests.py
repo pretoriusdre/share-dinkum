@@ -4387,6 +4387,41 @@ class AttributionDisregardTests(TransactionTestCase):
              ('discount', cgt.tap.NTAP, Decimal('1800.00'), True),
              ('other', cgt.tap.NTAP, Decimal('50.00'), True)])
 
+    def _withheld(self, residency_status='FOREIGN', flagged=True):
+        self._component('DISCOUNTED_TAP', '843.27')
+        self._component('DISCOUNTED_NTAP', '10.00')
+        declare(self.account, residency_status, date(2010, 1, 1))
+        self.statement.gain_subject_to_mit_withholding = flagged
+        self.statement.save()
+        return {e.tap_status: e for e in cgt.attribution_events(self.account)}
+
+    def test_mit_withholding_defaults_to_off(self):
+        self.assertFalse(self.statement.gain_subject_to_mit_withholding)
+
+    def test_a_flagged_tap_gain_is_disregarded_for_a_foreign_resident(self):
+        events = self._withheld()
+        tap = events[cgt.tap.TAP]
+        self.assertTrue(tap.is_disregarded)
+        self.assertIn('s840-815', tap.disregard_reason)
+        # Still reported at its grossed-up amount, so it can be explained.
+        self.assertEqual(tap.capital_gain.amount, Decimal('1686.54'))
+
+    def test_an_unflagged_tap_gain_stays_assessable(self):
+        self.assertFalse(self._withheld(flagged=False)[cgt.tap.TAP].is_disregarded)
+
+    def test_the_flag_does_nothing_for_a_resident(self):
+        """MIT withholding is on foreign residents, so a resident still reports the gain."""
+        self.assertFalse(self._withheld('RESIDENT')[cgt.tap.TAP].is_disregarded)
+
+    def test_the_flag_does_nothing_without_declared_residency(self):
+        self._component('DISCOUNTED_TAP', '843.27')
+        self.statement.gain_subject_to_mit_withholding = True
+        self.statement.save()
+        self.assertFalse(cgt.attribution_events(self.account)[0].is_disregarded)
+
+    def test_the_flag_does_not_change_the_non_tap_part(self):
+        self.assertIn('s855-40(2)', self._withheld()[cgt.tap.NTAP].disregard_reason)
+
 
 class TaxSettingsBannerTests(TransactionTestCase):
     """The dashboard's tax settings warning."""

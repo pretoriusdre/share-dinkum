@@ -2436,6 +2436,14 @@ class AttributionStatement(BaseModel):
                   'used to check the two agree.',
     )
 
+    gain_subject_to_mit_withholding = models.BooleanField(
+        default=False,
+        help_text='Tick only if you were a foreign resident when paid and the fund withheld '
+                  'managed investment trust (MIT) withholding tax on the taxable Australian '
+                  'property part of its capital gain. That tax is final, so the gain is left '
+                  'out of the capital gains schedule (s840-815). Leave unticked otherwise: '
+                  'a resident, or a fund that did not withhold, still reports the gain.')
+
     calculated_fiscal_year = models.ForeignKey(
         FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
         help_text='Fiscal year the statement covers. Set by the app; do not edit.')

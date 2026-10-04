@@ -575,7 +575,8 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
 
     def attributed(amount: Money, status: str, method: str, discount_percentage: Decimal) -> None:
         disregarded, reason = tap_module.disregard_attribution(
-            account, status, event_date, declared=declared)
+            account, status, event_date, declared=declared,
+            mit_withheld=statement.gain_subject_to_mit_withholding)
         events.append(CGTEvent(
             **common,
             capital_gain=amount,
