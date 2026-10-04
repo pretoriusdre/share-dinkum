@@ -7222,6 +7222,15 @@ class IncomeReportTests(TransactionTestCase):
         self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
 
 
+class TestMediaIsolationTests(TransactionTestCase):
+    """Tests must not write into the real media folder."""
+
+    def test_media_root_is_not_the_projects(self):
+        from django.conf import settings
+        real = Path(settings.BASE_DIR) / 'media'
+        self.assertNotEqual(Path(settings.MEDIA_ROOT).resolve(), real.resolve())
+
+
 class DashboardActionRegistryTests(TransactionTestCase):
     """DASHBOARD_ACTIONS drives the URLs, the page and the button order."""
 
