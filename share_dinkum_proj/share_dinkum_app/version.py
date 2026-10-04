@@ -22,7 +22,7 @@ PACKAGE_NAME = 'share-dinkum'
 
 # Used when the project has not been installed, eg a plain `git clone` that never had `uv sync` run.
 # Keep this in step with the version in pyproject.toml.
-FALLBACK_VERSION = '0.3.0'
+FALLBACK_VERSION = '0.4.0'
 
 RELEASES_API_URL = 'https://api.github.com/repos/pretoriusdre/share-dinkum/releases/latest'
 RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'

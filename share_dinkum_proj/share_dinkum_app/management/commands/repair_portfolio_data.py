@@ -116,3 +116,12 @@ class Command(BaseCommand):
                 f'Delete each one and enter it again:'))
             for adjustment in {adjustment.pk: adjustment for adjustment in adjustments}.values():
                 self.stdout.write(f'    {adjustment}')
+
+        empty = list(data_checks.empty_adjustments(account))
+        if empty:
+            self.stdout.write(self.style.WARNING(
+                '  Cost base adjustments for a year when none of the instrument was held, so '
+                'they reached no parcel. Check the year and instrument, then delete each one '
+                'and enter it again:'))
+            for adjustment in empty:
+                self.stdout.write(f'    {adjustment}')

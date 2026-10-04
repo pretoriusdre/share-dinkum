@@ -3,13 +3,16 @@ import io
 import json
 import shutil
 import sqlite3
+import pickle
 import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
+from django.utils.html import escape
 
+import openpyxl
 import pandas as pd
 
 from django.core.exceptions import ValidationError
@@ -67,8 +70,8 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, constants, dashboard, excelinterface, loading, reports, version, yfinanceinterface)
-from share_dinkum_app.management.commands import make_import_template
+    cgt, column_help, constants, dashboard, excelinterface, income, loading, reports, version, yfinanceinterface)
+from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
 # --- Test data factories (minimal objects for isolation) ---
@@ -899,6 +902,101 @@ class ForeignCurrencyTradeTests(TransactionTestCase):
 
 
 @patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class MixedCurrencyTradeTests(TransactionTestCase):
+    """Price and brokerage are each converted by their own currency's rate.
+
+    An Australian broker commonly charges AUD brokerage on a USD trade. Converting the
+    brokerage at the price's rate failed on the currency mismatch.
+    """
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='IBIT', currency='USD')
+
+    def _buy(self, price_currency, brokerage_currency):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 10),
+            quantity=Decimal('100'), unit_price=Money(Decimal('50'), price_currency),
+            total_brokerage=Money(Decimal('10'), brokerage_currency),
+        )
+
+    def _cost_base(self, buy):
+        return Parcel.objects.get(buy=buy).calculated_total_cost_base
+
+    def test_a_usd_price_with_aud_brokerage(self, mock_get_rate):
+        buy = self._buy('USD', 'AUD')
+
+        self.assertEqual(str(buy.exchange_rate.convert_from), 'USD')
+        # 100 x 50 USD x 1.5, plus 10 AUD as it is.
+        self.assertEqual(self._cost_base(buy), Money(Decimal('7510'), 'AUD'))
+        self.assertEqual(buy.total_brokerage_converted, Money(Decimal('10'), 'AUD'))
+
+    def test_an_aud_price_with_usd_brokerage(self, mock_get_rate):
+        buy = self._buy('AUD', 'USD')
+
+        self.assertIsNone(buy.exchange_rate)
+        # 100 x 50 AUD, plus 10 USD x 1.5.
+        self.assertEqual(self._cost_base(buy), Money(Decimal('5015'), 'AUD'))
+
+    def test_both_in_usd(self, mock_get_rate):
+        buy = self._buy('USD', 'USD')
+        self.assertEqual(self._cost_base(buy), Money(Decimal('7515'), 'AUD'))
+
+    def test_a_sale_with_aud_brokerage_on_a_usd_price(self, mock_get_rate):
+        self._buy('USD', 'USD')
+        sell = Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2025, 3, 10),
+            quantity=Decimal('40'), unit_price=Money(Decimal('60'), 'USD'),
+            total_brokerage=Money(Decimal('10'), 'AUD'), strategy='FIFO',
+        )
+        # 40 x 60 USD x 1.5, less 10 AUD.
+        self.assertEqual(sell.proceeds, Money(Decimal('3590'), 'AUD'))
+
+    def test_correcting_the_second_rate_reaches_the_trade(self, mock_get_rate):
+        """The brokerage's rate is not linked to the trade, but a change to it is carried."""
+        buy = self._buy('AUD', 'USD')
+        rate = ExchangeRate.objects.get(
+            account=self.account, convert_from='USD', convert_to='AUD', date=buy.date)
+
+        rate.exchange_rate_multiplier = Decimal('1.6')
+        rate.save()
+        rate.rate_corrected()
+
+        self.assertEqual(self._cost_base(buy), Money(Decimal('5016'), 'AUD'))
+
+
+class DividendCompanyTaxRateTests(TestCase):
+    """Franking credits divide by 1 less the company rate, so 100% is refused."""
+
+    def _dividend(self, rate):
+        account = create_account()
+        return Dividend(
+            account=account, instrument=create_instrument(account=account),
+            date=date(2024, 4, 1), quantity=Decimal('100'),
+            franked_amount_per_share=Money(Decimal('0.50'), 'AUD'),
+            unfranked_amount_per_share=Money(0, 'AUD'),
+            corporate_tax_rate_percentage=Decimal(rate),
+        )
+
+    def test_a_rate_of_100_is_refused(self):
+        dividend = self._dividend('100')
+        with self.assertRaisesMessage(ValidationError, 'less than 100'):
+            dividend.full_clean()
+        with self.assertRaisesMessage(ValueError, 'less than 100'):
+            dividend.save()
+
+    def test_a_negative_rate_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'at least 0'):
+            self._dividend('-1').save()
+
+    def test_a_rate_below_100_is_accepted(self):
+        dividend = self._dividend('25')
+        dividend.save()
+        # 50 franked at 25%: 50 x 0.25 / 0.75.
+        self.assertAlmostEqual(dividend.total_franking_credits.amount, Decimal('16.6667'), places=4)
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
 class RepairPortfolioDataTests(TransactionTestCase):
     """Records left wrong by bugs fixed in 0.3.0: the dashboard warns, the command repairs."""
 
@@ -1457,6 +1555,137 @@ class OutOfOrderEntryTests(TransactionTestCase):
             Instrument.objects.get(pk=self.instrument.pk).quantity_held, Decimal('160'))
 
 
+class AdjustmentOutOfOrderTests(TransactionTestCase):
+    """An adjustment is spread over the holding once, so a trade dated before it is refused."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account)
+        Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2022, 7, 1),
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'),
+        )
+
+    def _adjustment(self, year_end=date(2024, 6, 30), amount=200):
+        return CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=year_end,
+            cost_base_increase=Money(amount, 'AUD'),
+        )
+
+    def _buy(self, on):
+        return Buy(
+            account=self.account, instrument=self.instrument, date=on,
+            quantity=Decimal('100'), unit_price=Money(10, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+    def _sell(self, on):
+        return Sell(
+            account=self.account, instrument=self.instrument, date=on,
+            quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy='FIFO')
+
+    def _refused(self, record):
+        with self.assertRaisesMessage(ValidationError, 'cost base adjustment'):
+            record.full_clean()
+        with self.assertRaisesMessage(ValueError, 'cost base adjustment'):
+            record.save()
+
+    def test_a_buy_dated_before_an_applied_adjustments_year_end_is_refused(self):
+        """It would get none of the adjustment, though held in its year."""
+        self._adjustment()
+        self._refused(self._buy(date(2022, 7, 1)))
+        self._refused(self._buy(date(2024, 6, 30)))
+
+    def test_a_buy_is_refused_even_where_the_adjustment_reached_no_parcel(self):
+        self._adjustment(year_end=date(2022, 6, 30))
+        self._refused(self._buy(date(2021, 7, 1)))
+
+    def test_a_buy_after_the_year_end_is_fine(self):
+        self._adjustment()
+        self._buy(date(2024, 7, 1)).save()
+
+    def test_a_sale_dated_before_an_applied_adjustments_year_end_is_refused(self):
+        """The units sold would keep a share weighted as if held all year."""
+        self._adjustment()
+        self._refused(self._sell(date(2024, 6, 29)))
+
+    def test_a_sale_on_the_year_end_is_fine(self):
+        """The last day counts as held either way, so no weight changes."""
+        self._adjustment()
+        self._sell(date(2024, 6, 30)).save()
+        self.assertEqual(
+            Instrument.objects.get(pk=self.instrument.pk).quantity_held, Decimal('50'))
+
+    def test_a_sale_is_fine_where_the_adjustment_reached_no_parcel(self):
+        self._adjustment(year_end=date(2022, 6, 30))
+        self._sell(date(2022, 8, 1)).save()
+
+    def test_a_manual_adjustment_does_not_refuse_trades(self):
+        CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument,
+            financial_year_end_date=date(2024, 6, 30),
+            cost_base_increase=Money(200, 'AUD'), allocation_method='MANUAL',
+        )
+        self._buy(date(2023, 1, 1)).save()
+
+    def test_a_fresh_template_import_is_unaffected(self):
+        """Buys load first, then sales and adjustments in date order."""
+        account = create_account(
+            owner=create_user(username='fresh'), description='Fresh',
+            fy_type=create_fiscal_year_type(description='AU Tax Year fresh'))
+        path = Path(tempfile.mkdtemp()) / 'fresh.xlsx'
+        self.addCleanup(shutil.rmtree, path.parent)
+        trade = {'instrument__name': 'BHP', 'unit_price_currency': 'AUD',
+                 'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}
+        data = {
+            'Market': pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]),
+            'Instrument': pd.DataFrame([
+                {'name': 'BHP', 'currency': 'AUD', 'market__code': 'ASX'}]),
+            'Buy': pd.DataFrame([
+                {**trade, 'legacy_id': 'B1', 'date': date(2022, 7, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('10')},
+                {**trade, 'legacy_id': 'B2', 'date': date(2024, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('11')},
+                {**trade, 'legacy_id': 'B3', 'date': date(2025, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('12')},
+            ]),
+            'Sell': pd.DataFrame([
+                {**trade, 'legacy_id': 'S1', 'date': date(2023, 12, 1), 'strategy': 'FIFO',
+                 'quantity': Decimal('50'), 'unit_price': Decimal('12')},
+                {**trade, 'legacy_id': 'S2', 'date': date(2025, 1, 1), 'strategy': 'FIFO',
+                 'quantity': Decimal('50'), 'unit_price': Decimal('12')},
+            ]),
+            'CostBaseAdjustment': pd.DataFrame([
+                {'legacy_id': 'A1', 'cost_base_increase': Decimal('200'),
+                 'cost_base_increase_currency': 'AUD', 'instrument__name': 'BHP',
+                 'financial_year_end_date': date(2024, 6, 30), 'allocation_method': 'QTY_HELD'},
+            ]),
+        }
+        generator = excelinterface.ExcelGen(title='Fresh')
+        for table_name, frame in data.items():
+            generator.add_table(frame, table_name=table_name)
+        generator.save(path)
+
+        loading.DataLoader(account=account, input_file=path)
+
+        self.assertEqual(Sell.objects.filter(account=account).count(), 2)
+        adjustment = CostBaseAdjustment.objects.get(account=account)
+        allocated = sum(
+            allocation.cost_base_increase.amount
+            for allocation in adjustment.cost_base_adjustment_allocation.filter(is_active=True))
+        self.assertEqual(allocated, Decimal('200'))
+
+    def test_an_adjustment_that_reached_no_parcel_is_reported(self):
+        from share_dinkum_app import data_checks
+
+        self.assertNotIn('empty_adjustments', {f.key for f in data_checks.run(self.account)})
+        self._adjustment(year_end=date(2022, 6, 30))
+
+        finding = {f.key: f for f in data_checks.run(self.account)}['empty_adjustments']
+        self.assertEqual(finding.count, 1)
+        self.assertTrue(finding.affects_gains)
+        self.assertFalse(finding.repairable)
+
+
 class AttachedDocumentTests(TransactionTestCase):
     """A document is deleted only once the change that replaced or removed it commits."""
 
@@ -1715,21 +1944,12 @@ def create_golden_master_portfolio():
     )
 
     # Bought part way through FY2024, and after the split so it is never doubled. This
-    # parcel is what exercises the cost base allocation weighting: allocate_cost_base_
-    # adjustment bounds days held at the sale date but not at the buy date, so this parcel
-    # currently receives a full year's weight despite being held for two months.
+    # parcel exercises the cost base allocation weighting: held 61 days of the year, it
+    # gets that fraction of a full year's weight.
     buy_three = Buy.objects.create(
         account=account, instrument=instrument, date=date(2024, 5, 1),
         quantity=Decimal('200'), unit_price=Money(Decimal('7.00'), 'AUD'),
         total_brokerage=Money(Decimal('9.50'), 'AUD'),
-    )
-
-    # AMIT cost base increase, spread across parcels by quantity x days held.
-    adjustment = CostBaseAdjustment.objects.create(
-        account=account, instrument=instrument,
-        financial_year_end_date=date(2024, 6, 30),
-        cost_base_increase=Money(Decimal('150.00'), 'AUD'),
-        allocation_method='QTY_HELD',
     )
 
     # Partial sell at a gain; bifurcates the first parcel.
@@ -1737,6 +1957,16 @@ def create_golden_master_portfolio():
         account=account, instrument=instrument, date=date(2024, 3, 10),
         quantity=Decimal('1500'), unit_price=Money(Decimal('8.00'), 'AUD'),
         total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
+    )
+
+    # AMIT cost base increase, spread across parcels by quantity x days held. Entered after
+    # the sale before its year end, as an import's timeline does: the other way round is
+    # refused, since the sold units' share would be weighted as if held all year.
+    adjustment = CostBaseAdjustment.objects.create(
+        account=account, instrument=instrument,
+        financial_year_end_date=date(2024, 6, 30),
+        cost_base_increase=Money(Decimal('150.00'), 'AUD'),
+        allocation_method='QTY_HELD',
     )
     # Later sell at a loss, in the next fiscal year, spanning two parcels.
     sell_loss = Sell.objects.create(
@@ -1780,11 +2010,11 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # buy date,        quantity, unit cost base,       total cost base,      sale date
-            (date(2022, 8, 15), '1500', '5.059425533333333333333333333', '7589.1383', date(2024, 3, 10)),
-            (date(2022, 8, 15), '500',  '5.0594256', '2529.7128', date(2024, 11, 5)),
-            (date(2023, 2, 20), '500',  '6.0589506', '3029.4753', date(2024, 11, 5)),
-            (date(2023, 2, 20), '500',  '6.0589504', '3029.4752', None),
-            (date(2024, 5, 1),  '200',  '7.055742',  '1411.1484', None),
+            (date(2022, 8, 15), '1500', '5.050412266666666666666666667', '7575.6184', date(2024, 3, 10)),
+            (date(2022, 8, 15), '500',  '5.0682428', '2534.1214', date(2024, 11, 5)),
+            (date(2023, 2, 20), '500',  '6.067768',  '3033.8840', date(2024, 11, 5)),
+            (date(2023, 2, 20), '500',  '6.0677678', '3033.8839', None),
+            (date(2024, 5, 1),  '200',  '7.0572115', '1411.4423', None),
         ]
         for parcel, (buy_date, qty, unit_cb, total_cb, sale_date) in zip(parcels, expected):
             self.assertEqual(parcel.buy.date, buy_date)
@@ -1798,8 +2028,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
         allocations = [p.total_adjustments.amount for p in self._parcels()]
         self.assertEqual(
             allocations,
-            [Decimal('74.1758'), Decimal('24.7253'),
-             Decimal('24.7253'), Decimal('24.7252'), Decimal('1.6484')],
+            # The units sold on 10 March are weighted by the 254 days they were held.
+            [Decimal('60.6559'), Decimal('29.1339'),
+             Decimal('29.1340'), Decimal('29.1339'), Decimal('1.9423')],
         )
         # The whole adjustment is allocated, exactly: none lost to rounding, none
         # duplicated. The largest parcel absorbs the residual where the weights do not
@@ -1828,9 +2059,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # sell date,       qty,    days, proceeds,   cost base,              gain,                    fiscal year
-            (date(2024, 3, 10), '1500', 573, '11990.50', '7589.1383', '4401.3617',  'FY2023/24'),
-            (date(2024, 11, 5), '500',  813, '1995.25',  '2529.7128', '-534.4628',  'FY2024/25'),
-            (date(2024, 11, 5), '500',  624, '1995.25',  '3029.4753', '-1034.2253', 'FY2024/25'),
+            (date(2024, 3, 10), '1500', 573, '11990.50', '7575.6184', '4414.8816',  'FY2023/24'),
+            (date(2024, 11, 5), '500',  813, '1995.25',  '2534.1214', '-538.8714',  'FY2024/25'),
+            (date(2024, 11, 5), '500',  624, '1995.25',  '3033.8840', '-1038.6340', 'FY2024/25'),
         ]
         for (_, row), (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(df.iterrows(), expected):
             self.assertEqual(row['sell_date'], sell_date)
@@ -1852,8 +2083,8 @@ class CGTGoldenMasterTests(TransactionTestCase):
 
         expected = [
             # buy date,       qty,   unit cost base,        cost base,              market value, unrealised gain
-            (date(2023, 2, 20), '500', '6.0589504', '3029.4752', '2750.00', '-279.4752'),
-            (date(2024, 5, 1),  '200', '7.055742',  '1411.1484', '1100.00', '-311.1484'),
+            (date(2023, 2, 20), '500', '6.0677678', '3033.8839', '2750.00', '-283.8839'),
+            (date(2024, 5, 1),  '200', '7.0572115', '1411.4423', '1100.00', '-311.4423'),
         ]
         for (_, row), (buy_date, qty, unit_cb, cost_base, value, gain) in zip(df.iterrows(), expected):
             self.assertEqual(row['buy_date'], buy_date)
@@ -1863,8 +2094,8 @@ class CGTGoldenMasterTests(TransactionTestCase):
             self.assertEqual(row['current_value'].amount, Decimal(value))
             self.assertEqual(row['unrealised_gain'].amount, Decimal(gain))
 
-        self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.0922520177752239, places=12)
-        self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22049303956975752, places=12)
+        self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.09357111522955773, places=12)
+        self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22065535374701467, places=12)
 
     def test_quantities_reconcile(self):
         """Every unit bought is either held or allocated to a sale."""
@@ -2501,17 +2732,17 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(snapshot.totals['row_count'], 1)
-        self.assertEqual(Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+        self.assertEqual(Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
         later = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2025)
         self.assertEqual(len(later.rows), 2)
-        self.assertEqual(Decimal(later.totals['total_capital_gain']), Decimal('-1568.6881'))
+        self.assertEqual(Decimal(later.totals['total_capital_gain']), Decimal('-1577.5054'))
 
     def test_captured_figures_keep_their_values(self):
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
         row = snapshot.rows[0]
-        self.assertEqual(row['cost_base'].amount, Decimal('7589.1383'))
-        self.assertEqual(row['capital_gain'].amount, Decimal('4401.3617'))
+        self.assertEqual(row['cost_base'].amount, Decimal('7575.6184'))
+        self.assertEqual(row['capital_gain'].amount, Decimal('4414.8816'))
         self.assertEqual(row['proceeds'].amount, Decimal('11990.5000'))
         self.assertEqual(row['sell_date'], date(2024, 3, 10))
         # The fiscal year belongs to the snapshot, so it is not repeated on every row.
@@ -2550,7 +2781,7 @@ class CGTReturnSnapshotTests(TransactionTestCase):
 
         row.refresh_from_db()
         self.assertIsNotNone(row.sell_allocation_id)
-        self.assertEqual(row.capital_gain.amount, Decimal('4401.3617'))
+        self.assertEqual(row.capital_gain.amount, Decimal('4414.8816'))
 
     def test_recapturing_same_day_replaces_rather_than_duplicates(self):
         first = CGTReturnSnapshot.capture(
@@ -2588,10 +2819,10 @@ class CGTReturnSnapshotTests(TransactionTestCase):
             self.assertIn(column, rows.columns)
         self.assertEqual(len(rows), snapshot.captured_rows.count())
         self.assertEqual(
-            Decimal(str(rows.iloc[0]['capital_gain'])), Decimal('4401.3617'))
+            Decimal(str(rows.iloc[0]['capital_gain'])), Decimal('4414.8816'))
 
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
 
 class CGTBasisChangeReportTests(TransactionTestCase):
@@ -2647,8 +2878,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertEqual(set(df['status']), {'CHANGED'})
 
         cost_base_row = df[df['field'] == 'cost_base'].iloc[0]
-        self.assertEqual(cost_base_row['snapshot_value'], Decimal('7589.1383'))
-        self.assertGreater(cost_base_row['current_value'], Decimal('7589.1383'))
+        self.assertEqual(cost_base_row['snapshot_value'], Decimal('7575.6184'))
+        self.assertGreater(cost_base_row['current_value'], Decimal('7575.6184'))
         self.assertGreater(cost_base_row['difference'], Decimal('0'))
 
         # A higher cost base must show as a smaller gain, by the same amount.
@@ -2660,7 +2891,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
 
         Sell.objects.create(
             account=self.account, instrument=self.data['instrument'],
-            date=date(2024, 4, 2), quantity=Decimal('100'),
+            # On the adjustment's year end: an earlier sale would change its weights.
+            date=date(2024, 6, 30), quantity=Decimal('100'),
             unit_price=Money(Decimal('9.00'), 'AUD'),
             total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
         )
@@ -3076,6 +3308,552 @@ class ImportTemplateCommandTests(TestCase):
             for owned in ('id', 'account', 'account_id', 'created_at', 'updated_at', 'current_unit_price'):
                 self.assertNotIn(owned, columns, f'{model.__name__} should not offer {owned}')
             self.assertFalse([column for column in columns if column.startswith('calculated_')])
+
+
+class OptionalTemplateTablesTests(TransactionTestCase):
+    """The optional template tables: marked as optional, and loadable from a filled-in template."""
+
+    OPTIONAL = ('ResidencyPeriod', 'InstrumentValuation', 'CapitalLossCarryForward',
+                'AttributionStatement', 'AttributionComponent')
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.path = Path(self.temp_dir.name) / 'optional.xlsx'
+        self.account = create_account()
+
+    def _template(self, **overrides):
+        """A template with a buy, an adjustment, and one row in each optional table."""
+        data = {
+            'Market': pd.DataFrame([{'code': 'ASX', 'suffix': 'AX'}]),
+            'Instrument': pd.DataFrame([{'name': 'BHP', 'currency': 'AUD', 'market__code': 'ASX'}]),
+            'Buy': pd.DataFrame([{
+                'legacy_id': 'B001', 'instrument__name': 'BHP', 'date': date(2022, 7, 1),
+                'quantity': Decimal('100'), 'unit_price': Decimal('10'), 'unit_price_currency': 'AUD',
+                'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}]),
+            'CostBaseAdjustment': pd.DataFrame([{
+                'legacy_id': 'A001', 'cost_base_increase': Decimal('50'), 'cost_base_increase_currency': 'AUD',
+                'instrument__name': 'BHP', 'financial_year_end_date': date(2024, 6, 30),
+                'allocation_method': 'QTY_HELD'}]),
+            'ResidencyPeriod': pd.DataFrame([{
+                'legacy_id': 'R001', 'status': 'RESIDENT', 'start_date': date(2022, 1, 1)}]),
+            'InstrumentValuation': pd.DataFrame([{
+                'legacy_id': 'V001', 'instrument__name': 'BHP', 'valuation_date': date(2027, 6, 30),
+                'unit_value': Decimal('45'), 'unit_value_currency': 'AUD', 'purpose': 'CUTOVER_2027'}]),
+            'CapitalLossCarryForward': pd.DataFrame([{
+                'legacy_id': 'L001', 'financial_year_end_date': date(2024, 6, 30),
+                'amount': Decimal('1500'), 'amount_currency': 'AUD'}]),
+            'AttributionStatement': pd.DataFrame([{
+                'legacy_id': 'AS001', 'instrument__name': 'BHP',
+                'financial_year_end_date': date(2024, 6, 30), 'lookup_legacy_adjustment': 'A001'}]),
+            'AttributionComponent': pd.DataFrame([{
+                'legacy_id': 'AC001', 'component': 'COSTBASE_INCREASE', 'amount': Decimal('50'),
+                'amount_currency': 'AUD', 'lookup_legacy_statement': 'AS001'}]),
+        }
+        data.update(overrides)
+        generator = excelinterface.ExcelGen(title='Optional tables')
+        for table_name, frame in data.items():
+            generator.add_table(frame, table_name=table_name)
+        generator.save(self.path)
+        return self.path
+
+    def test_the_template_marks_exactly_the_optional_tables(self):
+        call_command('make_import_template', output=str(self.path))
+
+        workbook = openpyxl.load_workbook(self.path)
+        descriptions = {
+            row[1].value: row[2].value for row in workbook['Index'].iter_rows(min_row=2)}
+        tab_colours = {
+            list(sheet.tables)[0]: sheet.sheet_properties.tabColor for sheet in workbook.worksheets
+            if sheet.tables and sheet.title != 'Index'}
+
+        for model in make_import_template.TEMPLATE_MODELS:
+            name = model.__name__
+            optional = name in self.OPTIONAL
+            self.assertEqual(str(descriptions[name]).startswith('Optional:'), optional, name)
+            self.assertEqual(tab_colours[name] is not None, optional, name)
+
+    def test_the_template_offers_the_links_and_hides_the_foreign_keys(self):
+        columns = make_import_template.get_template_columns
+        self.assertIn('lookup_legacy_adjustment', columns(AttributionStatement))
+        self.assertIn('lookup_legacy_statement', columns(AttributionComponent))
+        loss_columns = columns(CapitalLossCarryForward)
+        self.assertIn('financial_year_end_date', loss_columns)
+        self.assertNotIn('fiscal_year__name', loss_columns)
+
+    def test_every_optional_table_loads_and_links_up(self):
+        loading.DataLoader(account=self.account, input_file=self._template())
+
+        residency = ResidencyPeriod.objects.get(account=self.account)
+        self.assertEqual(residency.status, 'RESIDENT')
+
+        valuation = InstrumentValuation.objects.get(account=self.account)
+        self.assertEqual(valuation.source, 'USER')  # blank cell: the default, not a NOT NULL failure
+
+        loss = CapitalLossCarryForward.objects.get(account=self.account)
+        self.assertEqual(loss.fiscal_year.start_year, 2023)  # the year ending 30 June 2024
+        self.assertFalse(loss.is_opening_balance)  # blank cell: the default
+
+        statement = AttributionStatement.objects.get(account=self.account)
+        self.assertEqual(statement.cost_base_adjustment.legacy_id, 'A001')
+        component = AttributionComponent.objects.get(account=self.account)
+        self.assertEqual(component.statement, statement)
+
+    def test_loading_the_same_template_again_adds_nothing(self):
+        loading.DataLoader(account=self.account, input_file=self._template())
+        loading.DataLoader(account=self.account, input_file=self.path)
+
+        for model in (ResidencyPeriod, InstrumentValuation, CapitalLossCarryForward,
+                      AttributionStatement, AttributionComponent):
+            self.assertEqual(model.objects.filter(account=self.account).count(), 1, model.__name__)
+
+    def test_an_empty_optional_table_loads_nothing(self):
+        call_command('make_import_template', output=str(self.path))
+        loading.DataLoader(account=self.account, input_file=self.path)
+
+        for model in (ResidencyPeriod, InstrumentValuation, CapitalLossCarryForward,
+                      AttributionStatement, AttributionComponent):
+            self.assertEqual(model.objects.filter(account=self.account).count(), 0, model.__name__)
+
+    def test_a_statement_naming_an_unknown_adjustment_says_so(self):
+        template = self._template(AttributionStatement=pd.DataFrame([{
+            'legacy_id': 'AS001', 'instrument__name': 'BHP',
+            'financial_year_end_date': date(2024, 6, 30), 'lookup_legacy_adjustment': 'NOPE'}]))
+
+        with self.assertRaisesMessage(ValueError, 'no CostBaseAdjustment with that legacy_id'):
+            loading.DataLoader(account=self.account, input_file=template)
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)  # nothing loaded
+
+    def test_a_loss_with_no_year_says_so(self):
+        template = self._template(CapitalLossCarryForward=pd.DataFrame([{
+            'legacy_id': 'L001', 'amount': Decimal('1500'), 'amount_currency': 'AUD',
+            'financial_year_end_date': None}]))
+
+        with self.assertRaisesMessage(ValueError, 'has no financial_year_end_date'):
+            loading.DataLoader(account=self.account, input_file=template)
+
+    def test_a_fiscal_year_name_is_looked_up_within_the_portfolios_type(self):
+        other = create_fiscal_year_type(description='Another July year')
+        FiscalYear.objects.create(fiscal_year_type=other, start_year=2023)
+        mine, _ = self.account.fiscal_year_type.classify_date(date(2024, 6, 30))
+
+        loader = loading.DataLoader(account=self.account)
+        found = loader.get_related_obj_by_name(
+            related_model=FiscalYear, account=self.account, filters={'name': mine.name})
+
+        self.assertEqual(found, mine)
+
+
+class FakeMarketMixin:
+    """Runs the fake portfolio generator on synthetic market data, so it needs no network."""
+
+    AS_OF = '2026-10-02'
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.folder = Path(self.temp_dir.name)
+
+        days = pd.bdate_range('2016-06-01', self.AS_OF)
+        market = {}
+        for holding in make_fake_data.HOLDINGS.values():
+            frame = pd.DataFrame({
+                'Close': [50 + 0.01 * i for i in range(len(days))],
+                'Dividends': [0.0] * len(days),
+                'Stock Splits': [0.0] * len(days),
+            }, index=days)
+            # A payment on the first trading day of each quarter's first month.
+            for day in days:
+                if day.month in (1, 4, 7, 10) and day.day <= 3 and day.weekday() == 0:
+                    frame.loc[day, 'Dividends'] = 0.5
+            market[holding.ticker] = frame
+        market['AAPL'].loc[pd.Timestamp('2020-08-31'), 'Stock Splits'] = 4.0
+        market['AUDUSD=X'] = pd.DataFrame({'Close': [0.7] * len(days)}, index=days)
+        self.cache = self.folder / 'market.pkl'
+        with open(self.cache, 'wb') as f:
+            pickle.dump(market, f)
+
+    def _run(self, name, **options):
+        output = self.folder / name
+        call_command('make_import_template', output=str(output))
+        options.setdefault('force', True)
+        call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache), **options)
+        return output, excelinterface.get_all_tables_in_excel(output)
+
+
+class MakeFakeDataCommandTests(FakeMarketMixin, TestCase):
+    """The fake portfolio generator, run on synthetic market data so it needs no network."""
+
+    def test_it_will_not_overwrite_without_force(self):
+        output = self.folder / 'template.xlsx'
+        call_command('make_import_template', output=str(output))
+
+        with self.assertRaisesMessage(CommandError, '--force'):
+            call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache))
+
+    def test_it_needs_a_file_to_fill_in(self):
+        with self.assertRaisesMessage(CommandError, 'does not exist'):
+            call_command('make_fake_data', output=str(self.folder / 'missing.xlsx'), force=True)
+
+    def test_every_populated_table_is_marked_as_fake_on_its_first_row(self):
+        _, tables = self._run('fake.xlsx')
+
+        for name in ('Buy', 'Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment', 'Dividend',
+                     'Distribution', 'ResidencyPeriod', 'AttributionStatement', 'AttributionComponent'):
+            self.assertTrue(len(tables[name]) > 0, name)
+            self.assertIn(make_fake_data.FAKE_NOTE, tables[name].iloc[0]['notes'], name)
+
+    def test_the_optional_tables_the_portfolio_does_not_use_stay_empty(self):
+        _, tables = self._run('fake.xlsx')
+
+        for name in ('InstrumentValuation', 'CapitalLossCarryForward'):
+            self.assertEqual(len(tables[name]), 0, name)
+
+    def test_each_etf_statement_holds_together_with_its_adjustment(self):
+        _, tables = self._run('fake.xlsx')
+        statements, components = tables['AttributionStatement'], tables['AttributionComponent']
+        adjustments = tables['CostBaseAdjustment'].set_index('legacy_id')['cost_base_increase']
+
+        self.assertEqual(set(statements['instrument__name']), set(make_fake_data.ETFS))
+        self.assertEqual(set(tables['CostBaseAdjustment']['instrument__name']), set(make_fake_data.ETFS))
+        for _, statement in statements.iterrows():
+            lines = components[components['lookup_legacy_statement'] == statement['legacy_id']]
+            amount = lines.set_index('component')['amount'].to_dict()
+            discounted = amount.get('DISCOUNTED_TAP', 0) + amount.get('DISCOUNTED_NTAP', 0)
+            self.assertAlmostEqual(amount['TOTAL_CY_CG'], 2 * discounted + amount.get('OTHER_NTAP', 0), delta=0.015)
+            net = amount.get('COSTBASE_INCREASE', 0) - amount.get('COSTBASE_DECREASE', 0)
+            if not pd.isna(statement['lookup_legacy_adjustment']):
+                self.assertAlmostEqual(adjustments[statement['lookup_legacy_adjustment']], net, delta=0.005)
+        # VAS is sold out in August 2019, so its last statement has no adjustment to link to.
+        self.assertTrue(statements['lookup_legacy_adjustment'].isna().any())
+
+    def test_the_same_seed_gives_the_same_file_and_another_seed_a_different_one(self):
+        _, first = self._run('one.xlsx', seed=7)
+        _, again = self._run('two.xlsx', seed=7)
+        _, other = self._run('three.xlsx', seed=8)
+
+        pd.testing.assert_frame_equal(first['Buy'], again['Buy'])
+        self.assertFalse(first['Buy'].equals(other['Buy']))
+
+    def test_the_portfolio_holds_what_it_should(self):
+        _, tables = self._run('fake.xlsx')
+        buys, sells = tables['Buy'], tables['Sell']
+
+        self.assertTrue({'VGS', 'A200', 'MSFT', 'AMZN', 'AAPL', 'CBA', 'BHP'} <= set(buys['instrument__name']))
+        # Fully sold: every unit bought was sold, and nothing is bought afterwards.
+        for name in make_fake_data.FULLY_SOLD:
+            bought = buys[buys['instrument__name'] == name]
+            sold = sells[sells['instrument__name'] == name]
+            self.assertEqual(bought['quantity'].sum(), sold['quantity'].sum(), name)
+            self.assertLess(bought['date'].max(), sold['date'].max(), name)
+        # The USD satellites are priced in USD.
+        self.assertEqual(set(buys[buys['instrument__name'].isin(make_fake_data.SATELLITES)]['unit_price_currency']),
+                         {'USD'})
+        # The split comes from the market data.
+        self.assertEqual(list(tables['ShareSplit']['instrument__name']), ['AAPL'])
+
+    def test_a_manual_sale_has_allocations_that_add_up(self):
+        _, tables = self._run('fake.xlsx')
+        sells, allocations = tables['Sell'], tables['SellAllocation']
+
+        manual = sells[sells['strategy'] == 'MANUAL']
+        self.assertTrue(len(manual) > 0)
+        for _, sale in manual.iterrows():
+            taken = allocations[allocations['lookup_legacy_sell'] == sale['legacy_id']]['quantity'].sum()
+            self.assertEqual(taken, sale['quantity'], sale['legacy_id'])
+        self.assertIn('SellAllocation', str(manual.iloc[0]['notes']))
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
+    """The fake portfolio loads, and the app's checks on what it loaded pass."""
+
+    def test_it_loads_and_every_statement_agrees(self, mock_get_rate):
+        output, tables = self._run('fake.xlsx')
+        account = create_account()
+        account.taxpayer_type = 'INDIVIDUAL'
+        account.save()
+
+        loading.DataLoader(account=account, input_file=output)
+
+        # Every year's income report is final: each ETF year has its statement.
+        summary = income.build(account)
+        for year in summary.years():
+            self.assertFalse(summary.is_draft(year), summary.year_warnings(year))
+        self.assertTrue(any(summary.figures(year)['13Q'] > 0 for year in summary.years()))
+
+        statements = AttributionStatement.objects.filter(account=account)
+        self.assertEqual(statements.count(), len(tables['AttributionStatement']))
+        for statement in statements:
+            self.assertTrue(statement.reconciles, statement)
+            if statement.cost_base_adjustment is not None:
+                self.assertTrue(statement.cost_base_agrees, statement)
+        self.assertEqual(
+            set(CostBaseAdjustment.objects.filter(account=account).values_list('instrument__name', flat=True)),
+            set(make_fake_data.ETFS))
+        self.assertEqual(Sell.objects.filter(account=account).count(), len(tables['Sell']))
+
+
+class NormaliseCellsTests(TestCase):
+
+    def test_a_blank_cell_stays_none(self):
+        """pandas' apply turns a None result back into NaN, which is truthy, so a blank lookup
+        was looked up as "nan"."""
+        df = pd.DataFrame({'legacy_id': ['AS1', 'AS2'], 'lookup_legacy_adjustment': ['A1', None],
+                           'financial_year_end_date': [date(2024, 6, 30), None]}, dtype=object)
+
+        df = loading.normalise_cells(df, AttributionStatement)
+
+        self.assertEqual(df['lookup_legacy_adjustment'].tolist(), ['A1', None])
+        self.assertIsNone(df.at[1, 'financial_year_end_date'])
+
+
+class ColumnHelpTests(TransactionTestCase):
+    """Every column says what it is, on the model and as a note on its Excel header."""
+
+    # Fields the app does not declare: the currency beside each money amount is built by django-money,
+    # and the user model's own fields come from Django. column_help describes them instead.
+    NOT_DECLARED_HERE = ('password', 'last_login', 'first_name', 'last_name', 'email', 'date_joined')
+
+    def _models(self):
+        return apps.get_app_config('share_dinkum_app').get_models()
+
+    def _declared_fields(self):
+        from djmoney.models.fields import CurrencyField
+        for model in self._models():
+            for field in model._meta.fields:
+                if isinstance(field, CurrencyField) and field.name != 'currency' and getattr(field, 'price_field', None):
+                    continue
+                if model is AppUser and field.name in self.NOT_DECLARED_HERE:
+                    continue
+                yield model, field
+
+    def test_every_field_has_help_text(self):
+        missing = sorted(f'{model.__name__}.{field.name}' for model, field in self._declared_fields()
+                         if not field.help_text)
+        self.assertEqual(missing, [], 'These fields need a help_text, which becomes the note on their Excel header.')
+
+    def test_every_field_can_be_described(self):
+        missing = sorted(f'{model.__name__}.{field.name}' for model in self._models() for field in model._meta.fields
+                         if column_help.field_help(field) is None)
+        self.assertEqual(missing, [])
+
+    def test_every_template_header_has_a_note(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'blank.xlsx'
+            call_command('make_import_template', output=str(path))
+            workbook = openpyxl.load_workbook(path)
+
+        for sheet in workbook.worksheets:
+            for cell in sheet[1]:
+                if cell.value:
+                    self.assertIsNotNone(cell.comment, f'{sheet.title}.{cell.value} has no note')
+
+    def test_a_template_note_says_what_is_required_and_what_a_blank_means(self):
+        text = column_help.describe_columns(Sell, ['strategy', 'instrument__name', 'unit_price_currency'], template=True)
+
+        self.assertIn('One of: FIFO', text['strategy'])
+        self.assertIn('Blank = MIN_CGT', text['strategy'])
+        self.assertIn('Required.', text['instrument__name'])
+        self.assertIn("Blank = the instrument's currency", text['unit_price_currency'])
+
+    def test_the_extra_template_columns_are_described(self):
+        for model in make_import_template.TEMPLATE_MODELS:
+            columns = make_import_template.get_template_columns(model)
+            described = column_help.describe_columns(model, columns, template=True)
+            self.assertEqual(sorted(set(columns) - set(described)), [], model.__name__)
+
+    def test_a_column_nothing_is_known_about_is_left_out(self):
+        self.assertEqual(column_help.describe_columns(Sell, ['no_such_column']), {})
+
+    def test_an_export_puts_a_note_on_every_header(self):
+        data = create_golden_master_portfolio()
+        export = DataExport.objects.create(account=data['account'])
+        export.refresh_from_db()
+        workbook = openpyxl.load_workbook(export.file.path)
+
+        model_names = {model.__name__ for model in self._models()}
+        checked = 0
+        for sheet in workbook.worksheets:
+            tables = list(sheet.tables)
+            if not tables or tables[0] not in model_names:
+                continue
+            for cell in sheet[1]:
+                if cell.value:
+                    checked += 1
+                    self.assertIsNotNone(cell.comment, f'{tables[0]}.{cell.value} has no note')
+        self.assertGreater(checked, 100)
+
+    def test_add_table_attaches_the_description_to_its_header(self):
+        generator = excelinterface.ExcelGen(title='Notes')
+        generator.add_table(
+            pd.DataFrame([{'a': 1, 'b': 2}]), table_name='Demo',
+            column_descriptions={'a': 'The first column.'})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'notes.xlsx'
+            generator.save(path)
+            sheet = openpyxl.load_workbook(path)['01']
+
+        self.assertEqual(sheet['A1'].comment.text, 'The first column.')
+        self.assertIsNone(sheet['B1'].comment)
+
+
+class ExcelReaderTests(TestCase):
+    """What the reader makes of a hand-edited sheet."""
+
+    def _read(self, rows, headers=('name', 'market__code'), table='Instrument', ref=None):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(list(headers))
+        for row in rows:
+            sheet.append(row)
+        from openpyxl.worksheet.table import Table
+        sheet.add_table(Table(displayName=table, ref=ref or f'A1:{chr(64 + len(headers))}{len(rows) + 1}'))
+        stream = io.BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+        return excelinterface.get_all_tables_in_excel(stream)
+
+    def test_surrounding_spaces_are_stripped(self):
+        frame = self._read([[' BHP ', 'ASX '], ['VGS', 'ASX']])['Instrument']
+
+        self.assertEqual(list(frame['name']), ['BHP', 'VGS'])
+        self.assertEqual(list(frame['market__code']), ['ASX', 'ASX'])
+
+    def test_a_cell_of_only_spaces_is_blank(self):
+        frame = self._read([['BHP', '   '], ['VGS', 'ASX']])['Instrument']
+
+        self.assertIsNone(frame['market__code'].iloc[0])
+
+    def test_a_name_column_is_read_as_text_even_when_excel_made_it_a_number(self):
+        frame = self._read([[4013, 'HKEX'], [700.0, 'HKEX'], ['BHP', 'ASX']])['Instrument']
+
+        self.assertEqual(list(frame['name']), ['4013', '700', 'BHP'])
+
+    def test_other_columns_keep_their_numbers(self):
+        frame = self._read([['BHP', 12.5]], headers=('name', 'unit_price'), table='Buy')['Buy']
+
+        self.assertEqual(frame['unit_price'].iloc[0], 12.5)
+
+    def test_a_table_claiming_an_enormous_range_is_refused(self):
+        with self.assertRaisesMessage(ValueError, 'limit'):
+            self._read([['BHP', 'ASX']], ref='A1:B1048576')
+
+class DropdownTests(TestCase):
+    """Choice columns get a dropdown, backed by a list on the value assistance sheet."""
+
+    def _validations(self, workbook):
+        """Each sheet's list validations as {column letter: [allowed values]}."""
+        assistance = workbook[excelinterface.VALUE_ASSISTANCE_SHEET]
+        found = {}
+        for sheet in workbook.worksheets:
+            for validation in sheet.data_validations.dataValidation:
+                range_ref = validation.formula1.split('!')[1].replace('$', '')
+                values = [cell.value for row in assistance[range_ref] for cell in row]
+                for cell_range in validation.sqref.ranges:
+                    found[(sheet.title, cell_range.coord)] = values
+        return found
+
+    def _template(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'blank.xlsx'
+            call_command('make_import_template', output=str(path))
+            return openpyxl.load_workbook(path), excelinterface.get_all_tables_in_excel(path)
+
+    def test_add_table_validates_a_column_against_its_list(self):
+        generator = excelinterface.ExcelGen(title='Dropdowns')
+        generator.add_table(pd.DataFrame([{'colour': 'red', 'size': 1}]), table_name='Demo',
+                            dropdowns={'colour': ['red', 'green', 'blue']})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'dropdowns.xlsx'
+            generator.save(path)
+            workbook = openpyxl.load_workbook(path)
+
+        found = self._validations(workbook)
+
+        # Rows 2 to the one row of data plus the spare rows beneath it.
+        self.assertEqual(found, {('01', f'A2:A{1 + 1 + excelinterface.DROPDOWN_SPARE_ROWS}'): ['red', 'green', 'blue']})
+
+    def test_a_list_shared_by_name_is_written_once(self):
+        generator = excelinterface.ExcelGen(title='Shared')
+        for table in ('One', 'Two'):
+            generator.add_table(pd.DataFrame([{'c': 'AUD'}]), table_name=table,
+                                dropdowns={'c': ('currency', ['AUD', 'USD'])})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'shared.xlsx'
+            generator.save(path)
+            workbook = openpyxl.load_workbook(path)
+
+        self.assertEqual(workbook[excelinterface.VALUE_ASSISTANCE_SHEET].max_column, 1)
+        self.assertEqual(len(self._validations(workbook)), 2)
+
+    def test_a_dropdown_for_a_missing_column_is_skipped(self):
+        generator = excelinterface.ExcelGen(title='Missing')
+        generator.add_table(pd.DataFrame([{'a': 1}]), table_name='Demo', dropdowns={'nope': ['x']})
+
+        with tempfile.TemporaryDirectory() as folder:
+            generator.save(Path(folder) / 'missing.xlsx')  # no error
+
+    def test_every_choice_column_in_the_template_has_a_dropdown(self):
+        workbook, _ = self._template()
+        validated = {(sheet, coord[0]) for sheet, coord in self._validations(workbook)}
+        titles = {list(sheet.tables)[0]: sheet.title for sheet in workbook.worksheets if sheet.tables}
+
+        for model in make_import_template.TEMPLATE_MODELS:
+            columns = make_import_template.get_template_columns(model)
+            for column in make_import_template.get_dropdowns(model, columns):
+                letter = openpyxl.utils.get_column_letter(columns.index(column) + 1)
+                self.assertIn((titles[model.__name__], letter), validated, f'{model.__name__}.{column}')
+
+    def test_the_lists_hold_the_keys_the_loader_accepts(self):
+        workbook, _ = self._template()
+        lists = {name: [cell.value for cell in column[1:] if cell.value]
+                 for name, column in ((column[0].value, column) for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns)}
+
+        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+        self.assertEqual(lists['Dividend.dividend_type'], ['LOCAL', 'FOREIGN'])
+        self.assertEqual(lists['ResidencyPeriod.status'], ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
+        self.assertIn('AUD', lists['currency'])
+        self.assertIn('USD', lists['currency'])
+
+    def test_a_yes_no_column_offers_excel_booleans(self):
+        """The text "TRUE" would not load, so the list holds real booleans. Blank is allowed by the
+        validation itself, not by a blank entry in the list."""
+        workbook, _ = self._template()
+        lists = {column[0].value: [cell.value for cell in column[1:] if cell.value is not None]
+                 for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns}
+
+        self.assertEqual(lists['yes/no'], [True, False])
+        for model, column in ((ResidencyPeriod, 'i1_election_made'), (Market, 'is_exchange_listed')):
+            columns = make_import_template.get_template_columns(model)
+            self.assertEqual(make_import_template.get_dropdowns(model, columns)[column], ('yes/no', [True, False]))
+
+    def test_a_yes_no_pick_loads_as_a_boolean(self):
+        account = create_account()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'residency.xlsx'
+            make_import_template.build_template(path, {'ResidencyPeriod': pd.DataFrame([
+                {'legacy_id': 'R1', 'status': 'RESIDENT', 'start_date': date(2016, 1, 1),
+                 'end_date': date(2021, 6, 30), 'i1_election_made': None},
+                {'legacy_id': 'R2', 'status': 'FOREIGN', 'start_date': date(2021, 7, 1),
+                 'i1_election_made': True},
+            ])})
+            loading.DataLoader(account=account, input_file=path)
+
+        stored = dict(ResidencyPeriod.objects.filter(account=account).values_list('legacy_id', 'i1_election_made'))
+        self.assertEqual(stored, {'R1': None, 'R2': True})
+
+    def test_a_lookup_column_gets_no_dropdown(self):
+        """An instrument loaded in an earlier file is a legitimate answer, so lookups stay free text."""
+        columns = make_import_template.get_template_columns(Buy)
+
+        self.assertNotIn('instrument__name', make_import_template.get_dropdowns(Buy, columns))
+
+    def test_the_reader_does_not_take_the_value_sheet_for_a_table(self):
+        _, tables = self._template()
+
+        self.assertNotIn(excelinterface.VALUE_ASSISTANCE_SHEET, tables)
+        self.assertIn('Buy', tables)
 
 
 # --- Phase 4: residency, apportionment and the foreign resident disregard ---
@@ -3610,6 +4388,41 @@ class AttributionDisregardTests(TransactionTestCase):
              ('discount', cgt.tap.NTAP, Decimal('1800.00'), True),
              ('other', cgt.tap.NTAP, Decimal('50.00'), True)])
 
+    def _withheld(self, residency_status='FOREIGN', flagged=True):
+        self._component('DISCOUNTED_TAP', '843.27')
+        self._component('DISCOUNTED_NTAP', '10.00')
+        declare(self.account, residency_status, date(2010, 1, 1))
+        self.statement.gain_subject_to_mit_withholding = flagged
+        self.statement.save()
+        return {e.tap_status: e for e in cgt.attribution_events(self.account)}
+
+    def test_mit_withholding_defaults_to_off(self):
+        self.assertFalse(self.statement.gain_subject_to_mit_withholding)
+
+    def test_a_flagged_tap_gain_is_disregarded_for_a_foreign_resident(self):
+        events = self._withheld()
+        tap = events[cgt.tap.TAP]
+        self.assertTrue(tap.is_disregarded)
+        self.assertIn('s840-815', tap.disregard_reason)
+        # Still reported at its grossed-up amount, so it can be explained.
+        self.assertEqual(tap.capital_gain.amount, Decimal('1686.54'))
+
+    def test_an_unflagged_tap_gain_stays_assessable(self):
+        self.assertFalse(self._withheld(flagged=False)[cgt.tap.TAP].is_disregarded)
+
+    def test_the_flag_does_nothing_for_a_resident(self):
+        """MIT withholding is on foreign residents, so a resident still reports the gain."""
+        self.assertFalse(self._withheld('RESIDENT')[cgt.tap.TAP].is_disregarded)
+
+    def test_the_flag_does_nothing_without_declared_residency(self):
+        self._component('DISCOUNTED_TAP', '843.27')
+        self.statement.gain_subject_to_mit_withholding = True
+        self.statement.save()
+        self.assertFalse(cgt.attribution_events(self.account)[0].is_disregarded)
+
+    def test_the_flag_does_not_change_the_non_tap_part(self):
+        self.assertIn('s855-40(2)', self._withheld()[cgt.tap.NTAP].disregard_reason)
+
 
 class TaxSettingsBannerTests(TransactionTestCase):
     """The dashboard's tax settings warning."""
@@ -3779,11 +4592,13 @@ class IndexationEligibilityTests(TransactionTestCase):
         self.assertEqual(event.method, cgt.events.METHOD_DISCOUNT)
 
 
-def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix=''):
+def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix='',
+                             adjustments=()):
     """A parcel bought well before the cutover and sold well after it.
 
     Cost base 10,019.95, cutover value 15,000, net proceeds 19,990.05. `suffix` allows a
-    second, independent portfolio in the same test.
+    second, independent portfolio in the same test. `adjustments` are
+    `(financial_year_end_date, amount)` pairs, entered before the sale.
     """
     account = create_account(
         owner=create_user(username=f'cutover{suffix}'),
@@ -3803,6 +4618,11 @@ def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', su
         unit_value=Money(Decimal(unit_value), 'AUD'),
         purpose='CUTOVER_2027', source='USER',
     )
+    for year_end, amount in adjustments:
+        CostBaseAdjustment.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=year_end,
+            cost_base_increase=Money(Decimal(amount), 'AUD'),
+        )
     sell = Sell.objects.create(
         account=account, instrument=instrument, date=sell_date,
         quantity=Decimal('1000'), unit_price=Money(Decimal('20.00'), 'AUD'),
@@ -3921,6 +4741,89 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(events[0].capital_gain, Money(Decimal('9970.10'), 'AUD'))
 
 
+class CutoverAdjustmentSliceTests(TransactionTestCase):
+    """Adjustments for years after the cutover belong to the post-cutover slice."""
+
+    def _events(self, year_end, amount):
+        data = create_cutover_portfolio(adjustments=[(year_end, amount)])
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+        return cgt.disposal_events(data['account'])
+
+    def test_a_later_increase_moves_to_the_post_cutover_slice(self):
+        deferred, post = self._events(date(2028, 6, 30), '1000')
+
+        # The deferred slice is as if there were no adjustment.
+        self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
+        self.assertEqual(deferred.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
+        # 15,000 lifted by 10% inflation from July 2027, plus 1,000 lifted from the quarter
+        # holding 30 June 2028 (110.0 / 107.5 = 1.023).
+        self.assertEqual(post.buy_consideration, Money(Decimal('15000.00'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('1000.00'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('17523.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('2467.050'), 'AUD'))
+        # The factor reported is the market value's.
+        self.assertEqual(post.indexation_factor, Decimal('1.100'))
+
+    def test_a_later_decrease_moves_to_the_post_cutover_slice(self):
+        """A decrease, common for property trusts, raises the undiscounted gain."""
+        deferred, post = self._events(date(2028, 6, 30), '-500')
+
+        self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('-500.00'), 'AUD'))
+        # s114-15(3): the decrease takes off only the indexation from its own quarter.
+        # 16,500 less 500 x 1.023.
+        self.assertEqual(post.cost_base, Money(Decimal('15988.500'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('4001.550'), 'AUD'))
+
+    def test_without_indexing_increases_an_increase_is_at_face_value(self):
+        """Interpretation 2: s114-15(2) does not reach a total cost base increase."""
+        with patch.object(constants, 'CGT_INDEX_COST_BASE_INCREASES', False):
+            _deferred, post = self._events(date(2028, 6, 30), '1000')
+
+        self.assertEqual(post.cost_base, Money(Decimal('17500.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('2490.050'), 'AUD'))
+
+    def test_without_indexing_increases_a_decrease_is_still_indexed(self):
+        """s114-15(3) expressly covers a reduction of the total cost base."""
+        with patch.object(constants, 'CGT_INDEX_COST_BASE_INCREASES', False):
+            _deferred, post = self._events(date(2028, 6, 30), '-500')
+
+        self.assertEqual(post.cost_base, Money(Decimal('15988.500'), 'AUD'))
+
+    def test_an_adjustment_for_the_year_of_the_sale_is_made_at_the_sale(self):
+        """s104-107B(4)(b): sold before the year ends, so the adjustment is not indexed."""
+        data = create_cutover_portfolio()
+        CostBaseAdjustment.objects.create(
+            account=data['account'], instrument=data['instrument'],
+            financial_year_end_date=date(2029, 6, 30),
+            cost_base_increase=Money(Decimal('1000'), 'AUD'),
+        )
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        _deferred, post = cgt.disposal_events(data['account'])
+
+        # 16,500 plus the parcel's share of the adjustment at a factor of 1.000.
+        adjustment = post.cost_base_adjustments.amount
+        self.assertGreater(adjustment, Decimal('0'))
+        self.assertEqual(
+            post.cost_base, Money(Decimal('16500.000') + adjustment, 'AUD'))
+
+    def test_an_adjustment_for_the_year_ending_at_the_cutover_stays_deferred(self):
+        """s104-107B applies it at the end of that year, the day of the deemed sale."""
+        deferred, post = self._events(date(2027, 6, 30), '1000')
+
+        self.assertEqual(deferred.cost_base_adjustments, Money(Decimal('1000.00'), 'AUD'))
+        self.assertEqual(deferred.cost_base, Money(Decimal('11019.95'), 'AUD'))
+        self.assertEqual(deferred.capital_gain, Money(Decimal('3980.05'), 'AUD'))
+        self.assertEqual(post.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('16500.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('3490.050'), 'AUD'))
+
+
 class ReturnedExpatIndexationTests(TransactionTestCase):
     """A returned expatriate gets no deemed sale and no discount, only indexation from 2027.
 
@@ -3954,6 +4857,21 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
         self.assertEqual(event.cost_base, Money(Decimal('11021.945'), 'AUD'))
         self.assertEqual(event.discount_percentage, Decimal('0'))
         self.assertEqual(event.method, cgt.events.METHOD_OTHER)
+
+    def test_each_adjustment_is_indexed_from_its_own_quarter(self):
+        """One before the cutover is indexed from July 2027, one after from its year end."""
+        data = create_cutover_portfolio(suffix='adj', adjustments=[
+            (date(2026, 6, 30), '200'), (date(2028, 6, 30), '-500')])
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1), date(2014, 12, 31))
+        declare(data['account'], 'FOREIGN', date(2015, 1, 1), date(2020, 12, 31))
+        declare(data['account'], 'RESIDENT', date(2021, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        event = cgt.disposal_events(data['account'])[0]
+
+        self.assertEqual(event.indexation_factor, Decimal('1.100'))
+        # (10,019.95 + 200) x 1.100 - 500 x 1.023.
+        self.assertEqual(event.cost_base, Money(Decimal('10730.445'), 'AUD'))
 
     def test_the_report_explains_it_rather_than_leaving_it_to_be_discovered(self):
         event = cgt.disposal_events(self.account)[0]
@@ -4111,22 +5029,22 @@ class CapitalGainScheduleTests(TransactionTestCase):
         """Losses net against gains across the year, not per disposal."""
         schedule = cgt.build_schedule(self.account, 'FY2024/25')
         self.assertEqual(schedule.gross_gains.amount, Decimal('0'))
-        self.assertEqual(schedule.gross_losses.amount, Decimal('1568.6881'))
+        self.assertEqual(schedule.gross_losses.amount, Decimal('1577.5054'))
         self.assertEqual(schedule.net_capital_gain.amount, Decimal('0'))
         # Nothing to absorb them, so the whole amount is carried forward.
-        self.assertEqual(schedule.losses_carried_forward.amount, Decimal('1568.6881'))
+        self.assertEqual(schedule.losses_carried_forward.amount, Decimal('1577.5054'))
 
     def test_the_discount_is_applied_after_losses_not_before(self):
         """Prior-year losses are applied before the discount."""
         schedule = cgt.build_schedule(
             self.account, 'FY2023/24', prior_year_losses=Money(Decimal('1000'), 'AUD'))
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1700.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1707.44080'))
 
     def test_a_year_with_a_gain_and_no_losses_is_simply_discounted(self):
         schedule = cgt.build_schedule(self.account, 'FY2023/24')
-        self.assertEqual(schedule.gross_gains.amount, Decimal('4401.3617'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.gross_gains.amount, Decimal('4414.8816'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_prior_year_losses_come_from_the_carry_forward_model(self):
         fiscal_year = FiscalYear.objects.first()
@@ -4363,10 +5281,10 @@ class CGTReportTests(TransactionTestCase):
         summary = CGTScheduleReport(
             account=self.account, fiscal_year='FY2023/24').summary()
         self.assertEqual(
-            summary['total_current_year_capital_gains'].amount, Decimal('4401.3617'))
-        self.assertEqual(summary['net_capital_gain'].amount, Decimal('2200.68085'))
+            summary['total_current_year_capital_gains'].amount, Decimal('4414.8816'))
+        self.assertEqual(summary['net_capital_gain'].amount, Decimal('2207.44080'))
         self.assertEqual(
-            summary['minimum_tax_capital_gain_base'].amount, Decimal('2200.68085'))
+            summary['minimum_tax_capital_gain_base'].amount, Decimal('2207.44080'))
 
 
 class LoadCPICommandTests(TestCase):
@@ -4580,6 +5498,35 @@ class ExportRoundTripTests(TransactionTestCase):
             self.assertEqual(
                 apps.get_model('share_dinkum_app', name).objects.count(), count,
                 f'{name} did not come back with the same number of rows')
+
+    def test_the_optional_tables_restore_with_their_links(self):
+        """Losses, valuations and attribution statements come back, still linked, from an export."""
+        data = create_golden_master_portfolio()
+        account, instrument = data['account'], data['instrument']
+        year, _ = account.fiscal_year_type.classify_date(date(2024, 6, 30))
+        CapitalLossCarryForward.objects.create(
+            account=account, fiscal_year=year, amount=Money(Decimal('1500'), 'AUD'), is_opening_balance=True)
+        InstrumentValuation.objects.create(
+            account=account, instrument=instrument, valuation_date=date(2027, 6, 30),
+            unit_value=Money(Decimal('45'), 'AUD'))
+        statement = AttributionStatement.objects.create(
+            account=account, instrument=instrument, financial_year_end_date=date(2024, 6, 30),
+            cost_base_adjustment=data['adjustment'])
+        AttributionComponent.objects.create(
+            account=account, statement=statement, component='COSTBASE_INCREASE',
+            amount=Money(Decimal('50'), 'AUD'))
+        path = self._detached_export(account)
+
+        self._wipe()
+        loading.DataLoader(input_file=path)
+
+        loss = CapitalLossCarryForward.objects.get()
+        self.assertEqual(loss.fiscal_year.start_year, 2023)
+        self.assertTrue(loss.is_opening_balance)
+        self.assertEqual(InstrumentValuation.objects.get().unit_value, Money(Decimal('45'), 'AUD'))
+        restored = AttributionStatement.objects.get()
+        self.assertEqual(restored.cost_base_adjustment_id, data['adjustment'].id)
+        self.assertEqual(AttributionComponent.objects.get().statement, restored)
 
     def test_restoring_does_not_derive_what_the_file_already_holds(self):
         """A restore keeps the file's parcels and does not derive a second set by signal."""
@@ -4987,7 +5934,7 @@ class CaptureCGTSnapshotCommandTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.objects.get(account=self.account)
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
     def test_it_records_which_basis_produced_the_figures(self):
         """A snapshot records the residency basis of its figures."""
@@ -5062,7 +6009,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.objects.get(fiscal_year__name='FY2023/24')
         self.assertEqual(len(snapshot.rows), 1)
         self.assertEqual(
-            Decimal(snapshot.totals['total_capital_gain']), Decimal('4401.3617'))
+            Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
     def test_nothing_is_marked_as_lodged(self):
         """Snapshots from the button are not marked lodged."""
@@ -5167,7 +6114,7 @@ class SnapshotColumnPrecisionTests(TransactionTestCase):
         snapshot = CGTReturnSnapshot.capture(
             account=self.account, fiscal_year=self.fiscal_year)
         total = snapshot.totals['total_capital_gain']
-        self.assertEqual(Decimal(total), Decimal('-1568.6881'))
+        self.assertEqual(Decimal(total), Decimal('-1577.5054'))
         self.assertGreaterEqual(Decimal(total).as_tuple().exponent, -4)
 
 
@@ -5779,6 +6726,24 @@ class PostCutoverWarningTests(TransactionTestCase):
         self.assertNotIn('projections rather than settled amounts', joined)
 
 
+class ScheduleFiscalYearScopeTests(TransactionTestCase):
+    """The schedule looks a year up by name within the account's own fiscal year type."""
+
+    def test_another_types_year_of_the_same_name_is_not_matched(self):
+        from share_dinkum_app.cgt.schedule import _fiscal_year
+
+        # Created first, so a lookup by name alone would find it. It ends 30 September 2024.
+        other_type = create_fiscal_year_type(description='October Year', start_month=10)
+        FiscalYear.objects.create(fiscal_year_type=other_type, start_year=2023)
+        account = create_account()
+        FiscalYear.objects.create(fiscal_year_type=account.fiscal_year_type, start_year=2023)
+
+        year = _fiscal_year(account, 'FY2023/24')
+
+        self.assertEqual(year.fiscal_year_type, account.fiscal_year_type)
+        self.assertEqual(year.end_date, date(2024, 6, 30))
+
+
 class YearInProgressIsADraftTests(TransactionTestCase):
     """A fiscal year that has not ended is a draft."""
 
@@ -5821,7 +6786,7 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         current = self._year_covering(date.today())
         with patch('share_dinkum_app.cgt.schedule.date') as fake:
             fake.today.return_value = current.end_date
-            self.assertEqual(_year_still_running(current.name), current.end_date)
+            self.assertEqual(_year_still_running(self.account, current.name), current.end_date)
 
     def test_the_day_after_a_year_ends_it_is_closed(self):
         from share_dinkum_app.cgt.schedule import _year_still_running
@@ -5829,13 +6794,13 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         current = self._year_covering(date.today())
         with patch('share_dinkum_app.cgt.schedule.date') as fake:
             fake.today.return_value = current.end_date + timedelta(days=1)
-            self.assertIsNone(_year_still_running(current.name))
+            self.assertIsNone(_year_still_running(self.account, current.name))
 
     def test_the_all_years_view_says_nothing_about_time(self):
         """The all-years view gets no year-in-progress warning."""
         from share_dinkum_app.cgt.schedule import _year_still_running
 
-        self.assertIsNone(_year_still_running(None))
+        self.assertIsNone(_year_still_running(self.account, None))
 
 
 class FullBackupTests(TransactionTestCase):
@@ -5953,6 +6918,30 @@ class FullBackupButtonTests(TransactionTestCase):
         self.assertEqual(len(written), 1, 'one timestamped backup directory')
         self.assertTrue(written[0].is_dir())
 
+    def test_the_backup_holds_a_readable_export_and_leaves_no_record(self):
+        """Each backup carries an Excel export, written to the folder and not as a DataExport.
+
+        A DataExport would add a record and a file to the live data on every backup, and
+        make the dashboard's "Last exported" claim an export nobody asked for.
+        """
+        before = DataExport.objects.count()
+        with patch.object(dashboard, '_backup_root', return_value=self.root):
+            self.client.post(self.url, follow=True)
+
+        folder = next(self.root.rglob('Export_*.xlsx')).parent
+        self.assertEqual(len(list(folder.glob('Export_*.xlsx'))), Account.objects.count())
+        self.assertEqual(DataExport.objects.count(), before)
+        self.assertFalse(list(self.root.rglob('Export_*.xlsx'))[0].stat().st_size == 0)
+
+    def test_an_export_that_fails_does_not_fail_the_backup(self):
+        with patch.object(dashboard, '_backup_root', return_value=self.root),                 patch('share_dinkum_app.portfolio_export.write_workbook', side_effect=RuntimeError('boom')):
+            response = self.client.post(self.url, follow=True)
+
+        body = response.content.decode()
+        self.assertIn('Backed up to', body)
+        self.assertIn('Excel export failed', body)
+        self.assertEqual(len(list(self.root.iterdir())), 1)
+
     def test_the_message_says_where_it_went(self):
         """The success message says where the backup went."""
         with patch.object(dashboard, '_backup_root', return_value=self.root):
@@ -5961,6 +6950,7 @@ class FullBackupButtonTests(TransactionTestCase):
         body = response.content.decode()
         self.assertIn('Backed up to', body)
         self.assertIn('document(s)', body)
+        self.assertIn('Excel export(s)', body)
 
     def test_the_two_data_actions_describe_themselves_differently(self):
         """The export and backup actions describe themselves differently."""
@@ -5968,9 +6958,9 @@ class FullBackupButtonTests(TransactionTestCase):
         export = actions['export'].description
         full = actions['full_backup'].description
 
-        self.assertIn('load back into an empty portfolio', export)
-        self.assertIn('does not contain them', export)
-        self.assertIn('complete database', full)
+        self.assertIn('loaded back into an empty portfolio', export)
+        self.assertIn('attached files', export)
+        self.assertIn('database', full)
         self.assertIn('attached documents', full)
         self.assertNotIn('This is your backup', export)
 
@@ -6083,6 +7073,165 @@ class CGTScheduleExportTests(TransactionTestCase):
         self.assertEqual(set(Path(tempfile.gettempdir()).glob('*.xlsx')) - before, set())
 
 
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class IncomeReportTests(TransactionTestCase):
+    """Dividends and trust income by return label, counted by residency on the day."""
+
+    YEAR = 'FY2023/24'
+
+    def setUp(self):
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        market = create_market(account=self.account)
+        self.bhp = create_instrument(account=self.account, market=market, name='BHP')
+        self.aapl = create_instrument(account=self.account, market=market, name='AAPL', currency='USD')
+        self.vgs = create_instrument(account=self.account, market=market, name='VGS')
+
+    def _payments(self, statement=True):
+        """A franked dividend, a USD dividend with foreign tax, and an ETF payment with its statement."""
+        Dividend.objects.create(
+            account=self.account, instrument=self.bhp, date=date(2024, 3, 15), quantity=Decimal('100'),
+            franked_amount_per_share=Money(Decimal('0.7'), 'AUD'),
+            unfranked_amount_per_share=Money(Decimal('0.3'), 'AUD'))
+        Dividend.objects.create(
+            account=self.account, instrument=self.aapl, date=date(2024, 2, 1), quantity=Decimal('100'),
+            dividend_type='FOREIGN', unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'),
+            franked_amount_per_share=Money(Decimal('0'), 'USD'),
+            foreign_tax_credit=Money(Decimal('7.5'), 'USD'))
+        Distribution.objects.create(
+            account=self.account, instrument=self.vgs, date=date(2024, 4, 15), quantity=Decimal('100'),
+            distribution_amount_per_share=Money(Decimal('1'), 'AUD'),
+            total_withholding_tax=Money(Decimal('2'), 'AUD'))
+        if statement:
+            self._statement(date(2024, 6, 30))
+
+    def _statement(self, year_end):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.vgs, financial_year_end_date=year_end)
+        for component, amount in (('FRANKED_DISTRIBUTION', '10'), ('FRANKING_CREDIT', '4.29'),
+                                  ('UNFRANKED_DISTRIBUTION', '5'), ('INTEREST', '2'),
+                                  ('FOREIGN_SOURCE_INCOME', '50'), ('FOREIGN_INCOME_TAX_OFFSET', '5'),
+                                  ('DISCOUNTED_NTAP', '8'), ('NON_ASSESSABLE_NON_EXEMPT', '3')):
+            AttributionComponent.objects.create(
+                account=self.account, statement=statement, component=component,
+                amount=Money(Decimal(amount), 'AUD'))
+        return statement
+
+    def _figures(self):
+        summary = income.build(self.account)
+        return {key: float(value) for key, value in summary.figures(self.YEAR).items()}, summary
+
+    def test_a_resident_year_fills_each_label(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        expected = {'11S': 30, '11T': 70, '11U': 30, '11V': 0, '13U': 7, '13C': 10, '13Q': 4.29,
+                    '13R': 2, '20E': 125, '20M': 125, '20O': 16.25, income.NON_ASSESSABLE: 3,
+                    income.EXCLUDED_CASH: 0}
+        for key, value in expected.items():
+            self.assertAlmostEqual(figures[key], value, places=4, msg=key)
+        self.assertFalse(summary.is_draft(self.YEAR), summary.year_warnings(self.YEAR))
+
+    def test_a_foreign_resident_counts_nothing_and_lists_it(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2023, 12, 31))
+        declare(self.account, 'FOREIGN', date(2024, 1, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        for label in income.LABELS:
+            self.assertEqual(figures[label], 0, label)
+        self.assertAlmostEqual(figures[income.EXCLUDED_CASH], 100 + 75 + 100)
+        self.assertAlmostEqual(figures[income.EXCLUDED_WITHHELD], 2)
+        self.assertTrue(all(not row.counts for row in summary.payments))
+        # The statement is counted by its year end, which is not the whole year here.
+        self.assertTrue(any('Residency changes' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_temporary_resident_counts_australian_income_only(self, mock_rate):
+        declare(self.account, 'TEMPORARY', date(2016, 1, 1))
+        self._payments()
+
+        figures, _ = self._figures()
+
+        self.assertAlmostEqual(figures['11T'], 70)
+        self.assertAlmostEqual(figures['13C'], 10)
+        for label in ('20E', '20M', '20O'):
+            self.assertEqual(figures[label], 0, label)
+
+    def test_etf_cash_with_no_statement_makes_the_year_a_draft(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments(statement=False)
+
+        _, summary = self._figures()
+
+        self.assertTrue(summary.is_draft(self.YEAR))
+        self.assertTrue(any('no annual statement' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_july_payment_is_explained_by_the_year_before(self, mock_rate):
+        """The June distribution is paid in July, and is on the statement for the year it was earned."""
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._statement(date(2024, 6, 30))
+        Distribution.objects.create(
+            account=self.account, instrument=self.vgs, date=date(2024, 7, 16), quantity=Decimal('100'),
+            distribution_amount_per_share=Money(Decimal('1'), 'AUD'))
+
+        summary = income.build(self.account)
+
+        self.assertFalse(summary.is_draft('FY2024/25'), summary.year_warnings('FY2024/25'))
+
+    def test_undeclared_residency_counts_everything_and_says_so(self, mock_rate):
+        self._payments()
+
+        figures, summary = self._figures()
+
+        self.assertAlmostEqual(figures['11T'], 70)
+        self.assertTrue(any('not been declared' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_day_the_history_does_not_cover_is_not_counted(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2024, 3, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        # The USD dividend on 1 February falls before the history starts.
+        self.assertEqual(figures['20M'], 50)
+        self.assertTrue(any('no residency period covers' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_the_workbook_has_its_sheets_and_the_button_returns_it(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments()
+        path = Path(tempfile.mkdtemp()) / 'income.xlsx'
+        self.addCleanup(shutil.rmtree, path.parent)
+
+        reports.income_workbook(self.account, path)
+        tables = excelinterface.get_all_tables_in_excel(path)
+
+        self.assertEqual({'ReturnSchedule', 'Payments', 'TrustIncome', 'NonResident', 'Warnings'} - set(tables), set())
+        schedule = tables['ReturnSchedule'].set_index(tables['ReturnSchedule']['line'].str.strip())
+        self.assertAlmostEqual(schedule.loc[f'11T {income.LABELS["11T"]}', self.YEAR], 70)
+
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        response = self.client.post(reverse('admin:dashboard_export_income_report'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Income_Report', response['Content-Disposition'])
+        self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
+
+
+class TestMediaIsolationTests(TransactionTestCase):
+    """Tests must not write into the real media folder."""
+
+    def test_media_root_is_not_the_projects(self):
+        from django.conf import settings
+        real = Path(settings.BASE_DIR) / 'media'
+        self.assertNotEqual(Path(settings.MEDIA_ROOT).resolve(), real.resolve())
+
+
 class DashboardActionRegistryTests(TransactionTestCase):
     """DASHBOARD_ACTIONS drives the URLs, the page and the button order."""
 
@@ -6094,6 +7243,14 @@ class DashboardActionRegistryTests(TransactionTestCase):
         self.user.is_superuser = True
         self.user.save()
         self.client.force_login(self.user)
+        # The full backup action runs for real below. Without this it writes to the home
+        # directory's backup set, and its pruning pushes real backups out. The test database
+        # is in memory, so what it wrote there had no database in it either.
+        backup_root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, backup_root, ignore_errors=True)
+        patcher = patch.object(dashboard, '_backup_root', return_value=Path(backup_root))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_every_declared_action_has_a_live_url(self):
         for action in dashboard.DASHBOARD_ACTIONS:
@@ -6110,7 +7267,8 @@ class DashboardActionRegistryTests(TransactionTestCase):
         for action in dashboard.DASHBOARD_ACTIONS:
             self.assertIn(action.label, body)
             self.assertIn(reverse(f'admin:{action.url_name}'), body)
-            self.assertIn(action.description, body)
+            # Escaped, as the page is: "Doesn't" arrives as "Doesn&#x27;t".
+            self.assertIn(escape(action.description), body)
 
     def test_groups_appear_in_declaration_order(self):
         """Groups appear in declaration order."""
@@ -6792,21 +7950,21 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         # FY2024/25 is all losses in this fixture, so nothing absorbs it and it rolls on.
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
         self.assertEqual(
-            schedule.losses_carried_forward.amount, Decimal('1568.6881') + Decimal('1000'))
+            schedule.losses_carried_forward.amount, Decimal('1577.5054') + Decimal('1000'))
 
     def test_a_loss_from_a_later_year_is_not_applied_to_an_earlier_one(self):
         """A later year's loss is not applied to an earlier year."""
         self._record(self.later, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_a_loss_from_the_same_year_is_not_double_counted(self):
         """A carry-forward recorded for the same year is not applied to it."""
         self._record(self.earlier, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('0'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2200.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('2207.44080'))
 
     def test_an_earlier_loss_reduces_a_later_gain(self):
         older = FiscalYear.objects.filter(start_year__lt=self.earlier.start_year).first()
@@ -6815,7 +7973,7 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         self._record(older, '1000')
         schedule = cgt.build_schedule(self.account, self.earlier)
         self.assertEqual(schedule.prior_year_losses_applied.amount, Decimal('1000'))
-        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1700.68085'))
+        self.assertEqual(schedule.net_capital_gain.amount, Decimal('1707.44080'))
 
     def test_an_explicit_override_still_wins(self):
         """An explicit prior_year_losses override is used as given."""
@@ -6836,7 +7994,7 @@ class CarryForwardYearScopeTests(TransactionTestCase):
 
         later = cgt.build_schedule(self.account, self.later)
 
-        self.assertEqual(later.losses_carried_forward.amount, Decimal('1568.6881'))
+        self.assertEqual(later.losses_carried_forward.amount, Decimal('1577.5054'))
 
     def test_only_what_is_left_of_a_loss_rolls_on(self):
         """A loss larger than the FY2023/24 gain carries only its remainder into FY2024/25."""
@@ -6845,10 +8003,10 @@ class CarryForwardYearScopeTests(TransactionTestCase):
         earlier = cgt.build_schedule(self.account, self.earlier)
         later = cgt.build_schedule(self.account, self.later)
 
-        self.assertEqual(earlier.prior_year_losses_applied.amount, Decimal('4401.3617'))
+        self.assertEqual(earlier.prior_year_losses_applied.amount, Decimal('4414.8816'))
         self.assertEqual(
             later.losses_carried_forward.amount,
-            Decimal('1568.6881') + Decimal('5000') - Decimal('4401.3617'))
+            Decimal('1577.5054') + Decimal('5000') - Decimal('4414.8816'))
 
 
 # =============================================================================
@@ -7374,12 +8532,12 @@ class UnrecordedLossWarningTests(TransactionTestCase):
     def test_a_later_year_says_it_is_missing(self):
         warnings = self._warnings()
         self.assertIn('not been recorded as carried forward', warnings)
-        self.assertIn('FY2024/25: AUD 1,568.69', warnings)
+        self.assertIn('FY2024/25: AUD 1,577.51', warnings)
 
     def test_recording_it_clears_the_warning(self):
         CapitalLossCarryForward.objects.create(
             account=self.account, fiscal_year=self.loss_year,
-            amount=Money(Decimal('1568.69'), 'AUD'))
+            amount=Money(Decimal('1577.51'), 'AUD'))
         self.assertNotIn('FY2024/25:', self._warnings())
 
 

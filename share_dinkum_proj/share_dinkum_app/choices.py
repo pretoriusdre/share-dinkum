@@ -145,6 +145,7 @@ class AttributionComponent(models.TextChoices):
 
     # Income, which is not a capital gain but arrives on the same statement.
     FRANKED_DISTRIBUTION = 'FRANKED_DISTRIBUTION', 'Franked distributions from trusts'
+    FRANKING_CREDIT = 'FRANKING_CREDIT', 'Franking credits'
     UNFRANKED_DISTRIBUTION = 'UNFRANKED_DISTRIBUTION', 'Unfranked distributions'
     INTEREST = 'INTEREST', 'Interest'
     OTHER_INCOME = 'OTHER_INCOME', 'Other income'

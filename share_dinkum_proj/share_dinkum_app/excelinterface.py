@@ -12,7 +12,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.styles import Alignment, NamedStyle, Font
 from openpyxl.comments import Comment
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, quote_sheetname
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # Annoying data types
 from uuid import UUID
@@ -21,6 +22,80 @@ from django.db.models.fields.files import FieldFile
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+# The most cells one table, or one sheet read whole, may span. A file can claim a table of
+# A1:XFD1048576, and reading it cell by cell would pin the process, so a larger claim is refused.
+MAX_TABLE_CELLS = 2_000_000
+
+# Author shown on the notes attached to column headers.
+COMMENT_AUTHOR = 'Share Dinkum'
+COMMENT_WIDTH = 360   # points
+COMMENT_LINE_HEIGHT = 15
+
+
+# Sheet holding the allowed values behind each dropdown. Excel caps an inline validation list at 255
+# characters, and the currency list is far longer, so each list is written to a column of this sheet
+# and the validation points at that range. It has no table, so the loader does not read it.
+VALUE_ASSISTANCE_SHEET = 'ValueAssistance'
+
+#: A dropdown's allowed values, or a `(list name, values)` pair so several columns share one list.
+DropdownValue = str | bool
+Dropdown = list[DropdownValue] | tuple[str, list[DropdownValue]]
+
+# Rows of validated cells left below the written data, so rows a person adds by hand still get their
+# dropdowns.
+DROPDOWN_SPARE_ROWS = 500
+
+# Notes on the header cells of the index sheet.
+INDEX_COLUMN_HELP = {
+    'sheet_name': 'Number of the sheet that holds the table. Click the link to go to it.',
+    'table_name': 'Name of the Excel table, which is also the name of the model it loads into.',
+    'description': 'What the table holds.',
+    'num_records': 'Rows in the table when the file was written. An empty template table counts its one blank row.',
+    'link': 'Click to go to the sheet.',
+}
+
+
+def check_cell_count(description: str, columns: int, rows: int) -> None:
+    cells = columns * rows
+    if cells > MAX_TABLE_CELLS:
+        raise ValueError(
+            f'{description} spans {cells:,} cells, and the limit is {MAX_TABLE_CELLS:,}. '
+            f'Trim it to its data, and delete any stray formatting far below or beside it.')
+
+
+# Columns that hold a name or code, which Excel turns into a number if it looks like one.
+NAME_COLUMN_SUFFIXES = ('__name', '__code')
+NAME_COLUMNS = ('name', 'code')
+
+
+def name_as_text(value: Any) -> Any:
+    """A name or code cell as text. Excel stores 4013, or 700, as a number, but an instrument is named "4013"."""
+    if value is None or isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def clean_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Text cells stripped of surrounding spaces, and a cell of only spaces made blank.
+
+    A stray space after an instrument's name made it a different name, and one before a file path
+    made it a path that does not exist, with nothing on the sheet to show it. Name and code columns are
+    read as text, as they name a record.
+    """
+    df = df.copy()
+    for position, column in enumerate(df.columns):
+        values = df.iloc[:, position].apply(lambda v: (v.strip() or None) if isinstance(v, str) else v)
+        if isinstance(column, str) and (column.endswith(NAME_COLUMN_SUFFIXES) or column in NAME_COLUMNS):
+            values = values.apply(name_as_text)
+        df.isetitem(position, values.tolist())
+    # Blanks as None, not NaN, which is truthy.
+    return df.astype(object).where(pd.notna(df), None)
 
 
 def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.DataFrame]:
@@ -37,9 +112,10 @@ def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.Da
         except StopIteration:
             return pd.DataFrame()
 
+        check_cell_count(f"Sheet '{ws.title}'", ws.max_column, ws.max_row)
         rows = list(data_iter)
         df = pd.DataFrame(rows, columns=header)
-        df = make_tz_naive(df)
+        df = clean_frame(make_tz_naive(df))
         df = df.astype(object).where(pd.notna(df), None) # Cast NaN to Nones as NaN is truthy
         df = df.dropna(how='all')
         return df
@@ -48,11 +124,18 @@ def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.Da
     mapping: dict[str, pd.DataFrame] = {}
 
     for ws in wb.worksheets:
+        if ws.title == VALUE_ASSISTANCE_SHEET:
+            continue
         tables = list(ws.tables.values())
 
         if tables:
             for table in tables:
                 cell_range = CellRange(table.ref)
+                width = cell_range.max_col - cell_range.min_col + 1
+                check_cell_count(f"Table '{table.name}' on sheet '{ws.title}' ({cell_range.coord})",
+                                 width, cell_range.max_row - cell_range.min_row + 1)
+                check_cell_count(f"The area below table '{table.name}' on sheet '{ws.title}'",
+                                 width, max(ws.max_row - cell_range.max_row, 0))
                 last_data_row = cell_range.max_row
 
                 for row_idx in range(cell_range.max_row + 1, ws.max_row + 1):
@@ -90,7 +173,7 @@ def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.Da
                 df = pd.DataFrame(rest, columns=header)
                 df = make_tz_naive(df)
                 df = df.astype(object).where(pd.notna(df), None)
-                df = df.dropna(how='all')
+                df = clean_frame(df).dropna(how='all')
 
                 mapping[table.name] = df
         else:
@@ -114,6 +197,12 @@ def make_tz_naive(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].apply(lambda x: pd.to_datetime(x, errors='coerce').date())  # type: ignore[arg-type, return-value]
     return df
 
+
+
+def header_comment(text: str) -> Comment:
+    """A note sized to its text, so a long description is not hidden behind a scroll bar."""
+    lines = sum(len(line) // 55 + 1 for line in text.splitlines() or [text])
+    return Comment(text, COMMENT_AUTHOR, width=COMMENT_WIDTH, height=max(60, COMMENT_LINE_HEIGHT * lines + 20))
 
 
 class ExcelGen:
@@ -145,12 +234,76 @@ class ExcelGen:
         #self._add_cover()
 
         self.sheet_counter = 0
+        self._value_assistance_columns: dict[str, str] = {}   # list name -> range on the value assistance sheet
 
         self.excel_illegal_characters_re = re.compile(r'[\000-\010]|[\013-\014]|[\016-\037]')
 
         self.id_col_style =  NamedStyle(name="uuid")
         self.id_col_style.alignment = Alignment(shrinkToFit=True)
 
+
+    def _value_assistance_range(self, name: str, values: list[DropdownValue]) -> str:
+        """Write `values` as their own column of the value assistance sheet, and return its range.
+
+        A list name used again is written once, so several tables can share it.
+        """
+        if name in self._value_assistance_columns:
+            return self._value_assistance_columns[name]
+
+        if VALUE_ASSISTANCE_SHEET in self.wb.sheetnames:
+            ws = self.wb[VALUE_ASSISTANCE_SHEET]
+        else:
+            ws = self.wb.create_sheet(VALUE_ASSISTANCE_SHEET)
+
+        column_index = len(self._value_assistance_columns) + 1
+        column_letter = get_column_letter(column_index)
+
+        header = ws.cell(column=column_index, row=1, value=name)
+        header.font = Font(bold=True)
+        header.comment = header_comment(f'The values the dropdowns for {name} offer. Edit the dropdown, not this list.')
+        for offset, value in enumerate(values, start=2):
+            ws.cell(column=column_index, row=offset, value=value)
+        ws.column_dimensions[column_letter].width = min(max([len(name)] + [len(str(v)) for v in values]) + 2, 60)
+
+        reference = f'{quote_sheetname(VALUE_ASSISTANCE_SHEET)}!${column_letter}$2:${column_letter}${len(values) + 1}'
+        self._value_assistance_columns[name] = reference
+        return reference
+
+    def _add_dropdowns(
+        self,
+        ws: Worksheet,
+        columns: list[str],
+        dropdowns: 'dict[str, Dropdown]',
+        start_row: int,
+        start_col: int,
+        row_count: int,
+    ) -> None:
+        for column, spec in dropdowns.items():
+            if column not in columns:
+                logger.warning('Cannot add a dropdown for %r: it is not a column of this table.', column)
+                continue
+
+            list_name, values = spec if isinstance(spec, tuple) else (column, spec)
+            # A bool stays a bool, so a pick is an Excel TRUE, which loads; the text "TRUE" does not.
+            values = [value if isinstance(value, bool) else str(value)
+                      for value in values if value is not None and str(value) != '']
+            if not values:
+                continue
+
+            # showDropDown is left unset on purpose: openpyxl writes it straight through, and Excel
+            # reads a set value as "hide the in-cell arrow", the opposite of what it sounds like.
+            validation = DataValidation(
+                type='list',
+                formula1=self._value_assistance_range(list_name, values),
+                allow_blank=True,
+                showErrorMessage=True,
+                errorTitle='Not an allowed value',
+                error=f'Pick a value for {column} from the list.',
+            )
+            ws.add_data_validation(validation)
+
+            letter = get_column_letter(columns.index(column) + start_col)
+            validation.add(f'{letter}{start_row + 1}:{letter}{start_row + max(row_count, 1) + DROPDOWN_SPARE_ROWS}')
 
     def add_table(
         self,
@@ -167,6 +320,9 @@ class ExcelGen:
         exclude_from_summary: bool = False,
         add_hyperlinks: bool = True,
         value_style_map: dict[Any, Any] | None = None,
+        tab_color: str | None = None,
+        column_descriptions: dict[str, str] | None = None,
+        dropdowns: 'dict[str, Dropdown] | None' = None,
     ) -> None:
         """Add `df` as a named Excel table on a new numbered sheet.
 
@@ -175,6 +331,11 @@ class ExcelGen:
         * `style_map`, `width_map`, `format_map`: per-column style, width, number format.
         * `value_style_map`: cell style by cell value.
         * `exclude_from_summary`: leave the table out of the index sheet.
+        * `tab_color`: an RGB hex colour for the sheet's tab, such as 'A6A6A6'.
+        * `column_descriptions`: column name to text, shown as a note on that column's header cell.
+        * `dropdowns`: column name to its allowed values, or to a `(list name, values)` pair so
+          several columns can share one list. The cells get a dropdown, and one outside the list
+          is refused. Spare rows below the data are covered too.
         """
 
 
@@ -217,10 +378,16 @@ class ExcelGen:
 
 
         ws = self.wb.create_sheet(sheet_name, index=position_index)
+        if tab_color:
+            ws.sheet_properties.tabColor = tab_color
 
         for col_index, col in enumerate(cols):
             cell = ws.cell(column=(col_index + start_col), row=start_row)
             cell.value = col
+
+            description_text = (column_descriptions or {}).get(str(col))
+            if description_text:
+                cell.comment = header_comment(description_text)
 
             if col in pk:
                 cell.style = 'Accent2'
@@ -310,6 +477,9 @@ class ExcelGen:
         ws.add_table(tab)
         ws.freeze_panes = f"A{start_row + 1}"
 
+        if dropdowns:
+            self._add_dropdowns(ws, [str(col) for col in cols], dropdowns, start_row, start_col, len(df))
+
     def save(self, output_path: str | Path) -> None:
         """Add the index sheet, autofit columns, and save to `output_path`."""
 
@@ -363,6 +533,7 @@ class ExcelGen:
             width_map={'sheet_name' : 10, 'table_name': 20, 'description': 100, 'num_records': 16},
             position_index=0,
             exclude_from_summary=True,
+            column_descriptions=INDEX_COLUMN_HELP,
         )
 
 

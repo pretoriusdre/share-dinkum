@@ -181,6 +181,9 @@ MEDIA_URL = 'media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
+# Tests save files too. This keeps them out of MEDIA_ROOT above (see the runner).
+TEST_RUNNER = 'share_dinkum_proj.test_runner.TempMediaRunner'
+
 
 # Django's default is 1000, which a change page here passes without trying. The admin
 # builds an inline for every related model, so an instrument held for a decade arrives with

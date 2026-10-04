@@ -1,14 +1,25 @@
 # Share Dinkum
 
-**Share Dinkum** is a Django-based application for tracking shares, with a particular focus on Australian-specific tax and accounting considerations, such as franking credits and AMIT cost base adjustments.
+**Share Dinkum** is a free, open-source app for tracking investment portfolios. It runs on your own
+computer and opens in your browser. It handles shares, ETFs and funds on any exchange and in any
+currency, plus unlisted holdings, and works out the Australian tax on them: franking credits, AMIT
+cost base adjustments, foreign income and capital gains, including the 2027 changes.
 
-Share Dinkum is free and open source.
+**Your data stays yours.** It's stored on your own computer, not someone else's server.
+**Export portfolio** on the dashboard writes all of it to one Excel workbook with every column
+clearly explained, so you can read it, load it back in, or move to another tool if you ever need to.
+**Full backup** also copies your attached documents. Every feature is free, with no paid tier, and
+the AGPL licence keeps the code open for anyone to use and improve.
 
-## Work in progress
+## Development status
 
-This project is currently under development. Contributions and feedback are welcome.
+This project is under active development, and contributions and feedback are welcome.
 
-There may be bugs, and usage is entirely at your own risk. Please refer to the license file for more information.
+Share Dinkum is not tax advice. Check its figures against your statements, or with a tax agent, before relying on them in a return.
+
+Usage is governed by the [license](#license).
+
+See [CHANGELOG.md](CHANGELOG.md) for what has changed in each release.
 
 ---
 
@@ -16,29 +27,55 @@ There may be bugs, and usage is entirely at your own risk. Please refer to the l
 
 ### Data entry
 
-You can either enter items via the web interface or in bulk from Excel. Bulk loading is done from the `data_import.ipynb` notebook, which loads one Excel file into one portfolio; see [Data import instructions](#optional-data-import-instructions). If you want to export the data, you create a **[DataExport]** object. The data export output file can be imported again to update values in the portfolio it came from.
+Enter records in the web interface, or in bulk from Excel using the `data_import.ipynb` notebook,
+which loads one Excel file into one portfolio (see [Data import instructions](#optional-data-import-instructions)).
+To export, create a **[DataExport]**. An export can be loaded back into the portfolio it came from to
+update it.
 
-### Data model / principal of operation
+### Data model / principle of operation
 
-Each portfolio is represented by an **[Account]**. The account has a base currency and fiscal year configuration (Set up for Australia by default).
+Each portfolio is an **[Account]**, with a base currency, a fiscal year configuration (Australian by
+default) and tax settings.
 
-There are **[Market]**, eg ASX which contain **[Instrument]**, eg BHP or VDHG.
+A **[Market]**, eg ASX, contains **[Instrument]** objects, eg BHP or VDHG.
 
-Each purchase of an instrument is a **[Buy]** object. You enter the quantity, unit price, and quantity. You can also attach a file and include any relevant notes. If you enter a buy in a different currency to your selected base curency, the system will lookup and store an appropriate **[ExchangeRate]** object for that particular date.
+Each purchase is a **[Buy]**: date, quantity, unit price and brokerage, plus an optional file and
+notes. A buy in a currency other than the base currency gets an **[ExchangeRate]** for its date; a
+day with no quote (a weekend or holiday) takes the last rate before it.
 
-Each time you enter a **[Buy]**, the system creates an associated **[Parcel]**. A parcel represents a collection of shares with the same unit properties (purchase date, cost base per share).
+Each **[Buy]** creates a **[Parcel]**: a holding of shares with the same purchase date and cost base
+per share.
 
-You can enter forms of income such as **[Dividend]** and **[Distribution]**. According to the configured **[FiscalYearType]**, the income events will be classified into a particular **[FiscalYear]**
+Income is entered as **[Dividend]** and **[Distribution]** objects, and classified into a
+**[FiscalYear]** according to the account's **[FiscalYearType]**.
 
-If you enter a **[Sell]**, this sale needs to be allocated against specific parcels. You can chose an algorithm to do this, either FIFO (First in First Out), LIFO (Last in First Out), MIN_CGT (Minimimise net capital gain). The **[Sell]** generates the requried **[SellAllocation]** objects and links them to the appropriate parcels. You can also chose to manually allocate the sells against parcels if you chose (generally you would only do this when importing legacy data).
+A **[Sell]** is allocated against parcels by a strategy: FIFO (first in, first out), LIFO (last in,
+first out), MIN_CGT (minimise net capital gain) or MANUAL (you create the allocations, usually only
+when importing legacy data). The sell creates **[SellAllocation]** objects linking it to parcels.
+Each allocation is a capital gain or loss, classified into a **[FiscalYear]**.
 
-Any time that a **[SellAllocation]** does not completely consume the target parcel, that parcel is bifurcated. That is, the original parcel is marked as inactive, and replaced by a 'sold' parcel, and an 'unsold' parcel. The original cost base is apportioned between them, and each of these parcels points to the parcel from which it was derived from. Each sell allocation represents a capital gain or loss, which are also allocated to a **[FiscalYear]**
+When a **[SellAllocation]** does not consume a whole parcel, the parcel is bifurcated: it is marked
+inactive and replaced by a 'sold' and an 'unsold' parcel, which share its cost base and point back to
+it.
 
-Any time you enter an **[CostBaseAdjustment]**, i.e. AMIT cost base adjustment, the amount of the adjustment is automatically apportioned to all unsold **[Parcel]**, using a weighting of the quantity of shares * the proportion of the fiscal year held. The algorithm automatically creates the required **[CostBaseAdjustmentAllocation]** objects.
+An AMIT **[CostBaseAdjustment]** is apportioned to the unsold parcels, weighted by quantity times
+days held in the fiscal year, as **[CostBaseAdjustmentAllocation]** objects. You can also allocate it
+manually.
 
-If you encounter a **[ShareSplit]** event, you enter the before and after units held, and this will replace the old parcels with new ones with the adjusted cost base and quantity. Any associated **[CostBaseAdjustmentAllocation]** objects are transferred from the old parcels to the new parcels.
+A **[ShareSplit]**, dated on its ex-date, takes the units held before and after. It replaces the
+affected parcels with new ones at the adjusted quantity and cost base, and moves their cost base
+adjustment allocations across.
 
-If you save your **[Account]** object, you have the option to update your price history. This will incrementally historise the daily price for all of your shares, storing that into the **[InstrumentPriceHistory]** table.
+Records that others were derived from cannot have their key fields changed once entered (delete and
+re-enter instead), and a trade or split dated before one already applied is refused.
+
+Prices are stored as traded on the day in **[InstrumentPriceHistory]**. Use **Refresh prices** on
+the dashboard to fetch new prices and exchange rates. If the dashboard reports a data problem, run
+`uv run dev repair_portfolio_data` (`--dry-run` only reports).
+
+Further tables hold tax facts the reports read, such as residency periods and loss carry-forwards:
+see [Capital gains tax](#capital-gains-tax). Every table is in the
+[detailed data model](docs/data_model.md).
 
 ### Simplified overview
 
@@ -47,7 +84,6 @@ flowchart LR
     Market --> Account
     Instrument --> Market
     InstrumentPriceHistory --> Instrument
-
     Buy --> Instrument
     Sell --> Instrument
     Dividend --> Instrument
@@ -65,43 +101,87 @@ flowchart LR
     ShareSplit --> Parcel
 ```
 
-*Not shown: AppUser, FiscalYearType, FiscalYear, ExchangeRate, CurrentExchangeRate, LogEntry, DataExport.*
+*Not shown: AppUser, FiscalYearType, FiscalYear, ExchangeRate, CurrentExchangeRate, LogEntry,
+DataExport, and the capital gains tables below.*
 
-For a full entity relationship diagram with fields and all relationships, see [Detailed data model](docs/data_model.md).
+For the full entity relationship diagram with fields, see [Detailed data model](docs/data_model.md).
+
+---
+
+## Capital gains tax
+
+Capital gains reports are worked out from your transactions when you run them, so a correction flows
+through to every report. The account's **taxpayer type** sets the discount: half for an individual
+or trust, a third for a complying super fund, none for a company.
+
+The 2027 changes are legislated (Treasury Laws Amendment (Tax Reform No. 1) Act 2026) and apply to
+CGT events from 1 July 2027. Turn on **Model 2027 regime** in the account's tax settings to apply
+them. A holding bought before and sold after 1 July 2027 is split: the discount on growth to
+30 June 2027, CPI indexation after.
+
+Eight tables support this: residency periods (discount apportionment, TAP / NTAP), instrument
+valuations (deemed disposals), managed fund attribution statements and their components, capital
+loss carry-forwards, CGT return snapshots and their rows, and CPI figures. Instruments also gain a
+legal form, which drives the CGT schedule report.
+
+Related commands (run with `uv run dev`): `load_cpi`, `capture_cutover_valuations`,
+`suggest_instrument_classification` and `capture_cgt_snapshot`.
+
+- [docs/capital_gains_models.md](docs/capital_gains_models.md): what each table is for and the order
+  to fill them in.
+- [CHANGELOG.md](CHANGELOG.md), version 0.4.0: the full list of behaviour.
 
 ---
 
-## Capital Gains Changes (not yet legislated)
-
-The Australian Government has proposed changes to CGT taking effect from 1 July 2027. The changes are not yet legislated, but Share Dinkum is being designed to accommodate them so existing data continues to work once the rules apply.
-
-See [Capital gains changes - implementation plan](docs/capital_gains_changes_plan.md) for the planned data-model and calculation changes.
-
----
 ## Example screenshots
 
+All screenshots use the fake sample portfolio.
+
+### Dashboard
+
+The dashboard has the actions (refresh prices, CGT snapshot and report, income report, export, backup) and charts
+of the portfolio.
+
+![Dashboard](docs/images/portfolio_screen.png)
+
+![Income by fiscal year](docs/images/income_summary.png)
+
+![Portfolio value over time](docs/images/running_value.png)
+
+![Units held over time](docs/images/running_qty.png)
+
+### CGT report
+
+The Australian CGT report sets out each year in the layout of the tax return's CGT schedule.
+
+![CGT report](docs/images/cgt_report.png)
+
+### Income report
+
+The Australian income report sets out each year's dividends and trust income by return label: items
+11 (dividends), 13 (trusts, from each fund's annual statement) and 20 (foreign income). Only income
+received as an Australian resident counts. Payments while a foreign resident are listed separately,
+with what was withheld.
+
+### Data management
+Buy Screen:
 ![Buy Screen](docs/images/buy_add_screen.png)
-
-
-![Graphs 1](docs/images/graphs_1.png)
-![Graphs 2](docs/images/graphs_2.png)
-![Graphs 3](docs/images/graphs_3.png)
-(This is sample / fake data - TODO make it look more normal)
-
+Data Export:
 ![Data Export Index](docs/images/data_export_index_sheet.png)
 
-(Note, all the data is stored in a local database, so you can build your own BI dashboards by connecting to that datasource.)
+All data is stored in a local database, so you can also connect your own BI tools to it.
 
 ---
+
 ## Setup instructions
 
 These steps are written for Windows 10/11 using PowerShell, and work the same on macOS and Linux
-except where noted. They should take about ten minutes.
+except where noted. They take about ten minutes.
 
 ### Prerequisites
 
-You need two tools installed before you start. **You do not need to install Python separately**,
-`uv` downloads the correct version (3.13) for you.
+You need two tools. **You do not need to install Python separately**: `uv` downloads the correct
+version (3.13) for you.
 
 | Tool | What it is for | Install with `winget` | Or download |
 |---|---|---|---|
@@ -128,11 +208,9 @@ cd share-dinkum
 uv sync
 ```
 
-This creates a `.venv` folder, downloads Python 3.13 if you do not already have it, and installs
-the exact package versions pinned in `uv.lock`.
-
-You never need to "activate" the virtual environment. Every command below uses `uv run`, which
-takes care of it for you.
+This creates a `.venv` folder, downloads Python 3.13 if needed, and installs the package versions
+pinned in `uv.lock`. You never need to activate the virtual environment: every command below uses
+`uv run`, which does it for you.
 
 ### 3. Create your settings file
 
@@ -143,8 +221,8 @@ copy .env.sample .env
 
 On macOS/Linux use `cp .env.sample .env` instead.
 
-The defaults work as-is and use a local SQLite database file, so there is nothing else to configure.
-If you want to, open `.env` and replace `SECRET_KEY=__REPLACE_ME__` with any long random string.
+The defaults work as-is, using a local SQLite database. Optionally, open `.env` and replace
+`SECRET_KEY=__REPLACE_ME__` with any long random string.
 
 ### 4. Create the database
 
@@ -160,12 +238,12 @@ uv run dev migrate
 uv run dev
 ```
 
-Then open **http://127.0.0.1:8000/** in your browser. There is no login to set up and no password to
-remember: the app runs on your own machine against your own database, so it signs you in
-automatically. If you ever make an install reachable by anyone else, put `LOCAL_AUTO_LOGIN=False` in
-`.env` and create an account with `uv run dev createsuperuser`, and the normal login page comes back.
+Then open **http://127.0.0.1:8000/** in your browser. There is no login: the app runs on your own
+machine against your own database, so it signs you in automatically. If you ever make an install
+reachable by anyone else, put `LOCAL_AUTO_LOGIN=False` in `.env` and create an account with
+`uv run dev createsuperuser`, and the normal login page comes back.
 
-Leave the terminal window open while you use the app. Press `Ctrl+C` there to stop the server.
+Leave the terminal open while you use the app. Press `Ctrl+C` there to stop the server.
 
 ### Troubleshooting
 
@@ -178,35 +256,34 @@ Leave the terminal window open while you use the app. Press `Ctrl+C` there to st
 | Browser shows "DisallowedHost" | Use `127.0.0.1`, not your machine name. |
 | Updating stops with `Your local changes to the following files would be overwritten by merge` | You have changed a file that the update also changes, most often `data_import.ipynb` because running it rewrites its saved output. Copy it elsewhere if you want to keep your version, then `git checkout -- share_dinkum_proj/data_import.ipynb` and update again. Working in your own `data_import_private.ipynb` copy avoids this. |
 
-Any other command can be passed straight through, so `uv run dev test share_dinkum_app` runs the
-test suite and `uv run dev collectstatic` collects static files.
+Any other Django command can be passed straight through, so `uv run dev test share_dinkum_app` runs
+the test suite and `uv run dev collectstatic` collects static files.
 
 ---
 
 ## Updating to a newer version
 
-This project is under active development, so it is worth updating from time to time.
+The dashboard shows the installed version next to Recent actions. Once a day it checks GitHub for a
+newer [release](https://github.com/pretoriusdre/share-dinkum/releases) and, if there is one, says so
+with a link to what changed. Offline, it says nothing. [CHANGELOG.md](CHANGELOG.md) has the full
+history, including any one-off steps after an upgrade.
 
-Stop the server with `Ctrl+C`, then from the repository root run:
+To update, stop the server with `Ctrl+C`, then from the repository root run:
 
 ```powershell
 uv run update
 ```
 
-That is the whole update. It backs up your data, fetches the latest code, installs any new
-dependencies, and applies any changes to the database structure. When it finishes, start the app
-again with `uv run dev`.
+That backs up your data, fetches the latest code, installs any new dependencies, and applies any
+database changes. Then start the app again with `uv run dev`.
 
-The backup goes into a `share-dinkum-backups` folder in your home directory, and covers both things
-that make up your data: the database `share_dinkum_proj/db.sqlite3`, and `share_dinkum_proj/media`,
-which holds any documents you attached to a transaction. To roll back, stop the server and copy both
-back over the originals.
+The backup goes to `~/share-dinkum-backups/main/` (the five most recent are kept) and covers both
+parts of your data: the database `share_dinkum_proj/db.sqlite3`, and `share_dinkum_proj/media`, which
+holds documents attached to transactions. To roll back, stop the server and copy both back. Neither,
+nor your `.env`, is part of the repository, so an update never changes them.
 
 If you have edited any of the project's own files, the update stops before changing anything and
-tells you which files are affected, so your edits cannot be lost in a merge. Commit or discard them
-and run it again.
-
-Your own data is never touched by an update. The database, the `media` folder and your `.env` file are all excluded from the repository.
+lists them, so your edits cannot be lost in a merge. Commit or discard them and run it again.
 
 <details>
 <summary>Running the steps individually</summary>
@@ -219,19 +296,19 @@ uv sync
 uv run dev migrate
 ```
 
-Each of those three matters. `git pull` brings the new code, `uv sync` installs any dependencies
-that were added or changed, and `uv run dev migrate` applies any changes to the database structure.
-Skipping the last one typically shows up as an error mentioning a missing column or table.
+`git pull` brings the new code, `uv sync` installs added or changed dependencies, and
+`uv run dev migrate` applies database changes. Skipping the last one typically shows up as an error
+about a missing column or table.
 
 </details>
 
 ---
 
-## Optional: Data Import Instructions
+## Optional: Data import instructions
 
-You can bulk load your share data from Excel using the provided tools.
+You can bulk load your share data from Excel.
 
-### 1. Prepare the Data Loading Template
+### 1. Prepare the template
 
 From the repository root, generate an empty template:
 
@@ -240,7 +317,10 @@ uv run dev make_import_template
 ```
 
 That writes `share_dinkum_proj/share_dinkum_app/import_data/data_import_template_blank.xlsx`, with
-every sheet and column the loader understands and no data in it. Take one copy per portfolio:
+every sheet and column the loader understands. Each column header has a note saying what it is,
+whether it is required, and what a blank means; columns with a fixed set of values have a dropdown.
+
+Take one copy per portfolio:
 
 - Windows (PowerShell or Command Prompt):
   ```powershell
@@ -253,48 +333,53 @@ every sheet and column the loader understands and no data in it. Take one copy p
   cp data_import_template_blank.xlsx data_import_template_private.xlsx
   ```
 
-Anything ending in `_private.xlsx` is excluded from the repository, so your files stay yours and
-updates leave them alone.
+Anything ending in `_private.xlsx` is excluded from the repository, so updates leave your files alone.
 
-If you would rather see worked examples first, `data_import_template_public.xlsx` is the same
-template filled in with sample data.
+The sheets with a grey tab (residency periods, instrument valuations, capital loss carry-forwards and
+managed fund annual statements) are optional. Leave them empty, or enter that information in the app
+later. CPI figures are not part of the file: load them with `uv run dev load_cpi`.
 
-### 2. Edit the Template
+For worked examples, `data_import_template_public.xlsx` is the same template filled with a fake
+10-year portfolio (`uv run dev make_fake_data --force` rebuilds it).
 
-Fill in your share data in `data_import_template_private.xlsx` using Excel.
+### 2. Fill in the template
 
-### 3. Run the Bulk Load Script
+Enter your share data in `data_import_template_private.xlsx` using Excel.
 
-Once your data is ready:
+### 3. Run the import notebook
 
-Take your own copy of the notebook first, in the same way you copied the Excel template:
+Take your own copy of the notebook, as you did with the template. Your `_private` copy is excluded
+from the repository, so updates leave it alone. Run that one, not the original.
 
-```powershell
-copy share_dinkum_proj\data_import.ipynb share_dinkum_proj\data_import_private.ipynb
-```
+From the repository root:
 
-Your `_private` copy is excluded from the repository, so your settings stay yours and updates leave
-it alone. Run that one, not the original.
+- Windows (PowerShell or Command Prompt):
+  ```powershell
+  copy share_dinkum_proj\data_import.ipynb share_dinkum_proj\data_import_private.ipynb
+  ```
+- macOS/Linux:
+  ```bash
+  cp share_dinkum_proj/data_import.ipynb share_dinkum_proj/data_import_private.ipynb
+  ```
 
-Open `share_dinkum_proj/data_import_private.ipynb` and run the cells in order. Either of these works:
+Open `share_dinkum_proj/data_import_private.ipynb` and run the cells in order, either:
 
 - **In VS Code** (simplest on Windows): install the *Python* and *Jupyter* extensions, open the
-  file, and select the `.venv` interpreter when prompted. Everything it needs is already installed.
+  file, and select the `.venv` interpreter when prompted.
 - **In your browser**, without installing Jupyter permanently:
 
     ```powershell
     uv run --with notebook jupyter notebook share_dinkum_proj/data_import_private.ipynb
     ```
 
-Loading only ever adds to the portfolio a file is listed against. Nothing you have already loaded is
-removed, so it is safe to run again after a new year of trades. The one cell that deletes anything is
-at the very bottom of the notebook under **Danger zone**, and it is commented out; it wipes every
-portfolio, not just one, and is only there for starting again from nothing.
+Loading only adds to or updates the portfolio a file is listed against, as a single transaction: a
+file that fails part way leaves nothing behind. It is safe to run again after a new year of trades.
+The one cell that deletes anything is at the bottom of the notebook under **Danger zone**, commented
+out. It wipes every portfolio, not just one.
 
 ### Multiple portfolios
 
-Each Excel file is loaded into exactly one portfolio, so keeping several is a matter of listing them.
-Generate a blank template per portfolio as above, then edit the `portfolios` list near the top of
+Each Excel file loads into exactly one portfolio. List them in the `portfolios` list near the top of
 your `data_import_private.ipynb`:
 
 ```python
@@ -302,6 +387,8 @@ portfolios = [
     {
         'description': 'Default Portfolio',
         'input_file': import_data_folder / 'data_import_template_private.xlsx',
+        'taxpayer_type': 'INDIVIDUAL',     # optional: or TRUST, PARTNERSHIP, COMPANY, SMSF
+        'tax_settings_reviewed': True,     # optional: silences the tax settings warning
     },
     {
         'description': "Partner's Portfolio",
@@ -310,29 +397,20 @@ portfolios = [
 ]
 ```
 
-Run the cells in order and each file is loaded into its own portfolio. Adding a portfolio to the list
-later and running it again loads only the new one; the others are untouched. Portfolios are matched
-by name, so keep the descriptions distinct.
+Portfolios are matched by description, so keep them distinct. Adding a portfolio and running again
+loads only the new one. `taxpayer_type` and `tax_settings_reviewed` apply only when the portfolio is
+first created; you can also set them in the app.
 
-Two things to know:
+### Loading a file again
 
-- Rows carrying a `legacy_id` are matched on it, so loading a corrected file again updates those rows
-  rather than duplicating them. Rows with no `legacy_id` are always added.
+- Rows are matched on `id`, then `legacy_id`, then the table's unique fields (such as a market's
+  code), and otherwise added. A corrected file therefore updates rows rather than duplicating them.
+- A blank cell leaves the stored value unchanged.
+- A transaction row with no `id` or `legacy_id` is refused once the portfolio has rows of that kind,
+  since it cannot be matched and would be added twice.
 - A **[DataExport]** file can be loaded back into the portfolio it came from, but not into a
-  different one. Its rows carry their identity with them, so loading it elsewhere would move them out
-  of the original portfolio rather than copying them. The loader refuses and tells you so.
-
----
-
-## Version and updates
-
-The version is shown on the dashboard, next to Recent actions. Once a day the app checks GitHub for a
-newer [release](https://github.com/pretoriusdre/share-dinkum/releases) and tells you there if one is
-available, along with a link to what changed. If you are offline it simply says nothing.
-
-To upgrade, stop the server and run `uv run update`. See
-[Updating to a newer version](#updating-to-a-newer-version) for what that does, and
-[CHANGELOG.md](CHANGELOG.md) for the history.
+  different one: its rows carry their identity, so loading it elsewhere would move them rather than
+  copy them.
 
 ---
 
@@ -358,4 +436,4 @@ This software is provided "as is" without warranty of any kind, either express o
 **Usage at Your Own Risk**  
 By using this software, you acknowledge that it is your responsibility to ensure it meets your needs. The authors disclaim responsibility for any losses or issues arising from its use.
 
-For full details, see the `LICENSE` file.
+For full details, see the [LICENSE file](LICENSE).

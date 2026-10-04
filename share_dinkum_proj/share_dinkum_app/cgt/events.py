@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING, Any, cast, overload
 
+from django.db.models import Sum
 from djmoney.money import Money
 
 from share_dinkum_app.cgt import (
@@ -315,7 +316,8 @@ def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Acco
 
     if not applies:
         return [_single_post_cutover_event(
-            whole, buy, sell, indexation_eligible, reason)]
+            whole, buy, sell, indexation_eligible, reason,
+            adjustments_by_year(parcel, quantity))]
 
     market_value, _source = parcel.market_value_at(
         cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
@@ -329,8 +331,39 @@ def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Acco
         )]
 
     market_value = _money(market_value * share_of_parcel(parcel, quantity))
+    later_adjustments = adjustments_by_year(parcel, quantity, since=CGT_CUTOVER_DATE)
     return _split_events(
-        whole, buy, sell, market_value, indexation_eligible)
+        whole, buy, sell, market_value, indexation_eligible, later_adjustments)
+
+
+def adjustments_by_year(parcel: 'Parcel', quantity: Decimal,
+                        since: date | None = None) -> list[indexation_module.Adjustment]:
+    """`quantity`'s share of the parcel's cost base adjustments, by income year end.
+
+    `since` keeps only the years ending on or after it. Those ending after 30 June 2027
+    belong to the asset reacquired at the cutover, not the one deemed sold; one for the year
+    ending 30 June 2027 stays with the deemed sale, since s104-107B applies it at the end of
+    that year. Picked by the adjustment's year rather than the allocation's
+    `activation_date`, which becomes the sale or split date whenever an allocation is split.
+    Amounts are unrounded; round their total.
+    """
+    allocations = parcel.cost_base_adjustment_allocation.filter(deactivation_date__isnull=True)
+    if since is not None:
+        allocations = allocations.filter(
+            cost_base_adjustment__financial_year_end_date__gte=since)
+    totals = (
+        allocations.values('cost_base_adjustment__financial_year_end_date')
+        .annotate(total=Sum('cost_base_increase'))
+        .order_by('cost_base_adjustment__financial_year_end_date')
+    )
+    share = share_of_parcel(parcel, quantity)
+    # The same currency as Parcel.total_adjustments, which these are a part of.
+    currency = parcel.buy.account.currency
+    return [
+        (row['cost_base_adjustment__financial_year_end_date'],
+         Money(row['total'] * share, currency))
+        for row in totals if row['total']
+    ]
 
 
 def _outcome(proceeds: Money, indexed_cost_base: Money, plain_cost_base: Money) -> tuple[Money, Money]:
@@ -348,19 +381,27 @@ def _outcome(proceeds: Money, indexed_cost_base: Money, plain_cost_base: Money) 
 
 
 def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexation_eligible: bool,
-                               reason: str | None) -> CGTEvent:
+                               reason: str | None,
+                               adjustments: list[indexation_module.Adjustment]) -> CGTEvent:
     """A post-cutover disposal that s112-155 does not split.
 
     If indexation is available it is mandatory (s110-36(1A)) and removes the discount
     (s115-20). For a returned expatriate denied the split by s112-155(1)(d), that means no
     discount and indexation only from 2027, so the row carries `reason` to explain it.
+
+    Each of `adjustments` is indexed from its own quarter (`indexed_cost_base`). The factor
+    reported is the one for the rest of the cost base.
     """
     category = _gain_category(sell.instrument)
     if not indexation_eligible:
         return replace(whole, gain_category=category, pending_reason=reason)
 
+    net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
+    assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
     try:
         factor = indexation_module.indexation_factor(buy.date, sell.date)
+        indexed_cost_base = _money(cast(Money, indexation_module.indexed_cost_base(
+            plain_cost_base, buy.date, sell.date, adjustments=adjustments)))
     except indexation_module.IndexationDataUnavailable as exc:
         return replace(whole, gain_category=category, pending_reason=str(exc))
 
@@ -368,10 +409,7 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
         # That message describes the other outcome, an apportioned discount unindexed.
         reason = cutover_module.PENDING_S115_105_INDEXED
 
-    net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
-    assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
-    gain, cost_base_used = _outcome(
-        net_proceeds, _money(cast(Money, plain_cost_base * factor)), plain_cost_base)
+    gain, cost_base_used = _outcome(net_proceeds, indexed_cost_base, plain_cost_base)
     return replace(
         whole,
         cost_base=cost_base_used,
@@ -388,29 +426,44 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
 
 
 def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money,
-                  indexation_eligible: bool) -> list[CGTEvent]:
+                  indexation_eligible: bool,
+                  later: list[indexation_module.Adjustment]) -> list[CGTEvent]:
     """The deferred and post-cutover gains from an s112-155 deemed sale at `market_value`.
 
     Before indexation they sum to the whole gain. The deferred slice keeps the discount; the
-    post-cutover slice is indexed from 1 July 2027 and gets no discount.
+    post-cutover slice is indexed and gets no discount.
+
+    `later` are the cost base adjustments for years after the cutover. They move from the
+    deferred slice's cost base to the post-cutover one. The market value is indexed from
+    1 July 2027 and each adjustment from its own quarter (`indexed_cost_base`). The factor
+    reported is the market value's.
     """
     net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
-    assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
-    deferred_gain = _money(market_value - plain_cost_base)
+    whole_adjustments = whole.cost_base_adjustments
+    assert (net_proceeds is not None and plain_cost_base is not None
+            and whole_adjustments is not None)  # set on every disposal
+    later_adjustments = _zero_like(market_value)
+    for _year_end, amount in later:
+        later_adjustments = later_adjustments + amount
+    later_adjustments = _money(later_adjustments)
+    deferred_cost_base = plain_cost_base - later_adjustments
+    deferred_gain = _money(market_value - deferred_cost_base)
 
+    reacquisition_cost = market_value + later_adjustments
     factor: Decimal | None = Decimal('1.000')
     pending: str | None = None
-    indexed_reacquisition_cost = market_value
+    indexed_reacquisition_cost = reacquisition_cost
     if indexation_eligible:
         try:
             factor = indexation_module.indexation_factor(CGT_CUTOVER_DATE, sell.date)
-            indexed_reacquisition_cost = _money(market_value * factor)
+            indexed_reacquisition_cost = _money(cast(Money, indexation_module.indexed_cost_base(
+                reacquisition_cost, CGT_CUTOVER_DATE, sell.date, adjustments=later)))
         except indexation_module.IndexationDataUnavailable as exc:
             factor = None
             pending = str(exc)
 
     post_gain, post_cost_base = _outcome(
-        net_proceeds, indexed_reacquisition_cost, market_value)
+        net_proceeds, indexed_reacquisition_cost, reacquisition_cost)
     post_gain = _money(post_gain)
 
     # s114-10(9): the deemed reacquisition is disregarded for the 12-month rule, so the
@@ -426,6 +479,8 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
         gross_proceeds=market_value,
         sell_brokerage=_zero_like(market_value),
         unit_sale_price=None,
+        cost_base_adjustments=whole_adjustments - later_adjustments,
+        cost_base=deferred_cost_base,
         capital_gain=deferred_gain,
         gross_gain=deferred_gain if deferred_gain.amount > 0 else _zero_like(deferred_gain),
         gross_loss=-deferred_gain if deferred_gain.amount < 0 else _zero_like(deferred_gain),
@@ -442,7 +497,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
         unit_buy_price=None,
         buy_consideration=market_value,
         buy_brokerage=_zero_like(market_value),
-        cost_base_adjustments=_zero_like(market_value),
+        cost_base_adjustments=later_adjustments,
         cost_base=post_cost_base,
         capital_gain=post_gain,
         gross_gain=post_gain if post_gain.amount > 0 else _zero_like(post_gain),
@@ -520,7 +575,8 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
 
     def attributed(amount: Money, status: str, method: str, discount_percentage: Decimal) -> None:
         disregarded, reason = tap_module.disregard_attribution(
-            account, status, event_date, declared=declared)
+            account, status, event_date, declared=declared,
+            mit_withheld=statement.gain_subject_to_mit_withholding)
         events.append(CGTEvent(
             **common,
             capital_gain=amount,

@@ -104,20 +104,34 @@ def _spend(pool: Decimal, gains: list[tuple[Decimal, Decimal]]) -> tuple[list[De
     return applied, pool
 
 
-def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero: Money) -> Money:
+def _fiscal_year(account: 'Account', fiscal_year: 'FiscalYearRef') -> 'FiscalYear | None':
+    """`fiscal_year` as a FiscalYear, looked up by name within the account's fiscal year type.
+
+    By name alone, another portfolio's year of the same name could be matched, with its own
+    start and end dates.
+    """
+    from share_dinkum_app.models import FiscalYear
+
+    if fiscal_year is None or isinstance(fiscal_year, FiscalYear):
+        return fiscal_year
+    return FiscalYear.objects.filter(
+        fiscal_year_type=account.fiscal_year_type, name=str(fiscal_year)).first()
+
+
+def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero: Money,
+                          every_year: list[events_module.CGTEvent] | None = None) -> Money:
     """Carried-forward losses still available to `fiscal_year` (every recorded loss if None).
 
     A recorded loss becomes available the year after it was made, less whatever the years
     in between used. Each of those years is built in turn with the pool as it then stood,
-    so a loss applied once is not applied again.
+    so a loss applied once is not applied again. Those builds only need the amount applied,
+    so they reuse `every_year` and skip the warnings.
     """
     from share_dinkum_app.models import CapitalLossCarryForward, FiscalYear
 
     rows = CapitalLossCarryForward.objects.filter(account=account, is_active=True)
 
-    year: Any = fiscal_year
-    if year is not None and not hasattr(year, 'start_year'):
-        year = FiscalYear.objects.filter(name=str(year)).first()
+    year = _fiscal_year(account, fiscal_year)
     if year is None:
         return cast(Money, sum((row.amount for row in rows), zero))
 
@@ -140,17 +154,22 @@ def _carried_forward_into(account: 'Account', fiscal_year: 'FiscalYearRef', zero
     for between in years_between:
         while pending and pending[0].fiscal_year.start_year < between.start_year:
             pool += pending.pop(0).amount
-        pool -= build(account, between, prior_year_losses=pool).prior_year_losses_applied
+        pool -= build(account, between, prior_year_losses=pool, every_year=every_year,
+                      with_warnings=False).prior_year_losses_applied
 
     for row in pending:
         pool += row.amount
     return pool
 
 
-def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: Money | None = None) -> Schedule:
+def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: Money | None = None,
+          every_year: list[events_module.CGTEvent] | None = None,
+          with_warnings: bool = True) -> Schedule:
     """Build the Schedule for one fiscal year.
 
     `prior_year_losses` overrides the total read from `CapitalLossCarryForward`.
+    `every_year` is every year's events if the caller already has them, and `with_warnings`
+    False leaves the warnings empty, for a caller that only wants the figures.
     """
     currency = account.currency
     zero = _zero(currency)
@@ -158,7 +177,8 @@ def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: M
     # Every year's events, since the warnings look back at earlier years. Narrowing to one
     # year saves nothing: `all_events` works every year out before it filters.
     year_name = cast('str | None', getattr(fiscal_year, 'name', fiscal_year))
-    every_year = events_module.all_events(account)
+    if every_year is None:
+        every_year = events_module.all_events(account)
     all_events = [e for e in every_year if year_name is None or e.fiscal_year == year_name]
 
     # s855-10 disregards a foreign resident's capital loss on non-TAP just as it disregards
@@ -184,7 +204,7 @@ def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: M
 
     current_pool = getattr(gross_losses, 'amount', Decimal('0'))
     if prior_year_losses is None:
-        prior_year_losses = _carried_forward_into(account, fiscal_year, zero)
+        prior_year_losses = _carried_forward_into(account, fiscal_year, zero, every_year)
     prior_pool = getattr(prior_year_losses, 'amount', Decimal('0'))
 
     lines: list[ScheduleLine] = []
@@ -243,23 +263,20 @@ def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: M
         # s119-5: the gains remaining after step 6. The Division 30 and 31 deductions that
         # reduce it are not portfolio data, so this is the base and not the final figure.
         minimum_tax_capital_gain_base=Money(total_net, currency),
-        warnings=_warnings(account, live, all_events, year_name, every_year=every_year),
+        warnings=(_warnings(account, live, all_events, year_name, every_year=every_year)
+                  if with_warnings else []),
     )
 
 
-def _year_still_running(fiscal_year: 'FiscalYearRef') -> date | None:
+def _year_still_running(account: 'Account', fiscal_year: 'FiscalYearRef') -> date | None:
     """The fiscal year's end date if it has not passed yet, else None (and None for None)."""
-    from share_dinkum_app.models import FiscalYear
-
     if fiscal_year is None:
         # The all-years view, which is a position rather than a return, and is provisional
         # for the same reason if it reaches into the current year. Callers that mean a
         # return always name a year, so there is nothing useful to say here.
         return None
 
-    year: Any = fiscal_year
-    if not hasattr(year, 'start_year'):
-        year = FiscalYear.objects.filter(name=str(year)).first()
+    year = _fiscal_year(account, fiscal_year)
     if year is None:
         return None
 
@@ -325,7 +342,7 @@ def _unrecorded_losses(account: 'Account', every_year: list[events_module.CGTEve
 
     if year_name is None:
         return []
-    year = FiscalYear.objects.filter(name=str(year_name)).first()
+    year = _fiscal_year(account, year_name)
     if year is None:
         return []
 
@@ -367,7 +384,7 @@ def _warnings(account: 'Account', live_events: list[events_module.CGTEvent],
     # First, because it qualifies everything below it. The other warnings say a figure may
     # be wrong; this one says the year is not over, so the figure is not yet the answer to
     # anything.
-    still_running = _year_still_running(year_name)
+    still_running = _year_still_running(account, year_name)
     if still_running:
         warnings.append(
             f'The {year_name} fiscal year has not ended -- it runs to '

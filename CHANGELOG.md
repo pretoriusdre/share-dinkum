@@ -4,7 +4,60 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
-## 0.3.0
+## 0.4.0 - 2026-10-04
+
+A minor release focused on documentation, improved sample data, ease of importing, and reporting.
+Support for the 2027 CGT changes was previously added in 0.3.0.
+
+### Added
+
+- **Australian income report.** A dashboard button exports dividends and trust income by return
+  label (items 11, 13, 20) for every year, from each fund's annual statements. Income while a foreign
+  resident is listed separately with the tax withheld; a year is a draft until statements are in and
+  residency is declared.
+- Annual statements gain a franking credit line (label 13Q).
+- **Gain subject to MIT withholding** on annual statements. Tick it where you were a foreign
+  resident and the fund withheld MIT withholding tax on the taxable Australian property part of a
+  gain: the gain is then left out of the CGT report, and shown as disregarded in the Events sheet.
+- Full backup also writes an Excel export of each portfolio into the backup folder.
+- The import template now has optional tables for residency periods, instrument valuations, capital
+  loss carry-forwards and managed fund annual statements (with their components). They are marked
+  optional on the index sheet and can be left empty or entered in the app later.
+- `uv run dev make_fake_data` rebuilds the sample file as a fake 10-year portfolio: monthly core ETF
+  buys, USD satellites, small holdings, fully and partly sold positions, dividends and
+  distributions from real per-share history, and annual statement data.
+- `data_import.ipynb` portfolios accept `taxpayer_type` and `tax_settings_reviewed`, so a portfolio
+  can start without the undeclared tax settings warning.
+- Every column header in an export and the import template has a note on what the column is, whether
+  it is required, and what a blank means.
+- Columns of the import template that take a fixed set of values (sell strategy, dividend type,
+  residency status, currency, and yes/no columns such as `i1_election_made`) now have a dropdown in Excel.
+
+### Changed
+
+- Loading a file now strips spaces around text cells, reads numeric stock codes
+  (as on the Hong Kong exchange) as text, and refuses a table or sheet claiming more than 2,000,000 cells.
+- Cost base adjustments after 1 July 2027 are indexed from the quarter they are made. Whether
+  increases are indexed at all is still unclear in the current legislation, and could change in
+  future releases.
+
+### Fixed
+
+- A blank cell in a yes/no import column that has a default (such as `is_exchange_listed`) failed the
+  load with a NOT NULL error. It now takes the default.
+- Fiscal year names are looked up within the portfolio's own fiscal year type, so another portfolio's
+  year of the same name cannot be matched by mistake.
+- Trades dated before an applied cost base adjustment are now refused. Delete the adjustment, add the
+  trades, and apply it again.
+- The dashboard now warns about a cost base adjustment for a year the instrument wasn't held.
+- Trades with brokerage in a different currency from the price (such as AUD brokerage on a USD trade)
+  can now be saved. Each amount is converted at its own currency's rate.
+- A dividend's company tax of 100% or more is now refused.
+- A blank `lookup_legacy_*` cell, such as an annual statement with no cost base adjustment, failed
+  the load looking for a record called "nan".
+- Fix slow performance issue on CGT report.
+
+## 0.3.0 - 2026-09-30
 
 ### Added
 
@@ -187,9 +240,9 @@ To upgrade, stop the server and run `uv run update`.
 
 - **An offline update check is not retried for an hour**, rather than on every dashboard load.
 
-## 0.2.0
+## 0.2.0 - 2026-08-28
 
-Version 0.2.0 is the start of formal version tagging, although the tool has been under development for quite some time prior to this point.
+Version 0.2.0 is the start of formal version tagging, although the tool has been under development since July 2025.
 
 ### Added
 

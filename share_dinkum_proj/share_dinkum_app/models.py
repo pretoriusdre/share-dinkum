@@ -65,12 +65,21 @@ def validate_positive(value: Any) -> None:
         raise ValidationError(f'This must be more than zero, not {value}.')
 
 
+def validate_company_tax_rate(value: Any) -> None:
+    """From 0 up to but not including 100. Franking credits divide by 1 less the rate."""
+    if value is not None and not 0 <= value < 100:
+        raise ValidationError(
+            f'A company tax rate must be at least 0 and less than 100, not {value}.')
+
+
 
 
 class AppUser(AbstractUser):
     MODEL_DESCRIPTION = 'User accounts registered in the application.'
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of the user.')
+    default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True,
+        help_text='The portfolio shown first after signing in.')
 
     @property
     def visible_account(self) -> 'Account | None':
@@ -91,11 +100,16 @@ class AppUser(AbstractUser):
         super().save(*args, **kwargs)
 
 class FiscalYearType(models.Model):
-    MODEL_DESCRIPTION = 'A system table used to define configuration for the financial year, such as its start day and month.'
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    description = models.CharField(max_length=40, default='Australian Tax Year', unique=True)
-    start_month = models.IntegerField(default=7) # July
-    start_day = models.IntegerField(default=1) # 1st (Australia)
+    MODEL_DESCRIPTION = 'A system table used to define configuration for the financial year.'
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of this fiscal year pattern.')
+    description = models.CharField(max_length=40, default='Australian Tax Year', unique=True,
+        help_text='Name of the fiscal year pattern, such as Australian Tax Year.')
+    start_month = models.IntegerField(default=7,
+        help_text='Month the fiscal year starts, 1 to 12. July (7) for the Australian tax '
+                  'year.') # July
+    start_day = models.IntegerField(default=1,
+        help_text='Day of the month the fiscal year starts. 1 for the Australian tax year.') # 1st (Australia)
 
     def classify_date(self, input_date: Date) -> tuple['FiscalYear', bool]:
         """Get or create the FiscalYear containing `input_date`. Returns `(fiscal_year, created)`."""
@@ -134,12 +148,16 @@ class FiscalYear(models.Model):
             models.UniqueConstraint(fields=['fiscal_year_type', 'start_year'], name='fiscal_year_keys')
         ]
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of this fiscal year.')
 
-    fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.CASCADE)
-    start_year = models.IntegerField(editable=False)
+    fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.CASCADE,
+        help_text='The fiscal year pattern this year belongs to.')
+    start_year = models.IntegerField(editable=False,
+        help_text='Calendar year the fiscal year starts in. FY2023/24 starts in 2023.')
 
-    name = models.CharField(max_length=9, null=True, blank=True, editable=False)
+    name = models.CharField(max_length=9, null=True, blank=True, editable=False,
+        help_text='Display name, such as FY2023/24. Set by the app; do not edit.')
 
     def __str__(self) -> str:
         return self.name or ''
@@ -179,14 +197,25 @@ class Account(models.Model):
             models.UniqueConstraint(fields=['owner', 'description'], name='account_keys')
         ]
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    description = models.CharField(max_length=40)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    owner = models.ForeignKey(AppUser, on_delete=models.PROTECT)
-    fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT)
-    update_price_history = models.BooleanField(default=False)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of the portfolio.')
+    description = models.CharField(max_length=40,
+        help_text='Name of the portfolio, as shown in the app. Unique for each owner.')
+    created_at = models.DateTimeField(auto_now_add=True,
+        help_text='When the portfolio was created.')
+    updated_at = models.DateTimeField(auto_now=True,
+        help_text='When the portfolio was last changed.')
+    currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES,
+        help_text='Base currency, such as AUD. Foreign holdings and income are converted to '
+                  'it.')
+    owner = models.ForeignKey(AppUser, on_delete=models.PROTECT,
+        help_text='The user who owns the portfolio.')
+    fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT,
+        help_text='The fiscal year pattern reports use. The Australian Tax Year runs July '
+                  'to June.')
+    update_price_history = models.BooleanField(default=False,
+        help_text='Whether the app downloads price and exchange rate history for this '
+                  'portfolio.')
 
 
     #: Sets the CGT discount: half for an individual or trust, a third for a complying super
@@ -196,7 +225,9 @@ class Account(models.Model):
         help_text='Who owns this portfolio for tax purposes.')
 
     #: When set, silences the dashboard's tax settings warning.
-    tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
+    tax_settings_reviewed_at = models.DateTimeField(null=True, blank=True, editable=False,
+        help_text='When the tax settings were confirmed. Once set, the dashboard stops '
+                  'warning that they are undeclared.')
 
     #: Whether disposals from 1 July 2027 are worked out under the 2027 regime. Earlier
     #: disposals are unaffected.
@@ -208,7 +239,9 @@ class Account(models.Model):
     def __str__(self) -> str:
         return f'{self.description} | {self.currency}'
 
-    calculated_portfolio_value_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, default_currency=DEFAULT_CURRENCY)
+    calculated_portfolio_value_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, default_currency=DEFAULT_CURRENCY,
+        help_text='Value of everything currently held, in the portfolio currency. Set by '
+                  'the app; do not edit.')
 
     @safe_property
     def portfolio_value_converted(self) -> Money:
@@ -322,14 +355,26 @@ class BaseModel(models.Model):
         abstract = True
         ordering = ['id'] 
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False)
-    description = models.CharField(max_length=255, null=True, blank=True)
-    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=True)
-    created_at = models.DateTimeField(auto_now_add=True, editable=False)
-    updated_at = models.DateTimeField(auto_now=True, editable=False)
-    is_active = models.BooleanField(default=True, editable=False)
-    notes = models.TextField(null=True, blank=True)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier. Exports carry it so a file can be restored; leave it '
+                  'out of an import template.')
+    legacy_id = models.CharField(max_length=36, null=True, blank=True, editable=False,
+        help_text='Your own reference for this row, such as B001. Rows in other tables '
+                  'refer to it, and loading the file again matches on it, so keep it unique '
+                  'within the table.')
+    description = models.CharField(max_length=255, null=True, blank=True,
+        help_text='Short description of the record.')
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=True,
+        help_text='The portfolio this record belongs to.')
+    created_at = models.DateTimeField(auto_now_add=True, editable=False,
+        help_text='When the record was created.')
+    updated_at = models.DateTimeField(auto_now=True, editable=False,
+        help_text='When the record was last changed.')
+    is_active = models.BooleanField(default=True, editable=False,
+        help_text='False once the record has been replaced or deactivated, such as a parcel '
+                  'split by a sale. Inactive records are kept for the history.')
+    notes = models.TextField(null=True, blank=True,
+        help_text='Free text notes about the record.')
 
     @safe_property
     def associated_logs(self) -> str:
@@ -442,11 +487,13 @@ class BaseModel(models.Model):
 
 class LogEntry(BaseModel):
     MODEL_DESCRIPTION = 'Log entries. Key events are recorded here.'
-    event = models.CharField(max_length=255)
+    event = models.CharField(max_length=255,
+        help_text='What happened, in words.')
     notes = None # Don't want notes on logs
     # Generic Foreign Key fields
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs', editable=False)
-    object_id = models.UUIDField()
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name='logs', editable=False,
+        help_text='The kind of record the event is about.')
+    object_id = models.UUIDField(help_text='Identifier of the record the event is about.')
     content_object = GenericForeignKey('content_type', 'object_id')
 
     def __str__(self) -> str:
@@ -459,13 +506,19 @@ class AbstractExchangeRate(models.Model): # Not using BaseModel as doesn't need 
     class Meta:
         abstract = True
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
-    updated_at = models.DateTimeField(auto_now=True, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of the rate.')
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False,
+        help_text='The portfolio the rate is stored for.')
+    updated_at = models.DateTimeField(auto_now=True, editable=False,
+        help_text='When the rate was last changed.')
 
-    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1.0'))
+    convert_to = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES,
+        help_text='Currency converted into, such as AUD.')
+    convert_from = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES,
+        help_text='Currency converted from, such as USD.')
+    exchange_rate_multiplier = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1.0'),
+        help_text='Amount of the "to" currency for one unit of the "from" currency.')
 
     def apply(self, money: Money) -> Money:
         assert str(money.currency) == str(self.convert_from), (
@@ -579,13 +632,17 @@ class ExchangeRate(AbstractExchangeRate):
             models.Index(fields=['account', 'convert_from', 'convert_to', 'date'], name='exchange_rate_idx')
         ]
     
-    date = models.DateField()
-    is_continuous_history = models.BooleanField(default=False, editable=False)
+    date = models.DateField(help_text='Day the rate applies to.')
+    is_continuous_history = models.BooleanField(default=False, editable=False,
+        help_text='True when the rate came from a continuous run of daily history. Set by '
+                  'the app; do not edit.')
 
     #: The rate could not be fetched, so this one stands in: the nearest known rate, or 1.0
     #: if there was none. Fetched again the next time it is asked for, and replaced by the
     #: history refresh, instead of being trusted for good.
-    is_placeholder = models.BooleanField(default=False, editable=False)
+    is_placeholder = models.BooleanField(default=False, editable=False,
+        help_text='True when no quote existed for the day and the last earlier rate was '
+                  'used instead. Set by the app; do not edit.')
 
     @classmethod
     def get_or_create(cls, account: 'Account', convert_from: str, convert_to: str,
@@ -773,9 +830,12 @@ class Market(BaseModel):
             models.UniqueConstraint(fields=['account', 'code'], name='market_keys')
         ]
 
-    code = models.CharField(max_length=16)
+    code = models.CharField(max_length=16,
+        help_text='Short code of the market, such as ASX or NASDAQ.')
 
-    suffix = models.CharField(max_length=16, null=True, blank=True)
+    suffix = models.CharField(max_length=16, null=True, blank=True,
+        help_text="Suffix the price provider adds to this market's tickers, such as .AX. "
+                  'Blank if none.')
 
     # Where the market is, which decides whether the assets listed on it count as
     # "Australian listed" on the CGT schedule. Left blank rather than assumed; the country
@@ -805,11 +865,19 @@ class Instrument(BaseModel):
     # other a unit trust, and they belong in different boxes on the form.
 
 
-    name = models.CharField(max_length=16)
-    description = models.CharField(max_length=255, blank=True)
-    currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES)
-    market = models.ForeignKey(Market, on_delete=models.PROTECT)
-    current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True)
+    name = models.CharField(max_length=16,
+        help_text='Ticker code without the market suffix, such as BHP or VGS. Unique within '
+                  'a portfolio.')
+    description = models.CharField(max_length=255, blank=True,
+        help_text='Full name of the security.')
+    currency = CurrencyField(default=DEFAULT_CURRENCY, choices=CURRENCY_CHOICES,
+        help_text='Currency the instrument trades in, such as AUD or USD.')
+    market = models.ForeignKey(Market, on_delete=models.PROTECT,
+        help_text='The market the instrument is listed on. Enter its code as listed in the '
+                  'Market table.')
+    current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True,
+        help_text='Latest price per unit, refreshed from market data. Set by the app; do '
+                  'not edit.')
 
     legal_form = models.CharField(
         max_length=13, choices=LegalForm.choices, default=LegalForm.UNKNOWN,
@@ -820,6 +888,8 @@ class Instrument(BaseModel):
     legal_form_source = models.CharField(
         max_length=9, choices=LegalFormSource.choices, default=LegalFormSource.DEFAULT,
         editable=False,
+        help_text='Where the instrument\'s legal form came from. Only "entered by the user" '
+                  'counts as confirmed. Set by the app; do not edit.',
     )
     #: Overrides the derived schedule category. Limited to the schedule's own categories.
     cgt_asset_category_override = models.CharField(
@@ -881,7 +951,9 @@ class Instrument(BaseModel):
 
         super().save(*args, **kwargs)
 
-    calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False)
+    calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False,
+        help_text='Units currently held, across all unsold parcels. Set by the app; do not '
+                  'edit.')
     
 
     @safe_property
@@ -905,7 +977,9 @@ class Instrument(BaseModel):
             total=Sum(F('parcel_quantity') - F('allocated'))
         )['total'] or Decimal('0')
 
-    calculated_value_held =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_value_held =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text="Value of the units currently held, in the instrument's currency. Set by "
+                  'the app; do not edit.')
     
     @safe_property
     def value_held(self) -> Money:
@@ -918,7 +992,9 @@ class Instrument(BaseModel):
                 value_held = Money(0, self.currency)
         return value_held
 
-    calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_value_held_converted =  MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Value of the units currently held, in the portfolio currency. Set by the '
+                  'app; do not edit.')
     
     @safe_property
     def value_held_converted(self) -> Money | None:
@@ -1079,16 +1155,27 @@ class InstrumentPriceHistory(models.Model):
         ]
         ordering = ['date'] 
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
-    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False)
-    instrument = models.ForeignKey(Instrument, on_delete=models.CASCADE,  editable=False)
-    date = models.DateField(editable=False)
-    open = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
-    high = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
-    low = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
-    close = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
-    volume = models.BigIntegerField(editable=False)
-    stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of the price row.')
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, editable=False,
+        help_text='The portfolio the price is stored for.')
+    instrument = models.ForeignKey(Instrument, on_delete=models.CASCADE,  editable=False,
+        help_text='The instrument priced.')
+    date = models.DateField(editable=False,
+        help_text='Trading day the prices are for.')
+    open = models.DecimalField(max_digits=16, decimal_places=6, editable=False,
+        help_text='Opening price, as traded that day (not adjusted for later splits).')
+    high = models.DecimalField(max_digits=16, decimal_places=6, editable=False,
+        help_text='Highest price, as traded that day (not adjusted for later splits).')
+    low = models.DecimalField(max_digits=16, decimal_places=6, editable=False,
+        help_text='Lowest price, as traded that day (not adjusted for later splits).')
+    close = models.DecimalField(max_digits=16, decimal_places=6, editable=False,
+        help_text='Closing price, as traded that day (not adjusted for later splits).')
+    volume = models.BigIntegerField(editable=False,
+        help_text='Number of units traded that day.')
+    stock_splits = models.DecimalField(max_digits=16, decimal_places=6, editable=False,
+        help_text='Split ratio taking effect that day, such as 2 for a 2-for-1 split. 0 if '
+                  'none.')
 
 
     def get_absolute_url(self) -> str:
@@ -1104,53 +1191,97 @@ class Trade(BaseModel):
     class Meta:
         abstract = True
 
-    description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
-    instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
-    date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
-    unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
-    total_brokerage = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
-    exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
-    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
+    description = models.CharField(max_length=255, null=True, blank=True, editable=False,
+        help_text='Summary of the trade. Set by the app; do not edit.') # Setting this automatically
+    instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT,
+        help_text='The instrument traded. Enter its name as listed in the Instrument table.')
+    date = models.DateField(help_text='Date of the trade.')
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive],
+        help_text='Number of units traded. Must be positive.')
+    unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='Price per unit, in the currency named beside it.')
+    total_brokerage = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='Brokerage and fees for the whole trade, not per unit.')
+    exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True,
+        help_text='Rate to the portfolio currency on the trade date. Looked up for foreign '
+                  'currency trades.')
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to a supporting document, such as a contract note. The file is '
+                  'copied into the app; a path that does not exist is ignored.')
 
     # Calculated fields
-    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+        help_text='Fiscal year the trade date falls in. Set by the app; do not edit.')
     
     @safe_property
     def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.date)
         return fiscal_year
     
-    calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_total_brokerage_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Total brokerage in the portfolio currency. Set by the app; do not edit.')
     
+    def rate_for(self, currency: str) -> 'ExchangeRate | None':
+        """The rate converting `currency` to the portfolio currency on the trade date.
+
+        None for the portfolio currency itself. The attached rate covers the currency of the
+        price (or of the brokerage, if the price is zero). Brokerage charged in another
+        currency, such as USD brokerage on a GBP trade, is converted at that currency's own
+        rate for the day: a stored one if there is one, as this is read by every report,
+        otherwise fetched and stored. `recalculate.after_rate_change` finds trades converted
+        at it this way, as they are not linked to it.
+        """
+        account_currency = str(self.account.currency)
+        if currency == account_currency:
+            return None
+        rate = self.exchange_rate
+        if rate is not None and str(rate.convert_from) == currency:
+            return rate
+        stored = ExchangeRate.objects.filter(
+            account=self.account, convert_from=currency, convert_to=account_currency,
+            date=self.date).first()
+        return stored or ExchangeRate.get_or_create(
+            account=self.account, convert_from=currency, convert_to=account_currency,
+            exchange_date=self.date)
+
+    def convert(self, money: Money) -> Money:
+        """`money` in the portfolio currency, at its own currency's rate on the trade date."""
+        if not money.amount:
+            # No rate is needed for nothing, and an unused brokerage column keeps its default
+            # currency whatever the trade is in.
+            return Money(Decimal('0'), str(self.account.currency))
+        rate = self.rate_for(str(money.currency))
+        return money if rate is None else rate.apply(money)
+
     @safe_property
     def total_brokerage_converted(self) -> Money:
-        total_brokerage_converted =  self.total_brokerage
-        if self.exchange_rate:
-            total_brokerage_converted = self.exchange_rate.apply(total_brokerage_converted)
-        return total_brokerage_converted
+        return self.convert(self.total_brokerage)
     
-    calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_unit_brokerage_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Brokerage per unit in the portfolio currency. Set by the app; do not '
+                  'edit.')
     
     @safe_property
     def unit_brokerage_converted(self) -> Money:
-        unit_brokerage_converted =  self.total_brokerage / self.quantity
-        if self.exchange_rate:
-            unit_brokerage_converted = self.exchange_rate.apply(unit_brokerage_converted)
-        return unit_brokerage_converted
+        return self.convert(self.total_brokerage / self.quantity)
     
-    calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_unit_price_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Price per unit in the portfolio currency. Set by the app; do not edit.')
     
     @safe_property
     def unit_price_converted(self) -> Money:
-        logger.debug('Calculating unit price converted on %s', self)
-        unit_price_converted =  self.unit_price
-        if self.exchange_rate:
-            unit_price_converted = self.exchange_rate.apply(unit_price_converted)
-            logger.debug('Converted unit price is %s', unit_price_converted)
-        else:
-            logger.debug('No exchange rate available for %s', self)
-        return unit_price_converted
+        return self.convert(self.unit_price)
+
+    @classmethod
+    def converted_at(cls, rate: 'ExchangeRate') -> 'QuerySet[Any]':
+        """Trades with an amount converted at `rate`: attached to it, or with a second
+        currency it covers on its date."""
+        if str(rate.convert_to) != str(rate.account.currency):
+            return cls._default_manager.filter(exchange_rate=rate)
+        on_its_date = Q(account=rate.account, date=rate.date) & (
+            Q(unit_price_currency=rate.convert_from)
+            | Q(total_brokerage_currency=rate.convert_from))
+        return cls._default_manager.filter(Q(exchange_rate=rate) | on_its_date).distinct()
 
     def __str__(self) -> str:
         return f'{self.description}'
@@ -1192,9 +1323,12 @@ class Trade(BaseModel):
 class Buy(Trade):
     MODEL_DESCRIPTION = 'Purchases of share parcels.'
 
-    _creation_handled = models.BooleanField(default=False, editable=False)
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already created the parcel for this buy. Set by the '
+                  'app; do not edit.')
 
-    calculated_related_parcels = models.TextField(null=True, blank=True, editable=False)
+    calculated_related_parcels = models.TextField(null=True, blank=True, editable=False,
+        help_text='The parcels created from this buy, as text. Set by the app; do not edit.')
     
     @safe_property
     def related_parcels(self) -> str:
@@ -1211,41 +1345,60 @@ class Buy(Trade):
             account_id=self.account_id, instrument_id=self.instrument_id,
             _creation_handled=True, date__gt=self.date,
         ).order_by('date').first()
-        if split is None:
-            return None
-        return (
-            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
-            f'this buy is dated before it, so it would not be split with the rest. Delete the '
-            f'split, enter this buy, then enter the split again.')
+        if split is not None:
+            return (
+                f'A split of {self.instrument.name} on {split.date} has already been applied, '
+                f'and this buy is dated before it, so it would not be split with the rest. '
+                f'Delete the split, enter this buy, then enter the split again.')
+        # An adjustment is spread over the parcels held in its year once, when entered. A
+        # buy held on any day of that year, the year end included, would get none of it.
+        adjustment = CostBaseAdjustment.spread_on_or_after(self, self.date)
+        if adjustment is not None:
+            return (
+                f'A cost base adjustment of {self.instrument.name} for the year ending '
+                f'{adjustment.financial_year_end_date} has already been spread over the parcels '
+                f'held, and this buy is dated before that year end, so it would get none of it. '
+                f'Delete the adjustment, enter this buy, then enter the adjustment again.')
+        return None
 
 
 class Sell(Trade):
     MODEL_DESCRIPTION = 'Sales of shares.'
-    _creation_handled = models.BooleanField(default=False, editable=False)
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already allocated this sale to parcels. Set by the '
+                  'app; do not edit.')
 
     
     strategy = models.CharField(
         max_length=7,
         choices=SellStrategy.choices,
         default=SellStrategy.MIN_CGT,
+        help_text='How the sale picks the parcels it consumes. MANUAL means you give the '
+                  'allocations yourself.',
     )
 
     STRUCTURAL_FIELDS: tuple[str, ...] = Trade.STRUCTURAL_FIELDS + ('strategy',)
 
-    calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Quantity times unit price less brokerage, in the portfolio currency. Set '
+                  'by the app; do not edit.')
     
     @safe_property
     def proceeds(self) -> Money:
         proceeds = (self.quantity * self.unit_price_converted) - self.total_brokerage_converted
         return proceeds
     
-    calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Proceeds per unit, in the portfolio currency. Set by the app; do not '
+                  'edit.')
     
     @safe_property
     def unit_proceeds(self) -> Money:
         return self.proceeds / self.quantity
 
-    calculated_unallocated_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_unallocated_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Units sold that no parcel has been allocated to yet. Set by the app; do '
+                  'not edit.')
     
     @safe_property
     def unallocated_quantity(self) -> Decimal:
@@ -1278,42 +1431,67 @@ class Sell(Trade):
             account_id=self.account_id, instrument_id=self.instrument_id,
             _creation_handled=True, date__gt=self.date, affected_parcels__isnull=False,
         ).order_by('date').first()
-        if split is None:
-            return None
-        return (
-            f'A split of {self.instrument.name} on {split.date} has already been applied, and '
-            f'this sale is dated before it, so it would be matched against the split parcels. '
-            f'Delete the split, enter this sale, then enter the split again.')
+        if split is not None:
+            return (
+                f'A split of {self.instrument.name} on {split.date} has already been applied, '
+                f'and this sale is dated before it, so it would be matched against the split '
+                f'parcels. Delete the split, enter this sale, then enter the split again.')
+        # A sale shortens the days its units were held, which weights the spread of any
+        # adjustment for a year it falls before the end of. A sale on the year end changes
+        # no weight, since the last day still counts as held.
+        adjustment = CostBaseAdjustment.spread_on_or_after(
+            self, self.date + timedelta(days=1), allocated=True)
+        if adjustment is not None:
+            return (
+                f'A cost base adjustment of {self.instrument.name} for the year ending '
+                f'{adjustment.financial_year_end_date} has already been spread over the parcels '
+                f'held, and this sale is dated before that year end, so the units sold would '
+                f'keep a share worked out as if still held. Delete the adjustment, enter this '
+                f'sale, then enter the adjustment again.')
+        return None
 
 
 class Parcel(BaseModel):
     MODEL_DESCRIPTION = 'Collections of shares with the same unit properties. Can be split into other parcels.'
-    description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
+    description = models.CharField(max_length=255, null=True, blank=True, editable=False,
+        help_text='Summary of the parcel. Set by the app; do not edit.') # Setting this automatically
 
-    buy = models.ForeignKey(Buy, related_name='parcels', on_delete=models.CASCADE, editable=False)
+    buy = models.ForeignKey(Buy, related_name='parcels', on_delete=models.CASCADE, editable=False,
+        help_text='The buy this parcel came from.')
     parent_parcel = models.ForeignKey(
         'self',
         related_name='children',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        editable=False
+        editable=False,
+        help_text='The parcel this one was split from, by a sale or a share split. Blank '
+                  'for the first.'
         )
-    parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False)
+    parcel_quantity = models.DecimalField(max_digits=16, decimal_places=4, editable=False,
+        help_text='Units in the parcel, in the units in force today.')
     #: Ten places, since a consolidation's ratio rarely terminates: at four, 1-for-3 stored
     #: 0.3333 and every unit price divided by it came out 0.01% high.
-    cumulative_split_multiplier = models.DecimalField(max_digits=22, decimal_places=10, editable=False, default=Decimal('1.0'))
-    activation_date = models.DateField(null=True, editable=False)
-    deactivation_date = models.DateField(null=True, editable=False)
-    sale_date = models.DateField(null=True, editable=False)
+    cumulative_split_multiplier = models.DecimalField(max_digits=22, decimal_places=10, editable=False, default=Decimal('1.0'),
+        help_text='Product of every share split applied since the buy. Prices on the buy '
+                  'are divided by it.')
+    activation_date = models.DateField(null=True, editable=False,
+        help_text='Date the parcel came into existence.')
+    deactivation_date = models.DateField(null=True, editable=False,
+        help_text='Date the parcel was replaced by split parcels. Blank while it is '
+                  'current.')
+    sale_date = models.DateField(null=True, editable=False,
+        help_text='Date the parcel was sold. Blank while held.')
 
-    calculated_instrument_name = models.CharField(max_length=16, null=True, blank=True, editable=False)
+    calculated_instrument_name = models.CharField(max_length=16, null=True, blank=True, editable=False,
+        help_text='Name of the instrument bought. Set by the app; do not edit.')
     
     @safe_property
     def instrument_name(self) -> str | None:
         return self.buy.instrument.name if self.buy and self.buy.instrument else None
 
-    calculated_remaining_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_remaining_quantity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='Units not yet sold. Set by the app; do not edit.')
 
     @safe_property
     def remaining_quantity(self) -> Decimal:
@@ -1324,7 +1502,8 @@ class Parcel(BaseModel):
         sold_quantity = self.sale_allocation.filter(is_active=True).aggregate(total_allocated=Sum('quantity'))['total_allocated'] or 0
         return self.parcel_quantity - sold_quantity
 
-    calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False)
+    calculated_is_sold = models.BooleanField(null=True, blank=True, editable=False,
+        help_text='True once every unit has been sold. Set by the app; do not edit.')
     
     @safe_property
     def is_sold(self) -> bool:
@@ -1336,7 +1515,9 @@ class Parcel(BaseModel):
         adjusted_buy_price = self.buy.unit_price_converted / self.cumulative_split_multiplier
         return adjusted_buy_price
 
-    calculated_adjusted_unit_brokerage = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_adjusted_unit_brokerage = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Buy brokerage per unit after splits, in the portfolio currency. Set by '
+                  'the app; do not edit.')
     
     @safe_property
     def adjusted_unit_brokerage(self) -> Money:
@@ -1359,7 +1540,9 @@ class Parcel(BaseModel):
         total_adjustment = Money(total_adjustment, self.buy.account.currency)  # TODO assumes all in base currency
         return total_adjustment
     
-    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Price, brokerage and cost base adjustments for the whole parcel, in the '
+                  'portfolio currency. Set by the app; do not edit.')
     
     @safe_property
     def total_cost_base(self) -> Money:
@@ -1375,7 +1558,9 @@ class Parcel(BaseModel):
 
         return total_cost_base
     
-    calculated_unit_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_unit_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Total cost base divided by the units in the parcel. Set by the app; do '
+                  'not edit.')
     
     @safe_property
     def unit_cost_base(self) -> Money:
@@ -1546,36 +1731,47 @@ class Parcel(BaseModel):
 
 class SellAllocation(BaseModel):
     MODEL_DESCRIPTION = 'Allocations of sell events to specific parcels.'
-    description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
+    description = models.CharField(max_length=255, null=True, blank=True, editable=False,
+        help_text='Summary of the allocation. Set by the app; do not edit.') # Setting this automatically
 
-    _creation_handled = models.BooleanField(default=False, editable=False)
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already split the parcel for this allocation. Set by '
+                  'the app; do not edit.')
 
-    parcel = models.ForeignKey(Parcel, related_name='sale_allocation', on_delete=models.PROTECT)
-    sell = models.ForeignKey(Sell, related_name='sale_allocation', on_delete=models.PROTECT)
-    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    parcel = models.ForeignKey(Parcel, related_name='sale_allocation', on_delete=models.PROTECT,
+        help_text='The parcel the units are taken from.')
+    sell = models.ForeignKey(Sell, related_name='sale_allocation', on_delete=models.PROTECT,
+        help_text='The sale the units are allocated to.')
+    quantity = models.DecimalField(max_digits=16, decimal_places=4,
+        help_text='Units taken from the parcel by the sale.')
 
     STRUCTURAL_FIELDS: tuple[str, ...] = ('parcel', 'sell', 'quantity')
 
-    calculated_sale_date = models.DateField(null=True, blank=True, editable=False)
+    calculated_sale_date = models.DateField(null=True, blank=True, editable=False,
+        help_text='Date of the sale. Set by the app; do not edit.')
     
     @safe_property
     def sale_date(self) -> Date:
         return self.sell.date
     
-    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+        help_text='Fiscal year of the sale. Set by the app; do not edit.')
     
     @safe_property
     def fiscal_year(self) -> 'FiscalYear':
         fiscal_year, _ = self.account.fiscal_year_type.classify_date(input_date=self.sale_date)
         return fiscal_year
     
-    calculated_days_held = models.IntegerField(null=True, blank=True, editable=False)
+    calculated_days_held = models.IntegerField(null=True, blank=True, editable=False,
+        help_text='Days from the buy to the sale. Set by the app; do not edit.')
     
     @safe_property
     def days_held(self) -> int:
         return (self.sell.date - self.parcel.buy.date).days
     
-    calculated_total_capital_gain = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_capital_gain = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text="Share of the sale proceeds less the parcel's cost base, in the portfolio "
+                  'currency. Before any CGT discount. Set by the app; do not edit.')
     
     @safe_property
     def total_capital_gain(self) -> Money:
@@ -1651,20 +1847,29 @@ class SellAllocation(BaseModel):
 
 class ShareSplit(BaseModel):
     MODEL_DESCRIPTION = 'Events which transform parcels into new parcels with different cost base and quantity.'
-    instrument = models.ForeignKey(Instrument, related_name='share_split', on_delete=models.PROTECT)
-    quantity_before = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
-    quantity_after = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive])
+    instrument = models.ForeignKey(Instrument, related_name='share_split', on_delete=models.PROTECT,
+        help_text='The instrument that split. Enter its name as listed in the Instrument '
+                  'table.')
+    quantity_before = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive],
+        help_text='Units before the split, in the ratio. For a 1-for-4 split, 1.')
+    quantity_after = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive],
+        help_text='Units after the split, in the ratio. For a 1-for-4 split, 4.')
     date = models.DateField(
         help_text='The ex-date. Trades on it are already in post-split units, so only parcels '
                   'bought before it are split.')
-    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
-    affected_parcels = models.ManyToManyField(Parcel, editable=False)
-    _creation_handled = models.BooleanField(default=False, editable=False)
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to a supporting document. The file is copied into the app.')
+    affected_parcels = models.ManyToManyField(Parcel, editable=False,
+        help_text='The parcels the split was applied to. Set by the app; do not edit.')
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already applied this split to parcels. Set by the '
+                  'app; do not edit.')
 
     STRUCTURAL_FIELDS: tuple[str, ...] = ('instrument', 'date', 'quantity_before', 'quantity_after')
     POSITIVE_FIELDS: tuple[str, ...] = ('quantity_before', 'quantity_after')
 
-    calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_split_multiplier = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Units after divided by units before. Set by the app; do not edit.')
     
     @safe_property
     def split_multiplier(self) -> Decimal:
@@ -1708,7 +1913,9 @@ class ShareSplit(BaseModel):
                 f'splits first.')
         return None
 
-    calculated_affected_parcels = models.TextField(null=True, blank=True, editable=False)
+    calculated_affected_parcels = models.TextField(null=True, blank=True, editable=False,
+        help_text='The parcels the split was applied to, as text. Set by the app; do not '
+                  'edit.')
     
     @safe_property
     def affected_parcel_list(self) -> str:
@@ -1724,14 +1931,24 @@ class ShareSplit(BaseModel):
 
 class CostBaseAdjustment(BaseModel):
     MODEL_DESCRIPTION = 'Cost base adjustments applied to instruments, i.e. AMIT cost base adjustments.'
-    cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
-    instrument = models.ForeignKey(Instrument, related_name='cost_base_adjustment', on_delete=models.PROTECT)
-    financial_year_end_date = models.DateField()
-    exchange_rate = models.ForeignKey(ExchangeRate, related_name='cost_base_adjustment', on_delete=models.PROTECT, blank=True, null=True)
-    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
-    _creation_handled = models.BooleanField(default=False, editable=False)
+    cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='Change to the total cost base for the year, from the annual tax '
+                  'statement. Negative for a decrease.')
+    instrument = models.ForeignKey(Instrument, related_name='cost_base_adjustment', on_delete=models.PROTECT,
+        help_text='The instrument adjusted. Enter its name as listed in the Instrument '
+                  'table.')
+    financial_year_end_date = models.DateField(help_text='The last day of the financial year the statement covers.')
+    exchange_rate = models.ForeignKey(ExchangeRate, related_name='cost_base_adjustment', on_delete=models.PROTECT, blank=True, null=True,
+        help_text='Rate to the portfolio currency, for an adjustment in another currency. '
+                  'Looked up by the app.')
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to the annual tax statement. The file is copied into the app.')
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already spread this over parcels. Set by the app; do '
+                  'not edit.')
 
-    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+        help_text='Fiscal year the adjustment is for. Set by the app; do not edit.')
     
     @safe_property
     def fiscal_year(self) -> 'FiscalYear':
@@ -1743,7 +1960,8 @@ class CostBaseAdjustment(BaseModel):
         # Alias as it is used in the user_directory_path
         return self.financial_year_end_date
     
-    calculated_cost_base_increase_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False)
+    calculated_cost_base_increase_converted = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+        help_text='The adjustment in the portfolio currency. Set by the app; do not edit.')
     
     @safe_property
     def cost_base_increase_converted(self) -> Money:
@@ -1756,12 +1974,32 @@ class CostBaseAdjustment(BaseModel):
         max_length=8,
         choices=AllocationMethod.choices,
         default=AllocationMethod.QTY_HELD,
+        help_text='How the adjustment is spread across parcels. QTY_HELD weights by units '
+                  'and days held.',
     )
 
     #: Spread across parcels once, when it is entered, so none of these can change after.
     STRUCTURAL_FIELDS: tuple[str, ...] = (
         'instrument', 'financial_year_end_date', 'cost_base_increase',
         'cost_base_increase_currency', 'allocation_method')
+
+    @classmethod
+    def spread_on_or_after(cls, trade: 'Trade', day: Date,
+                           allocated: bool = False) -> 'CostBaseAdjustment | None':
+        """The earliest adjustment of `trade`'s instrument already spread by days held,
+        for a year ending on or after `day`, or None.
+
+        With `allocated`, only one that reached a parcel: an adjustment for a year nothing
+        was held changes with a new buy, but not with a new sale.
+        """
+        adjustments = cls.objects.filter(
+            account_id=trade.account_id, instrument_id=trade.instrument_id,
+            allocation_method=AllocationMethod.QTY_HELD, _creation_handled=True,
+            financial_year_end_date__gte=day,
+        )
+        if allocated:
+            adjustments = adjustments.filter(cost_base_adjustment_allocation__isnull=False)
+        return adjustments.order_by('financial_year_end_date').first()
 
     @classmethod
     def with_unconverted_allocations(cls, account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
@@ -1794,11 +2032,18 @@ class CostBaseAdjustment(BaseModel):
 class CostBaseAdjustmentAllocation(BaseModel):
     MODEL_DESCRIPTION = 'Allocations of cost base adjustments to specific parcels.'
 
-    cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY)
-    parcel = models.ForeignKey(Parcel, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT)
-    cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.CASCADE)
-    activation_date = models.DateField(null=True, editable=False)   # not required
-    deactivation_date = models.DateField(null=True, editable=False)
+    cost_base_increase = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+        help_text='The part of the adjustment given to this parcel. Set by the app; do not '
+                  'edit.')
+    parcel = models.ForeignKey(Parcel, related_name='cost_base_adjustment_allocation', on_delete=models.PROTECT,
+        help_text='The parcel the adjustment part was given to.')
+    cost_base_adjustment = models.ForeignKey(CostBaseAdjustment, related_name='cost_base_adjustment_allocation', on_delete=models.CASCADE,
+        help_text='The adjustment this part came from.')
+    activation_date = models.DateField(null=True, editable=False,
+        help_text='Date this allocation took effect. Set by the app; do not edit.')   # not required
+    deactivation_date = models.DateField(null=True, editable=False,
+        help_text='Date this allocation stopped applying. Blank while it does. Set by the '
+                  'app; do not edit.')
 
     def bifurcate(self, target_parcel: Parcel, remainder_parcel: Parcel,
                   date: Date) -> tuple['CostBaseAdjustmentAllocation', 'CostBaseAdjustmentAllocation']:
@@ -1882,16 +2127,26 @@ class Income(BaseModel):
     class Meta:
         abstract = True
 
-    description = models.CharField(max_length=255, null=True, blank=True, editable=False) # Setting this automatically
-    instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT)
+    description = models.CharField(max_length=255, null=True, blank=True, editable=False,
+        help_text='Summary of the payment. Set by the app; do not edit.') # Setting this automatically
+    instrument = models.ForeignKey(Instrument, related_name='%(class)s', on_delete=models.PROTECT,
+        help_text='The instrument that paid. Enter its name as listed in the Instrument '
+                  'table.')
 
-    date = models.DateField()
-    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[MinValueValidator(0)])
-    exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True)
+    date = models.DateField(help_text='Date the payment was received.')
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[MinValueValidator(0)],
+        help_text='Units you were paid on. Normally the units held the day before the '
+                  'ex-date.')
+    exchange_rate = models.ForeignKey(ExchangeRate, related_name='%(class)s', on_delete=models.PROTECT, blank=True, null=True,
+        help_text='Rate to the portfolio currency on the payment date. Looked up for '
+                  'foreign currency payments.')
 
-    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to the payment advice or statement. The file is copied into the '
+                  'app.')
 
-    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+    calculated_fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+        help_text='Fiscal year the payment date falls in. Set by the app; do not edit.')
     
     @safe_property
     def fiscal_year(self) -> 'FiscalYear':
@@ -1914,52 +2169,77 @@ class Dividend(Income):
     MODEL_DESCRIPTION = 'Dividends, including local dividends and foreign dividends.'
 
     dividend_type = models.CharField(
-        max_length=7, choices=DividendType.choices, default=DividendType.LOCAL)
+        max_length=7, choices=DividendType.choices, default=DividendType.LOCAL,
+        help_text='LOCAL for an Australian company, FOREIGN for an overseas one.')
 
-    unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
-    franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    unfranked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Unfranked part of the dividend, per share.')
+    franked_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Franked part of the dividend, per share. Franking credits are worked out '
+                  'from it.')
 
-    local_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
-    foreign_tax_credit = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
-    lic_capital_gain = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    local_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Tax withheld in the country of the payer, for the whole payment.')
+    foreign_tax_credit = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Foreign tax paid that can be claimed as a credit, for the whole payment.')
+    lic_capital_gain = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Capital gain component of a listed investment company dividend, for the '
+                  'whole payment.')
 
     corporate_tax_rate_percentage = models.DecimalField(
         max_digits=5,  # Total digits, including decimal places
         decimal_places=2,  # Number of digits after the decimal
         default=Decimal('30.0'),
+        validators=[validate_company_tax_rate],
         help_text="Enter a percentage value (e.g., 25.00 for 25%)"
     )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        # The validator runs only in a form. An import saves directly, and would otherwise
+        # fail on dividing by zero with nothing to say which row.
+        try:
+            validate_company_tax_rate(self.corporate_tax_rate_percentage)
+        except ValidationError as error:
+            raise ValueError(f'{error.messages[0]} ({self.instrument.name} on {self.date})') from error
+        super().save(*args, **kwargs)
     
     @safe_property
     def company_rate(self) -> Decimal:
         return self.corporate_tax_rate_percentage / 100
 
-    calculated_total_unfranked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_unfranked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Unfranked amount per share times units. Set by the app; do not edit.')
     
     @safe_property
     def total_unfranked_amount(self) -> Money:
         return self.unfranked_amount_per_share * self.quantity
 
-    calculated_total_franked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_franked_amount = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Franked amount per share times units. Set by the app; do not edit.')
     
     @safe_property
     def total_franked_amount(self) -> Money:
         return self.franked_amount_per_share * self.quantity
     
-    calculated_total_franking_credits = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_franking_credits = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Franking credits on the franked amount, at the company tax rate. Set by '
+                  'the app; do not edit.')
     
     @safe_property
     def total_franking_credits(self) -> Money:
         return self.total_franked_amount * self.company_rate / (1 - self.company_rate)
     
-    calculated_total_dividend = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_dividend = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Unfranked plus franked amount for the whole payment. Set by the app; do '
+                  'not edit.')
     
     @safe_property
     def total_dividend(self) -> Money:
         # handle zero amounts in wrong currency
         return add_currencies(self.total_unfranked_amount, self.total_franked_amount)
 
-    calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Total dividend in the portfolio currency. Set by the app; do not edit.')
     
     @safe_property
     def total_dividend_converted(self) -> Money:
@@ -1972,23 +2252,30 @@ class Dividend(Income):
 
 class Distribution(Income):
     MODEL_DESCRIPTION = 'Distributions, such as the income received from ETFs'
-    distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+    distribution_amount_per_share = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Cash distribution per unit, in the currency named beside it.')
 
     # Optional link to the annual statement that explains what this cash was made up of.
     # A payment carries no tax character of its own -- the attribution does, and it is
     # annual, so it is deliberately not broken out onto this row.
     attribution_statement = models.ForeignKey(
         'AttributionStatement', related_name='distributions',
-        null=True, blank=True, on_delete=models.SET_NULL)
-    total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'))
+        null=True, blank=True, on_delete=models.SET_NULL,
+        help_text='The annual tax statement that explains what this cash was made up of. '
+                  'Optional.')
+    total_withholding_tax = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY, default=Decimal('0'),
+        help_text='Tax withheld from the payment, for the whole payment.')
 
-    calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_distribution = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Distribution per unit times units. Set by the app; do not edit.')
     
     @safe_property
     def total_distribution(self) -> Money:
         return self.distribution_amount_per_share * self.quantity
     
-    calculated_total_distribution_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False)
+    calculated_total_distribution_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
+        help_text='Total distribution in the portfolio currency. Set by the app; do not '
+                  'edit.')
     
     @safe_property
     def total_distribution_converted(self) -> Money:
@@ -2001,8 +2288,10 @@ class Distribution(Income):
 class DataExport(BaseModel):
     MODEL_DESCRIPTION = 'Data export events, referencing the associated output file.'
 
-    file = models.FileField(null=True, blank=True, editable=False, upload_to=user_directory_path)
-    account = models.ForeignKey(Account, on_delete=models.PROTECT)
+    file = models.FileField(null=True, blank=True, editable=False, upload_to=user_directory_path,
+        help_text='The exported Excel file. Set by the app; do not edit.')
+    account = models.ForeignKey(Account, on_delete=models.PROTECT,
+        help_text='The portfolio exported.')
     include_price_history = models.BooleanField(default=False, help_text='Include price history in the export?')
 
     def __str__(self) -> str:
@@ -2028,7 +2317,8 @@ class ResidencyPeriod(BaseModel):
         ]
         ordering = ['start_date']
 
-    status = models.CharField(max_length=9, choices=ResidencyStatus.choices)
+    status = models.CharField(max_length=9, choices=ResidencyStatus.choices,
+        help_text='Tax residency status for the period.')
     start_date = models.DateField(help_text='First day of this period.')
     end_date = models.DateField(
         null=True, blank=True, help_text='Last day of this period. Leave blank if ongoing.')
@@ -2131,18 +2421,32 @@ class AttributionStatement(BaseModel):
         ordering = ['financial_year_end_date', 'id']
 
     instrument = models.ForeignKey(
-        Instrument, related_name='attribution_statement', on_delete=models.PROTECT)
-    financial_year_end_date = models.DateField()
-    file = models.FileField(null=True, blank=True, upload_to=user_directory_path)
+        Instrument, related_name='attribution_statement', on_delete=models.PROTECT,
+        help_text='The fund the statement is from. Enter its name as listed in the '
+                  'Instrument table.')
+    financial_year_end_date = models.DateField(help_text='The last day of the financial year the statement covers.')
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to the annual statement. The file is copied into the app.')
 
     #: The cost base adjustment read off the same statement, where one was recorded.
     cost_base_adjustment = models.OneToOneField(
         'CostBaseAdjustment', related_name='attribution_statement',
         null=True, blank=True, on_delete=models.SET_NULL,
+        help_text='The cost base adjustment entered from this same statement. Optional; '
+                  'used to check the two agree.',
     )
 
+    gain_subject_to_mit_withholding = models.BooleanField(
+        default=False,
+        help_text='Tick only if you were a foreign resident when paid and the fund withheld '
+                  'managed investment trust (MIT) withholding tax on the taxable Australian '
+                  'property part of its capital gain. That tax is final, so the gain is left '
+                  'out of the capital gains schedule (s840-815). Leave unticked otherwise: '
+                  'a resident, or a fund that did not withhold, still reports the gain.')
+
     calculated_fiscal_year = models.ForeignKey(
-        FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False)
+        FiscalYear, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+        help_text='Fiscal year the statement covers. Set by the app; do not edit.')
 
     @safe_property
     def fiscal_year(self) -> 'FiscalYear':
@@ -2242,10 +2546,13 @@ class AttributionComponent(BaseModel):
         ordering = ['statement', 'component']
 
     statement = models.ForeignKey(
-        AttributionStatement, related_name='components', on_delete=models.CASCADE)
+        AttributionStatement, related_name='components', on_delete=models.CASCADE,
+        help_text='The annual statement this line is from.')
     component = models.CharField(
-        max_length=26, choices=AttributionComponentType.choices)
-    amount = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+        max_length=26, choices=AttributionComponentType.choices,
+        help_text='Which line of the statement this is.')
+    amount = MoneyField(max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY,
+        help_text='The amount shown on that line of the statement.')
 
     def __str__(self) -> str:
         return f'{self.statement.instrument.name} | {self.get_component_display()} | {self.amount}'
@@ -2274,14 +2581,17 @@ class CGTReturnSnapshot(BaseModel):
         ]
         ordering = ['fiscal_year', 'taken_at']
 
-    fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot')
+    fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot',
+        help_text='The fiscal year whose figures were captured.')
     taken_at = models.DateField(default=date.today, help_text='The day these figures were captured.')
     basis = models.CharField(
-        max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY)
+        max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY,
+        help_text='Whether the figures used declared residency or an assumption.')
     engine_version = models.CharField(max_length=32, blank=True, help_text='Application version that produced the figures.')
 
     is_lodged = models.BooleanField(default=False, help_text='Were these the figures actually lodged?')
-    lodged_at = models.DateField(null=True, blank=True)
+    lodged_at = models.DateField(null=True, blank=True,
+        help_text='Date the return was lodged. Blank if not lodged.')
 
     def __str__(self) -> str:
         lodged = ' (lodged)' if self.is_lodged else ''
@@ -2381,28 +2691,36 @@ class CGTReturnSnapshotRow(BaseModel):
         ordering = ['sell_date', 'id']
 
     snapshot = models.ForeignKey(
-        CGTReturnSnapshot, on_delete=models.CASCADE, related_name='captured_rows')
+        CGTReturnSnapshot, on_delete=models.CASCADE, related_name='captured_rows',
+        help_text='The snapshot this disposal belongs to.')
 
     sell_allocation_id = models.UUIDField(
         null=True, blank=True,
         help_text='The allocation these figures came from. Deliberately not a foreign key: '
                   'the allocation may since have been replaced, which is exactly what a '
                   'snapshot is for.')
-    sell_date = models.DateField(null=True, blank=True)
-    instrument = models.CharField(max_length=255, blank=True)
+    sell_date = models.DateField(null=True, blank=True,
+        help_text='Date of the sale.')
+    instrument = models.CharField(max_length=255, blank=True,
+        help_text='Name of the instrument sold.')
     quantity_sold = models.DecimalField(
-        max_digits=16, decimal_places=4, null=True, blank=True)
-    days_held = models.IntegerField(null=True, blank=True)
+        max_digits=16, decimal_places=4, null=True, blank=True,
+        help_text='Units sold in this disposal.')
+    days_held = models.IntegerField(null=True, blank=True,
+        help_text='Days from the buy to the sale.')
 
     proceeds = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
-        null=True, blank=True)
+        null=True, blank=True,
+        help_text='Proceeds of this disposal, in the portfolio currency.')
     cost_base = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
-        null=True, blank=True)
+        null=True, blank=True,
+        help_text='Cost base of this disposal, in the portfolio currency.')
     capital_gain = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
-        null=True, blank=True)
+        null=True, blank=True,
+        help_text='Gain or loss on this disposal, before any CGT discount.')
 
     def __str__(self) -> str:
         return f'{self.instrument} | {self.sell_date} | {self.capital_gain}'
@@ -2435,15 +2753,19 @@ class CPIIndex(models.Model):
         ordering = ['quarter_start_date']
         verbose_name_plural = 'CPI index'
 
-    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
+        help_text='Unique identifier of the index row.')
     quarter_start_date = models.DateField(
         help_text='First day of the quarter: 1 January, 1 April, 1 July or 1 October.')
-    index_number = models.DecimalField(max_digits=12, decimal_places=4)
+    index_number = models.DecimalField(max_digits=12, decimal_places=4,
+        help_text='The Consumer Price Index figure for the quarter.')
     source = models.CharField(
         max_length=255, blank=True,
         help_text='Where the figure came from, so a disputed cost base can be traced.')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True,
+        help_text='When the row was created.')
+    updated_at = models.DateTimeField(auto_now=True,
+        help_text='When the row was last changed.')
 
     def __str__(self) -> str:
         return f'{self.quarter_start_date.isoformat()} | {self.index_number}'
@@ -2480,15 +2802,19 @@ class InstrumentValuation(BaseModel):
         ordering = ['valuation_date']
 
     instrument = models.ForeignKey(
-        Instrument, on_delete=models.CASCADE, related_name='valuations')
-    valuation_date = models.DateField()
+        Instrument, on_delete=models.CASCADE, related_name='valuations',
+        help_text='The instrument valued. Enter its name as listed in the Instrument table.')
+    valuation_date = models.DateField(help_text='The day the value applies to.')
     unit_value = MoneyField(
-        max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY)
+        max_digits=19, decimal_places=6, default_currency=DEFAULT_CURRENCY,
+        help_text='Value of one unit on that day, in the currency named beside it.')
     purpose = models.CharField(
         max_length=12, choices=ValuationPurpose.choices,
-        default=ValuationPurpose.CUTOVER_2027)
+        default=ValuationPurpose.CUTOVER_2027,
+        help_text='Which deemed disposal the valuation is for.')
     source = models.CharField(
-        max_length=13, choices=ValuationSource.choices, default=ValuationSource.USER)
+        max_length=13, choices=ValuationSource.choices, default=ValuationSource.USER,
+        help_text='Where the figure came from, so a disputed cost base can be traced.')
 
     def __str__(self) -> str:
         return f'{self.instrument} | {self.valuation_date.isoformat()} | {self.unit_value}'

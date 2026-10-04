@@ -23,7 +23,6 @@ from djmoney.money import Money
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
 from share_dinkum_app.choices import SellStrategy
-from share_dinkum_app import yfinanceinterface
 from django.db import models
 
 import share_dinkum_app.models as app_models
@@ -131,6 +130,10 @@ def normalise_cells(df: pd.DataFrame, model: type[models.Model]) -> pd.DataFrame
         elif isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
             df[column] = df[column].apply(lambda v, f=field: normalise_date(model, f, v))
 
+    # `Series.apply` gives back NaN where the function returned None, and NaN is truthy: a
+    # blank lookup_legacy_adjustment was looked up as "nan" and the load refused.
+    df = df.astype(object).where(pd.notna(df), None)
+
     if 'legacy_id' in df.columns:
         ids = df['legacy_id'].dropna()
         repeated = sorted(set(ids[ids.duplicated()]))
@@ -160,6 +163,20 @@ def fill_blank_currencies(model: type[models.Model], record: dict[str, Any], bla
         if field.name in record and (
                 currency_column in blank_columns or currency_column not in record):
             record[currency_column] = str(instrument.currency)
+
+
+def fill_blank_defaults(model: type[models.Model], record: dict[str, Any], blank_columns: set[str]) -> None:
+    """Give a new record the field's default where the file leaves a required cell blank.
+
+    A blank cell reads as None, which a yes/no column such as `Market.is_exchange_listed` cannot
+    hold, so a template with that cell left empty failed with a NOT NULL error. Only fields that
+    have a default are filled: a missing date or quantity has none, and still fails.
+    """
+    for field in model._meta.fields:
+        if field.is_relation or field.null or not field.has_default():
+            continue
+        if field.name in blank_columns and record.get(field.name) is None:
+            record[field.name] = field.get_default()
 
 
 def model_to_queryset(model: type[models.Model], account: 'app_models.Account | None' = None) -> 'models.QuerySet[Any]':
@@ -492,6 +509,10 @@ class DataLoader():
 
         # Normalise pandas null sentinels (NaN, NaT, pd.NA) before field processing
         df = df.astype(object).where(pd.notna(df), None)
+
+        if (model is app_models.CapitalLossCarryForward and 'financial_year_end_date' in df.columns
+                and 'fiscal_year__name' not in df.columns):
+            df = self.fiscal_year_from_end_date(model, df)
         
         logger.debug('Starting to process columns')
 
@@ -559,6 +580,47 @@ class DataLoader():
         df = restore_blank_text_defaults(df, model)
         return df, blank
 
+    def fiscal_year_from_end_date(self, model: type[models.Model], df: pd.DataFrame) -> pd.DataFrame:
+        """Replace a `financial_year_end_date` column with the `fiscal_year` it falls in.
+
+        A fiscal year is shared and only created as dates are classified, so a person filling in a
+        template cannot name one. Any date in the year does; the year's last day is the usual one.
+        """
+        assert self.account is not None
+        fiscal_year_type = self.account.fiscal_year_type
+
+        def fiscal_year_of(index: Any, value: Any) -> Any:
+            if value is None:
+                raise ValueError(
+                    f'{model.__name__} row {index + 1} has no financial_year_end_date, so the year '
+                    f'its loss was made in is not known.')
+            try:
+                day = pd.Timestamp(value).date()
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f'{model.__name__} row {index + 1} financial_year_end_date cannot be read '
+                    f'as a date: "{value}".') from exc
+            return fiscal_year_type.classify_date(day)[0]
+
+        df = df.copy()
+        df['fiscal_year'] = [fiscal_year_of(index, value) for index, value in df['financial_year_end_date'].items()]
+        return df.drop(columns=['financial_year_end_date'])
+
+    def get_by_legacy_id(self, model: type[models.Model], related_model: type[models.Model],
+                         column: str, legacy_id: Any) -> models.Model:
+        """The `related_model` record in this portfolio with `legacy_id`, for a lookup column."""
+        try:
+            return related_model._default_manager.get(account=self.account, legacy_id=legacy_id)
+        except ObjectDoesNotExist:
+            raise ValueError(
+                f'{model.__name__} {column} names "{legacy_id}", but "{self.account}" has no '
+                f'{related_model.__name__} with that legacy_id. Check the spelling, and that the '
+                f'{related_model.__name__} sheet is in the same file.') from None
+        except MultipleObjectsReturned:
+            raise ValueError(
+                f'{model.__name__} {column} names "{legacy_id}", but "{self.account}" has more than '
+                f'one {related_model.__name__} with that legacy_id, so it is ambiguous.') from None
+
     def load_rows(self, model: type[models.Model], df: pd.DataFrame, blank: pd.DataFrame) -> None:
         """Create or update one record per row of a table from `prepare_table`."""
 
@@ -578,6 +640,18 @@ class DataLoader():
             if lookup_legacy_sell:
                 sell = self.get_related_obj_by_name(related_model=app_models.Sell, account=self.account, filters={'legacy_id' : lookup_legacy_sell})
                 record['sell'] = sell
+
+            # An attribution statement names the cost base adjustment from the same annual
+            # statement, and each of its components names the statement, by legacy id.
+            # The field filled is whichever of the model's relations points at that model.
+            for column, related_model in (
+                    ('lookup_legacy_adjustment', app_models.CostBaseAdjustment),
+                    ('lookup_legacy_statement', app_models.AttributionStatement)):
+                legacy = record.pop(column, None)
+                if legacy:
+                    field_name = next(f.name for f in model._meta.fields
+                                      if f.is_relation and f.related_model is related_model)
+                    record[field_name] = self.get_by_legacy_id(model, related_model, column, legacy)
 
             # This is used for loading buy allocations using legacy buy id.
             lookup_legacy_buy = record.pop('lookup_legacy_buy', None)
@@ -616,6 +690,7 @@ class DataLoader():
                 obj = existing
             elif id:
                 record['id'] = id  # Preserve provided ID
+                fill_blank_defaults(model, record, blank_columns)
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object with explicitly provided ID")
             else:
@@ -627,6 +702,7 @@ class DataLoader():
                         f'them: loading it would add it again rather than update it. Give every '
                         f'{model.__name__} row a legacy_id.')
                 fill_blank_currencies(model, record, blank_columns)
+                fill_blank_defaults(model, record, blank_columns)
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object without provided ID")
 
@@ -700,24 +776,6 @@ class DataLoader():
         return None
 
 
-    def get_or_create_exchange_rate(self, convert_from: str, exchange_date: date | str) -> 'app_models.ExchangeRate | None':
-        assert self.account is not None
-        convert_to = self.account.currency
-        if convert_from == convert_to:
-            return None
-        
-        exchange_rate_multiplier = yfinanceinterface.get_exchange_rate(convert_from=convert_from, convert_to=convert_to, exchange_date=exchange_date)
-        record = {
-            'account' : self.account,
-            'date' : date.fromisoformat(str(exchange_date)),
-            'convert_from' : convert_from,
-            'convert_to' : convert_to,
-            'exchange_rate_multiplier' : exchange_rate_multiplier
-            }
-        exchange_rate, created = app_models.ExchangeRate.objects.get_or_create(**{'convert_from': convert_from, 'convert_to' : convert_to, 'date' : exchange_date}, defaults=record)
-        return exchange_rate
-
-
     def get_available_parcels(self, legacy_id: str) -> list['app_models.Parcel']:
         candidates = app_models.Parcel.objects.filter(account=self.account, buy__legacy_id=legacy_id, deactivation_date__isnull=True)
         return [parcel for parcel in candidates if parcel.remaining_quantity > 0]
@@ -767,6 +825,11 @@ class DataLoader():
         # Add 'account' to filters only if it exists on the related model
         if 'account' in related_model_fields:
             filters['account'] = account
+
+        # A fiscal year's name is only unique within its type, and the types are shared, so another
+        # portfolio's calendar year would otherwise match an Australian one.
+        if related_model is app_models.FiscalYear and account is not None:
+            filters.setdefault('fiscal_year_type', account.fiscal_year_type)
 
         try:
             return related_model._default_manager.get(**filters)

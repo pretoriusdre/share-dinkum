@@ -762,41 +762,56 @@ def refresh_prices_view(request: HttpRequest) -> HttpResponse:
     return redirect(dashboard_url)
 
 
-@require_POST
-def export_cgt_schedule_view(request: HttpRequest) -> HttpResponse:
-    """Return the capital gains schedule as an Excel download.
+def _workbook_download(request: HttpRequest, build: Callable[[Account, str], Any], what: str,
+                       prefix: str) -> HttpResponse:
+    """Return the workbook `build(account, path)` writes as an Excel download.
 
-    Built in a temporary file, read into memory and deleted; nothing is stored.
+    Built in a temporary file, read into memory and deleted; nothing is stored. `what` names it
+    in messages, and `prefix` starts the file name.
     """
-    from share_dinkum_app.reports import cgt_schedule_workbook
-
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
 
     if account is None:
         messages.error(
             request,
-            'No portfolio is associated with your user, so there is no schedule to export.')
+            f'No portfolio is associated with your user, so there is no {what} to export.')
         return redirect(dashboard_url)
 
     try:
         with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as handle:
             temp_path = handle.name
-        cgt_schedule_workbook(account, temp_path)
+        build(account, temp_path)
         payload = Path(temp_path).read_bytes()
     except Exception as exc:
-        logger.warning('CGT schedule export failed for %s: %s', account, exc, exc_info=True)
-        messages.error(request, f'Could not build the capital gains schedule: {exc}')
+        logger.warning('%s export failed for %s: %s', what, account, exc, exc_info=True)
+        messages.error(request, f'Could not build the {what}: {exc}')
         return redirect(dashboard_url)
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
-    filename = f'CGT_Schedule_{account.description}_{date.today().isoformat()}.xlsx'
+    filename = f'{prefix}_{account.description}_{date.today().isoformat()}.xlsx'
     response = HttpResponse(
         payload,
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+@require_POST
+def export_cgt_schedule_view(request: HttpRequest) -> HttpResponse:
+    """Return the capital gains schedule as an Excel download."""
+    from share_dinkum_app.reports import cgt_schedule_workbook
+
+    return _workbook_download(request, cgt_schedule_workbook, 'capital gains schedule', 'CGT_Schedule')
+
+
+@require_POST
+def export_income_report_view(request: HttpRequest) -> HttpResponse:
+    """Return the income report as an Excel download."""
+    from share_dinkum_app.reports import income_workbook
+
+    return _workbook_download(request, income_workbook, 'income report', 'Income_Report')
 
 
 @require_POST
@@ -819,11 +834,43 @@ def full_backup_view(request: HttpRequest) -> HttpResponse:
         messages.info(request, 'There is no data to back up yet.')
         return redirect(dashboard_url)
 
+    exported, failed = _write_backup_exports(result['path'])
     messages.success(
         request,
-        f'Backed up to {result["path"]} — {result["database_bytes"] / 1024 / 1024:.1f} MB '
-        f'database and {result["media_files"]} document(s).')
+        f'Backed up to {result["path"]} - {result["database_bytes"] / 1024 / 1024:.1f} MB '
+        f'database, {result["media_files"]} document(s) and {exported} Excel export(s).')
+    if failed:
+        messages.warning(
+            request,
+            f'The backup is complete, but the Excel export failed for: {", ".join(failed)}. '
+            'The database copy still holds those records.')
     return redirect(dashboard_url)
+
+
+def _write_backup_exports(folder: Path) -> tuple[int, list[str]]:
+    """Put a readable Excel export of each portfolio in the backup `folder`.
+
+    Written straight into the folder, not as a DataExport: that would add a record and a file
+    to the live data on every backup, and count as a "Last exported" the user never asked for.
+    Each backup is pruned with its folder, so only the newest few keep one. Price history is
+    left out, since the market can supply it again. Returns the count written and the names of
+    portfolios that failed, so an export problem never costs the backup itself.
+    """
+    from django.utils.text import get_valid_filename
+
+    from share_dinkum_app import portfolio_export
+
+    written = 0
+    failed: list[str] = []
+    for account in Account.objects.all():
+        try:
+            portfolio_export.write_workbook(
+                account, folder / get_valid_filename(f'Export_{account.description}.xlsx'))
+            written += 1
+        except Exception as exc:
+            logger.warning('Backup export failed for %s: %s', account, exc, exc_info=True)
+            failed.append(str(account))
+    return written, failed
 
 
 @dataclass(frozen=True)
@@ -863,7 +910,7 @@ class DashboardAction:
 
 def _refresh_status(account: Account | None) -> str:
     latest = _prices_last_updated(account)
-    return f'Latest close held: {localize(latest)}.' if latest else 'No prices held yet.'
+    return f'Latest close held {localize(latest)}.' if latest else 'No prices held yet.'
 
 
 def _snapshot_status(account: Account | None) -> str:
@@ -897,10 +944,8 @@ def _backup_status(account: Account | None) -> str:
     except ValueError:
         # A folder someone put there by hand. Say what it is called rather than nothing.
         return f'Last backup {latest.name}.'
-    # A localised datetime ends in "p.m." already, and a second full stop next to it reads
-    # as a typo. A date does not, so the other status lines still add their own.
-    text = localize(taken)
-    return f'Last backup {text}' + ('' if text.endswith('.') else '.')
+    # Date only, like the other status lines. The time is still in the folder name.
+    return f'Last backup {localize(taken.date())}.'
 
 
 #: Every dashboard action, in display order.
@@ -921,7 +966,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='capture-snapshot/',
         group='Tax',
         label='Take capital gains snapshot',
-        description='Used later to show whether any figure has moved.',
+        description='Records the current figures so a later change can be spotted.',
         view=capture_snapshot_view,
         status=_snapshot_status,
         busy_label='Taking snapshot...',
@@ -931,7 +976,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-cgt-schedule/',
         group='Tax',
         label='Export Australian CGT report',
-        description='Every year in one workbook.',
+        description='Gains and losses laid out as the ATO capital gains schedule, one column per year.',
         view=export_cgt_schedule_view,
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
@@ -942,14 +987,24 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         returns_file=True,
     ),
     DashboardAction(
+        name='export_income_report',
+        route='export-income-report/',
+        group='Tax',
+        label='Export Australian income report',
+        description='Dividends and trust income by return label.',
+        view=export_income_report_view,
+        # No status, for the same reason as the CGT report: whether a year is a draft is in the file.
+        status=None,
+        busy_label='Building...',
+        returns_file=True,
+    ),
+    DashboardAction(
         name='export',
         route='export/',
         group='Data',
         label='Export portfolio',
-        description=('One Excel file of your records, which you can read and load back into '
-                     'an empty portfolio. It names your documents but does not contain '
-                     'them, and leaves out price history unless asked, since the market can '
-                     'supply that again.'),
+        description=("A single Excel file which can be loaded back into an empty portfolio. "
+                     "Doesn't include attached files. Excludes price history by default."),
         view=export_data_view,
         status=_export_status,
         options=(ActionOption(name='include_price_history', label='include price history'),),
@@ -961,7 +1016,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='full-backup/',
         group='Data',
         label='Full backup',
-        description=('Copies the complete database and all attached documents to a separate folder.'),
+        description='Copies the database, Excel export, and all attached documents to a separate folder. Make sure you replicate the output to another place (eg cloud)',
         view=full_backup_view,
         status=_backup_status,
         busy_label='Backing up...',

@@ -24,6 +24,7 @@ TAP_UNKNOWN = None
 REASON_FOREIGN_RESIDENT = 's855-10: foreign resident, asset is not taxable Australian property'
 REASON_TEMPORARY_RESIDENT = 's768-915: temporary resident, asset is not taxable Australian property'
 REASON_TRUST_ATTRIBUTION = 's855-40(2) and s276-55: foreign resident member, gain not attributable to taxable Australian property'
+REASON_MIT_WITHHOLDING = 's840-815: foreign resident member, MIT withholding tax on the gain is final'
 
 
 def instrument_tap_status(instrument: 'Instrument | None') -> str | None:
@@ -145,12 +146,20 @@ def disregard(account: 'Account | None', tap_status: str | None, event_date: dat
 
 
 def disregard_attribution(account: 'Account | None', tap_status: str | None, event_date: date | None,
-                          declared: residency.Periods | None = None) -> tuple[bool, str | None]:
+                          declared: residency.Periods | None = None,
+                          mit_withheld: bool = False) -> tuple[bool, str | None]:
     """Return `(is_disregarded, reason)` for a trust-attributed gain (s855-40(2), s276-55).
 
-    Disregarded only if NTAP and the member was a foreign or temporary resident on the event
-    date.
+    Disregarded if NTAP and the member was a foreign or temporary resident on the event date.
+    A TAP gain is disregarded too when `mit_withheld` says the trust withheld MIT withholding
+    tax on it (s840-815) and the member was a foreign resident, who pays no more on it.
     """
+    if tap_status == TAP and mit_withheld:
+        if declared is None:
+            declared = residency.periods(account)
+        if declared and residency.status_on(account, event_date, declared=declared) == residency.FOREIGN:
+            return True, REASON_MIT_WITHHOLDING
+        return False, None
     if tap_status != NTAP:
         return False, None
     if declared is None:

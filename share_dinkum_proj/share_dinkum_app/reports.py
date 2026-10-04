@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -9,7 +10,7 @@ from share_dinkum_app.models import (
     AttributionStatement, Sell, Account, FiscalYear, Parcel, CurrentExchangeRate, CGTReturnSnapshot)
 import pandas as pd
 
-from share_dinkum_app import cgt, excelinterface
+from share_dinkum_app import cgt, excelinterface, income
 from share_dinkum_app.choices import CGTAssetCategory
 from share_dinkum_app.cgt.schedule import Schedule
 
@@ -266,14 +267,19 @@ class CGTEventReport(BaseReport):
     Asset categories are shown as their ATO labels.
     """
 
-    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None,
+                 every_year: list[cgt.CGTEvent] | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
+        #: Every year's events if the caller has them already, which saves working them out again.
+        self.every_year = every_year
 
     def generate(self) -> pd.DataFrame:
         columns = cgt.event_fields()
         rows: list[dict[str, Any]] = []
-        for event in cgt.all_events(self.account, fiscal_year=self.fiscal_year):
+        events = (cgt.all_events(self.account, fiscal_year=self.fiscal_year)
+                  if self.every_year is None else _in_year(self.every_year, self.fiscal_year))
+        for event in events:
             row = {name: getattr(event, name) for name in columns}
             # The category is stored as a stable code and read as the ATO's wording. This
             # is the boundary between the two: a person filling in a schedule is looking
@@ -289,15 +295,17 @@ class CGTScheduleReport(BaseReport):
     A draft while `warnings()` is non-empty.
     """
 
-    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None,
+                 every_year: list[cgt.CGTEvent] | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
+        self.every_year = every_year
         self._schedule: Schedule | None = None
 
     @property
     def schedule(self) -> Schedule:
         if self._schedule is None:
-            self._schedule = cgt.build_schedule(self.account, self.fiscal_year)
+            self._schedule = cgt.build_schedule(self.account, self.fiscal_year, every_year=self.every_year)
         return self._schedule
 
     def warnings(self) -> list[str]:
@@ -339,6 +347,12 @@ class CGTScheduleReport(BaseReport):
         }
 
 
+def _in_year(events: list[cgt.CGTEvent], fiscal_year: FiscalYear | str | None) -> list[cgt.CGTEvent]:
+    """`events` narrowed to one fiscal year (a FiscalYear or its name), or all if None."""
+    wanted = getattr(fiscal_year, 'name', fiscal_year)
+    return [e for e in events if wanted is None or e.fiscal_year == wanted]
+
+
 def _plain(value: Any) -> float | None:
     """A Money (or number) as a float, so Excel can sum it. None stays None."""
     if value is None:
@@ -364,11 +378,16 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         fiscal_years = [
             year.name for year in sorted(years, key=lambda year: year.start_year)]
 
+    # Worked out once: each year's schedule, the return frame and the events sheet all need it.
+    every_year = cgt.all_events(account)
+    reports: dict[str, CGTScheduleReport] = {}
+
     summaries: list[dict[str, Any]] = []
     lines: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     for year in fiscal_years:
-        report = CGTScheduleReport(account=account, fiscal_year=year)
+        report = reports[year] = CGTScheduleReport(
+            account=account, fiscal_year=year, every_year=every_year)
         summary = report.summary()
 
         summaries.append({
@@ -397,14 +416,14 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         for warning in summary['warnings']:
             warnings.append({'fiscal_year': year, 'warning': warning})
 
-    events = CGTEventReport(account=account).generate()
+    events = CGTEventReport(account=account, every_year=every_year).generate()
     for column in events.columns:
         events[column] = events[column].map(
             lambda value: _plain(value) if hasattr(value, 'amount') else value)
 
     generator = excelinterface.ExcelGen(title='Capital Gains Tax Schedule')
     generator.add_table(
-        cgt_return_schedule_frame(account, fiscal_years),
+        cgt_return_schedule_frame(account, fiscal_years, reports, every_year),
         table_name='ReturnSchedule', add_hyperlinks=False,
         description=('The ATO capital gains schedule as the form lays it out: one row per '
                      'label, one column per year, to be read across rather than assembled.'))
@@ -463,19 +482,25 @@ CGT_RETURN_LAYOUT: list[tuple[str, str, str | None]] = [
 ]
 
 
-def _cgt_return_figures(account: Account, fiscal_year: str) -> tuple[dict[str, float | None], bool]:
+def _cgt_return_figures(account: Account, fiscal_year: str,
+                        report: CGTScheduleReport | None = None,
+                        every_year: list[cgt.CGTEvent] | None = None,
+                        ) -> tuple[dict[str, float | None], bool]:
     """One year's figures keyed to CGT_RETURN_LAYOUT, and whether the year is a draft.
 
     Per-asset-category gains and losses come from the events, since `Schedule.lines` groups
     by s102-6 category instead. Trust attributions go on their own line.
     """
-    report = CGTScheduleReport(account=account, fiscal_year=fiscal_year)
+    if report is None:
+        report = CGTScheduleReport(account=account, fiscal_year=fiscal_year, every_year=every_year)
     schedule = report.schedule
 
     gains: dict[str, Decimal] = {}
     losses: dict[str, Decimal] = {}
     trust_gains = Decimal('0')
-    for event in cgt.all_events(account, fiscal_year=fiscal_year):
+    year_events = (cgt.all_events(account, fiscal_year=fiscal_year) if every_year is None
+                   else _in_year(every_year, fiscal_year))
+    for event in year_events:
         if event.is_disregarded:
             continue
         gain = Decimal(str(getattr(event.gross_gain, 'amount', 0) or 0))
@@ -516,12 +541,15 @@ def _cgt_return_figures(account: Account, fiscal_year: str) -> tuple[dict[str, f
     return figures, schedule.is_draft
 
 
-def cgt_return_schedule_frame(account: Account, fiscal_years: list[str]) -> pd.DataFrame:
+def cgt_return_schedule_frame(account: Account, fiscal_years: list[str],
+                              reports: dict[str, CGTScheduleReport] | None = None,
+                              every_year: list[cgt.CGTEvent] | None = None) -> pd.DataFrame:
     """The schedule as the form lays it out: a row per line, a column per year, plus a draft row."""
     per_year: dict[str, dict[str, float | None]] = {}
     drafts: dict[str, bool] = {}
     for year in fiscal_years:
-        per_year[year], drafts[year] = _cgt_return_figures(account, year)
+        per_year[year], drafts[year] = _cgt_return_figures(
+            account, year, (reports or {}).get(year), every_year)
 
     rows: list[dict[str, Any]] = []
     for kind, label, key in CGT_RETURN_LAYOUT:
@@ -536,3 +564,119 @@ def cgt_return_schedule_frame(account: Account, fiscal_years: list[str]) -> pd.D
     rows.append(status)
 
     return pd.DataFrame(rows, columns=['line', 'kind', *fiscal_years])
+
+
+#: The income section of an individual's return in form order, as `(kind, label, figure key)`,
+#: in the shape of CGT_RETURN_LAYOUT. A None key is a heading, or a line with nothing to copy.
+INCOME_RETURN_LAYOUT: list[tuple[str, str, str | None]] = [
+    ('heading', 'Dividends (item 11)', None),
+    *[('row', f'    {key} {income.LABELS[key]}', key) for key in ('11S', '11T', '11U', '11V')],
+    ('heading', 'Partnerships and trusts (item 13)', None),
+    *[('row', f'    {key} {income.LABELS[key]}', key) for key in ('13U', '13C', '13Q', '13R', '13A')],
+    ('heading', 'Capital gains (item 18)', None),
+    ('flag', '    Including gains from trusts: see the Australian CGT report', None),
+    ('heading', 'Foreign source income (item 20)', None),
+    *[('row', f'    {key} {income.LABELS[key]}', key) for key in ('20E', '20M', '20O')],
+    ('heading', 'For reference, not copied to a label', None),
+    ('flag', '    LIC capital gain amount (a deduction for part of it may be claimable)', income.LIC_CAPITAL_GAIN),
+    ('flag', '    Non-assessable non-exempt amounts from trusts', income.NON_ASSESSABLE),
+    ('flag', '    Payments not counted (see NonResident)', income.EXCLUDED_CASH),
+    ('flag', '    Tax withheld from payments not counted', income.EXCLUDED_WITHHELD),
+]
+
+
+class IncomeReport(BaseReport):
+    """Dividends and trust income by return label, for each fiscal year. See `income`."""
+
+    def __init__(self, account: Account) -> None:
+        super().__init__(account)
+        self._summary: income.IncomeSummary | None = None
+
+    @property
+    def summary(self) -> income.IncomeSummary:
+        if self._summary is None:
+            self._summary = income.build(self.account)
+        return self._summary
+
+    def generate(self) -> pd.DataFrame:
+        """Every payment, with its residency, whether it counts, and its amounts."""
+        return _rows_frame(self.summary.payments, income.PaymentRow)
+
+    def trust_lines(self) -> pd.DataFrame:
+        return _rows_frame(self.summary.trust_lines, income.TrustLine)
+
+    def return_schedule(self, fiscal_years: list[str]) -> pd.DataFrame:
+        """A row per line of INCOME_RETURN_LAYOUT, a column per year, plus a draft row."""
+        figures = {year: self.summary.figures(year) for year in fiscal_years}
+        rows: list[dict[str, Any]] = []
+        for kind, label, key in INCOME_RETURN_LAYOUT:
+            row: dict[str, Any] = {'line': label, 'kind': kind}
+            for year in fiscal_years:
+                row[year] = None if key is None else _plain(figures[year][key])
+            rows.append(row)
+        status: dict[str, Any] = {'line': 'Draft (year not final)', 'kind': 'flag'}
+        status.update({year: 'yes' if self.summary.is_draft(year) else 'no' for year in fiscal_years})
+        rows.append(status)
+        return pd.DataFrame(rows, columns=['line', 'kind', *fiscal_years])
+
+
+def _rows_frame(rows: list[Any], row_type: type) -> pd.DataFrame:
+    """Dataclass rows as a frame, Decimals as floats and ids as text, so Excel can use them."""
+    columns = [column.name for column in dataclasses.fields(row_type)]
+    records = []
+    for row in rows:
+        record = {}
+        for name in columns:
+            value = getattr(row, name)
+            if isinstance(value, Decimal):
+                value = float(value)
+            elif name == 'record_id' and value is not None:
+                value = str(value)
+            record[name] = value
+        records.append(record)
+    return pd.DataFrame(records, columns=columns)
+
+
+def income_workbook(account: Account, output_path: str | Path, fiscal_years: list[str] | None = None) -> str | Path:
+    """Write the income report workbook to `output_path` and return the path.
+
+    Covers `fiscal_years`, default every year with a payment or an annual statement. Draft years
+    are included, with a draft row and a Warnings sheet.
+    """
+    report = IncomeReport(account=account)
+    summary = report.summary
+    if fiscal_years is None:
+        fiscal_years = summary.years()
+
+    payments = report.generate()
+    trust_lines = report.trust_lines()
+    if not payments.empty:
+        payments = payments[payments['fiscal_year'].isin(fiscal_years)]
+    if not trust_lines.empty:
+        trust_lines = trust_lines[trust_lines['fiscal_year'].isin(fiscal_years)]
+    excluded = payments[~payments['counts'].astype(bool)] if not payments.empty else payments
+    warnings = [{'fiscal_year': year, 'warning': text}
+                for year in fiscal_years for text in summary.year_warnings(year)]
+
+    generator = excelinterface.ExcelGen(title='Australian Income Report')
+    generator.add_table(
+        report.return_schedule(fiscal_years), table_name='ReturnSchedule', add_hyperlinks=False,
+        description=("The income section of an individual's return: one row per label, one column per "
+                     'year. Capital gains are on the CGT report.'))
+    generator.add_table(
+        payments, table_name='Payments', add_hyperlinks=False,
+        description=('Every dividend and distribution, in the portfolio currency at the rate on the day it '
+                     "was paid, with the residency it was paid under and whether it counts. A trust's "
+                     'income counts through its annual statement, not its cash.'))
+    generator.add_table(
+        trust_lines, table_name='TrustIncome', add_hyperlinks=False,
+        description="The income lines of each trust's annual statement, and the label each goes on.")
+    generator.add_table(
+        excluded, table_name='NonResident', add_hyperlinks=False,
+        description=('Payments not counted: paid while a foreign resident, foreign income of a temporary '
+                     'resident, or on a day no residency is declared for.'))
+    generator.add_table(
+        pd.DataFrame(warnings, columns=['fiscal_year', 'warning']), table_name='Warnings', add_hyperlinks=False,
+        description='Why a year is still a draft. Empty means every year is final.')
+    generator.save(output_path)
+    return output_path
