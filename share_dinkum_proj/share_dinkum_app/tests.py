@@ -4629,11 +4629,14 @@ class CutoverAdjustmentSliceTests(TransactionTestCase):
         self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
         self.assertEqual(deferred.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
         self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
-        # 15,000 plus 1,000, lifted by 10% inflation.
+        # 15,000 lifted by 10% inflation from July 2027, plus 1,000 lifted from the quarter
+        # holding 30 June 2028 (110.0 / 107.5 = 1.023).
         self.assertEqual(post.buy_consideration, Money(Decimal('15000.00'), 'AUD'))
         self.assertEqual(post.cost_base_adjustments, Money(Decimal('1000.00'), 'AUD'))
-        self.assertEqual(post.cost_base, Money(Decimal('17600.000'), 'AUD'))
-        self.assertEqual(post.capital_gain, Money(Decimal('2390.050'), 'AUD'))
+        self.assertEqual(post.cost_base, Money(Decimal('17523.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('2467.050'), 'AUD'))
+        # The factor reported is the market value's.
+        self.assertEqual(post.indexation_factor, Decimal('1.100'))
 
     def test_a_later_decrease_moves_to_the_post_cutover_slice(self):
         """A decrease, common for property trusts, raises the undiscounted gain."""
@@ -4642,8 +4645,44 @@ class CutoverAdjustmentSliceTests(TransactionTestCase):
         self.assertEqual(deferred.cost_base, Money(Decimal('10019.95'), 'AUD'))
         self.assertEqual(deferred.capital_gain, Money(Decimal('4980.05'), 'AUD'))
         self.assertEqual(post.cost_base_adjustments, Money(Decimal('-500.00'), 'AUD'))
-        self.assertEqual(post.cost_base, Money(Decimal('15950.000'), 'AUD'))
-        self.assertEqual(post.capital_gain, Money(Decimal('4040.050'), 'AUD'))
+        # s114-15(3): the decrease takes off only the indexation from its own quarter.
+        # 16,500 less 500 x 1.023.
+        self.assertEqual(post.cost_base, Money(Decimal('15988.500'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('4001.550'), 'AUD'))
+
+    def test_without_indexing_increases_an_increase_is_at_face_value(self):
+        """Interpretation 2: s114-15(2) does not reach a total cost base increase."""
+        with patch.object(constants, 'CGT_INDEX_COST_BASE_INCREASES', False):
+            _deferred, post = self._events(date(2028, 6, 30), '1000')
+
+        self.assertEqual(post.cost_base, Money(Decimal('17500.000'), 'AUD'))
+        self.assertEqual(post.capital_gain, Money(Decimal('2490.050'), 'AUD'))
+
+    def test_without_indexing_increases_a_decrease_is_still_indexed(self):
+        """s114-15(3) expressly covers a reduction of the total cost base."""
+        with patch.object(constants, 'CGT_INDEX_COST_BASE_INCREASES', False):
+            _deferred, post = self._events(date(2028, 6, 30), '-500')
+
+        self.assertEqual(post.cost_base, Money(Decimal('15988.500'), 'AUD'))
+
+    def test_an_adjustment_for_the_year_of_the_sale_is_made_at_the_sale(self):
+        """s104-107B(4)(b): sold before the year ends, so the adjustment is not indexed."""
+        data = create_cutover_portfolio()
+        CostBaseAdjustment.objects.create(
+            account=data['account'], instrument=data['instrument'],
+            financial_year_end_date=date(2029, 6, 30),
+            cost_base_increase=Money(Decimal('1000'), 'AUD'),
+        )
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        _deferred, post = cgt.disposal_events(data['account'])
+
+        # 16,500 plus the parcel's share of the adjustment at a factor of 1.000.
+        adjustment = post.cost_base_adjustments.amount
+        self.assertGreater(adjustment, Decimal('0'))
+        self.assertEqual(
+            post.cost_base, Money(Decimal('16500.000') + adjustment, 'AUD'))
 
     def test_an_adjustment_for_the_year_ending_at_the_cutover_stays_deferred(self):
         """s104-107B applies it at the end of that year, the day of the deemed sale."""
@@ -4690,6 +4729,21 @@ class ReturnedExpatIndexationTests(TransactionTestCase):
         self.assertEqual(event.cost_base, Money(Decimal('11021.945'), 'AUD'))
         self.assertEqual(event.discount_percentage, Decimal('0'))
         self.assertEqual(event.method, cgt.events.METHOD_OTHER)
+
+    def test_each_adjustment_is_indexed_from_its_own_quarter(self):
+        """One before the cutover is indexed from July 2027, one after from its year end."""
+        data = create_cutover_portfolio(suffix='adj', adjustments=[
+            (date(2026, 6, 30), '200'), (date(2028, 6, 30), '-500')])
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1), date(2014, 12, 31))
+        declare(data['account'], 'FOREIGN', date(2015, 1, 1), date(2020, 12, 31))
+        declare(data['account'], 'RESIDENT', date(2021, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        event = cgt.disposal_events(data['account'])[0]
+
+        self.assertEqual(event.indexation_factor, Decimal('1.100'))
+        # (10,019.95 + 200) x 1.100 - 500 x 1.023.
+        self.assertEqual(event.cost_base, Money(Decimal('10730.445'), 'AUD'))
 
     def test_the_report_explains_it_rather_than_leaving_it_to_be_discovered(self):
         event = cgt.disposal_events(self.account)[0]

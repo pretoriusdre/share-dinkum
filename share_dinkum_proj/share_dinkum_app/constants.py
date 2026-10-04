@@ -28,6 +28,16 @@ CGT_INDEXATION_FLAT_RATE = 0.025
 # earned before then is indexed even for an asset bought decades earlier.
 CGT_INDEXATION_FIRST_QUARTER = date(2027, 7, 1)
 
+# How a cost base adjustment (AMIT or E4) is indexed. Each is indexed on its own, from the
+# quarter it is made: the quarter holding its income year end, or the sale's quarter if the
+# sale is in that year (s104-107B(4)), and never before the first indexable quarter. A
+# decrease is always indexed this way, as s114-15(3) covers a reduction of the total cost
+# base. Whether s114-15(2) also reaches an increase to the total cost base is open (see
+# share_dinkum_amit_indexation_question.md).
+#   True:  interpretation 1, an increase is indexed from its quarter too (preferred).
+#   False: interpretation 2, an increase is added at face value, not indexed.
+CGT_INDEX_COST_BASE_INCREASES = True
+
 # The four categories of s102-6. Every gain has to be tagged with exactly one, and the
 # s102-5 method statement absorbs losses in this order.
 CGT_GAIN_DEFERRED_NON_RESIDENTIAL = 'deferred non-residential capital gain'

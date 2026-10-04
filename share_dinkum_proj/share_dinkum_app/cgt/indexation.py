@@ -5,11 +5,14 @@ Where available, indexation is mandatory (s110-36(1A)) and removes the discount 
 * s114-25: no foreign or temporary residency from the later of 1 July 2027 and acquisition
   to the sale. Earlier residency is irrelevant.
 * s960-275(1B): indexed only from the quarter starting 1 July 2027.
+* s114-15: a cost base adjustment is indexed from the quarter it is made, not with the rest
+  of the cost base (`CGT_INDEX_COST_BASE_INCREASES` says whether an increase is indexed).
 * The s114-30 asset test is not checked.
 
 A missing CPI quarter raises `IndexationDataUnavailable` rather than guessing.
 """
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING, Any, overload
@@ -22,6 +25,7 @@ from share_dinkum_app.constants import (
     CGT_INDEXATION_FLAT_RATE,
     CGT_INDEXATION_METHOD,
 )
+from share_dinkum_app import constants
 
 #: s960-275: the factor is worked out to three decimal places, rounding up at five.
 if TYPE_CHECKING:
@@ -134,14 +138,44 @@ def indexation_factor(acquisition_date: date | None, event_date: date | None, me
     return max(factor, _NO_INDEXATION)
 
 
-def indexed_cost_base(cost_base: Any, acquisition_date: date | None, event_date: date | None,
-                      method: str | None = None) -> Any:
-    """`cost_base` times the indexation factor.
+#: A cost base adjustment: the end of the income year it is for, and the signed amount.
+Adjustment = tuple[date, Any]
 
-    Indexes the whole cost base from one date; s960-275 indexes each element from when it
-    was incurred, which is immaterial for share parcels.
+
+def adjustment_made_on(year_end: date, event_date: date) -> date:
+    """When s104-107B(4) makes an adjustment: just before the income year ends, or just
+    before the sale if the sale is in that year."""
+    return min(year_end, event_date)
+
+
+def indexed_adjustment(amount: Any, year_end: date, event_date: date, method: str | None = None) -> Any:
+    """`amount` indexed from the quarter the adjustment is made to the event.
+
+    A decrease is indexed as a negative amount, so it takes off only the indexation from its
+    own quarter on (s114-15(3)). An increase is indexed the same way (s114-15(2)) unless
+    `CGT_INDEX_COST_BASE_INCREASES` is off, when it stays at face value.
+    """
+    if getattr(amount, 'amount', amount) > 0 and not constants.CGT_INDEX_COST_BASE_INCREASES:
+        return amount
+    factor = indexation_factor(
+        adjustment_made_on(year_end, event_date), event_date, method=method)
+    return amount * factor
+
+
+def indexed_cost_base(cost_base: Any, acquisition_date: date | None, event_date: date,
+                      adjustments: Sequence[Adjustment] = (), method: str | None = None) -> Any:
+    """`cost_base` indexed to the event, each adjustment in it from its own quarter.
+
+    The rest of the cost base is indexed from acquisition. `adjustments` are the ones
+    included in `cost_base`. s960-275 indexes each element from when it was incurred, but
+    a parcel's other elements are all incurred at acquisition.
     """
     if cost_base is None:
         return cost_base
-    factor = indexation_factor(acquisition_date, event_date, method=method)
-    return cost_base * factor
+    rest = cost_base
+    for _year_end, amount in adjustments:
+        rest = rest - amount
+    indexed = rest * indexation_factor(acquisition_date, event_date, method=method)
+    for year_end, amount in adjustments:
+        indexed = indexed + indexed_adjustment(amount, year_end, event_date, method=method)
+    return indexed
