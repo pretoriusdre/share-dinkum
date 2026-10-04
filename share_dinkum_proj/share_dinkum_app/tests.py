@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
+from django.utils.html import escape
 
 import openpyxl
 import pandas as pd
@@ -6958,7 +6959,7 @@ class FullBackupButtonTests(TransactionTestCase):
         full = actions['full_backup'].description
 
         self.assertIn('loaded back into an empty portfolio', export)
-        self.assertIn('named, not included', export)
+        self.assertIn('attached files', export)
         self.assertIn('database', full)
         self.assertIn('attached documents', full)
         self.assertNotIn('This is your backup', export)
@@ -7266,7 +7267,8 @@ class DashboardActionRegistryTests(TransactionTestCase):
         for action in dashboard.DASHBOARD_ACTIONS:
             self.assertIn(action.label, body)
             self.assertIn(reverse(f'admin:{action.url_name}'), body)
-            self.assertIn(action.description, body)
+            # Escaped, as the page is: "Doesn't" arrives as "Doesn&#x27;t".
+            self.assertIn(escape(action.description), body)
 
     def test_groups_appear_in_declaration_order(self):
         """Groups appear in declaration order."""
