@@ -977,7 +977,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         group='Tax',
         label='Export Australian CGT report',
         description='Gains and losses laid out as the ATO capital gains schedule, one column per year.',
-        view=export_cgt_schedule_view
+        view=export_cgt_schedule_view,
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
         # every dashboard load. Each year carries its own `is_draft` inside the file, which
