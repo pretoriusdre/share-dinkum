@@ -6897,9 +6897,9 @@ class FullBackupButtonTests(TransactionTestCase):
         export = actions['export'].description
         full = actions['full_backup'].description
 
-        self.assertIn('load back into an empty portfolio', export)
-        self.assertIn('does not contain them', export)
-        self.assertIn('complete database', full)
+        self.assertIn('loaded back into an empty portfolio', export)
+        self.assertIn('named, not included', export)
+        self.assertIn('database', full)
         self.assertIn('attached documents', full)
         self.assertNotIn('This is your backup', export)
 

@@ -17,7 +17,7 @@ class ShareDinkumAdminSite(admin.AdminSite):
 
     site_header = 'Share Dinkum'
     site_title = 'Share Dinkum'
-    index_title = 'Share Dinkum. An open-source share tracker.'
+    index_title = 'Share Dinkum. An open-source share tracker for Australians.'
 
     def get_urls(self) -> list[URLPattern | URLResolver]:
         """Admin URLs plus the dashboard and one route per dashboard action.

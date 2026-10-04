@@ -878,7 +878,7 @@ class DashboardAction:
 
 def _refresh_status(account: Account | None) -> str:
     latest = _prices_last_updated(account)
-    return f'Latest close held: {localize(latest)}.' if latest else 'No prices held yet.'
+    return f'Latest close held {localize(latest)}.' if latest else 'No prices held yet.'
 
 
 def _snapshot_status(account: Account | None) -> str:
@@ -912,10 +912,8 @@ def _backup_status(account: Account | None) -> str:
     except ValueError:
         # A folder someone put there by hand. Say what it is called rather than nothing.
         return f'Last backup {latest.name}.'
-    # A localised datetime ends in "p.m." already, and a second full stop next to it reads
-    # as a typo. A date does not, so the other status lines still add their own.
-    text = localize(taken)
-    return f'Last backup {text}' + ('' if text.endswith('.') else '.')
+    # Date only, like the other status lines. The time is still in the folder name.
+    return f'Last backup {localize(taken.date())}.'
 
 
 #: Every dashboard action, in display order.
@@ -936,7 +934,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='capture-snapshot/',
         group='Tax',
         label='Take capital gains snapshot',
-        description='Used later to show whether any figure has moved.',
+        description='Freezes the current figures so a later change can be spotted.',
         view=capture_snapshot_view,
         status=_snapshot_status,
         busy_label='Taking snapshot...',
@@ -946,7 +944,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-cgt-schedule/',
         group='Tax',
         label='Export Australian CGT report',
-        description='Every year in one workbook.',
+        description='A year with warnings is marked as a draft.',
         view=export_cgt_schedule_view,
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
@@ -961,7 +959,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-income-report/',
         group='Tax',
         label='Export Australian income report',
-        description='Dividends and trust income by return label, every year in one workbook.',
+        description='Dividends and trust income by return label; a year with warnings is marked as a draft.',
         view=export_income_report_view,
         # No status, for the same reason as the CGT report: whether a year is a draft is in the file.
         status=None,
@@ -973,10 +971,9 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export/',
         group='Data',
         label='Export portfolio',
-        description=('One Excel file of your records, which you can read and load back into '
-                     'an empty portfolio. It names your documents but does not contain '
-                     'them, and leaves out price history unless asked, since the market can '
-                     'supply that again.'),
+        description=('Your records in one Excel file, which can be loaded back into an empty '
+                     'portfolio. Documents are named, not included; price history is left out '
+                     'unless ticked, since the market can supply it again.'),
         view=export_data_view,
         status=_export_status,
         options=(ActionOption(name='include_price_history', label='include price history'),),
@@ -988,7 +985,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='full-backup/',
         group='Data',
         label='Full backup',
-        description=('Copies the complete database and all attached documents to a separate folder.'),
+        description='Copies the database and attached documents to a separate folder.',
         view=full_backup_view,
         status=_backup_status,
         busy_label='Backing up...',
