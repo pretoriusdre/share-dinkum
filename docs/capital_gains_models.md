@@ -1,7 +1,8 @@
 # The capital gains models, and when you touch them
 
-Eight new things appeared in the admin at once. Most of them you will never open. This is
-what each one is for, grouped by how often you deal with it.
+Eight tables, and a few settings on the account and instruments, hold the inputs to capital gains.
+Most of them you will never open. This is what each one is for, grouped by how often you deal
+with it.
 
 The organising idea behind all of them: **capital gains figures are never stored.** They are
 worked out from your transactions every time you ask. That is what makes it safe to correct a
@@ -23,6 +24,15 @@ That is deliberate: guessing wrong here is a 50 to 100 per cent error on every g
 make, so the application would rather ask.
 
 **Do this once.** Account → your portfolio → Taxpayer type.
+
+### `Account.model_2027_regime`
+
+Whether the 2027 changes are applied to this portfolio. It is off by default, and while it is off
+every disposal is worked out under the old rules, whatever its date. Nothing before 1 July 2027
+changes either way.
+
+**Turn it on** before you look at any sale from 1 July 2027. Account → your portfolio → Model
+2027 regime.
 
 ### `ResidencyPeriod`
 
@@ -58,8 +68,7 @@ statement (the AMMA statement) each issuer sends around August.
 
 This is the big one for an ETF portfolio. A trust does not only pay you cash — it attributes
 its own capital gains to you, on assets you never held, and those are yours for tax purposes.
-The application previously had nowhere to put them, so a large part of the year's capital
-gains was simply missing.
+Without these, a large part of the year's capital gains would be missing.
 
 One `AttributionStatement` per fund per year. Then one `AttributionComponent` per line on the
 statement — that is the long-and-narrow shape, so a new kind of component never needs a
@@ -146,8 +155,13 @@ instruments, or lodging.
 ### `CPIIndex`
 
 Quarterly Consumer Price Index, from ABS 6401.0 series A2325846C. From 1 July 2027 the CGT
-discount is replaced for individuals by indexing the cost base to inflation, and this is the
-index. National data, so it belongs to no portfolio.
+discount is replaced for resident individuals and trusts by indexing the cost base to
+inflation, and this is the index. National data, so it belongs to no portfolio.
+
+The cost base is indexed from the purchase, or 1 July 2027 if later. Each cost base adjustment
+is indexed separately, from the quarter it is made: the one holding its income year end, or the
+sale's if that comes first. Indexation needs a declared residency history with no foreign or
+temporary days from 1 July 2027 to the sale (s114-25).
 
     uv run dev load_cpi cpi.csv
 
@@ -179,22 +193,25 @@ the dividends and splits since, which understates a 30 June value by any distrib
 
 To value some other day, give it: `--date 2021-07-01 --purpose DEPARTURE`.
 
-The same model covers three other deemed disposals that work identically and differ only in
-what happens to the gain: leaving Australia (s104-165), arriving (s855-45), and pre-CGT assets
-(s112-175).
+The same model can hold values for three other deemed disposals: leaving Australia
+(s104-165), arriving (s855-45), and pre-CGT assets (s112-175). These can be recorded, but no
+calculation uses them yet.
 
 ---
 
 ## The order to do it in
 
 1. Press **Take capital gains snapshot** on the dashboard — record where you stand
-2. Set `Account.taxpayer_type`
+2. Set `Account.taxpayer_type`, and turn on `Account.model_2027_regime`
 3. Add your `ResidencyPeriod` rows
 4. `uv run dev suggest_instrument_classification --account "..."`, then fill in what it could
    not work out
 5. Enter any `CapitalLossCarryForward` opening balance
 6. Enter your `AttributionStatement` rows from the annual tax statements
 7. Look at `CGTBasisChangeReport` to see what moved, and `CGTScheduleReport` for the year
+
+`CGTBasisChangeReport` compares by sell allocation, so for a sale split at 1 July 2027 it shows
+only the post-cutover half.
 
 `CGTScheduleReport` refuses to call itself final while anything is unconfirmed — an
 unclassified instrument, an undeclared residency, a statement that does not reconcile — and
