@@ -4,7 +4,6 @@ from decimal import Decimal
 import threading
 from typing import Any, cast
 
-from django.apps import apps
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.base import ContentFile
 from django.db.models.signals import pre_save, post_save, pre_delete, post_delete
@@ -18,16 +17,14 @@ from django.forms.models import model_to_dict
 from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
-from share_dinkum_app import column_help, excelinterface
-from share_dinkum_app import loading
-from share_dinkum_app.reports import RealisedCapitalGainReport
+from share_dinkum_app import loading, portfolio_export
 from share_dinkum_app import cgt
 from share_dinkum_app.choices import (
     AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
 )
 from share_dinkum_app.utils import convert_to_decimal_field
 
-from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, InstrumentPriceHistory, Account, ExchangeRate, Market, Instrument
+from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, Account, ExchangeRate, Market, Instrument
 
 import logging
 logger = logging.getLogger(__name__)
@@ -479,47 +476,17 @@ def generate_export_file(sender: type[Model], instance: DataExport, created: boo
 
     assert isinstance(instance, DataExport)
 
-
     if instance.file:
         return  # already has a file
     logger.info('Starting data export process.')
 
     with NamedTemporaryFile(suffix='.xlsx') as temp_file:
-        gen = excelinterface.ExcelGen(title='Data Export')
-        for model in apps.get_app_config('share_dinkum_app').get_models():
-
-            if model == InstrumentPriceHistory and not instance.include_price_history:
-                continue
-
-            logger.info('    - %s', model.__name__)
-
-            if 'account' in [f.name for f in model._meta.get_fields()]:
-                queryset = loading.model_to_queryset(model=model, account=instance.account)
-            elif model is Account:
-                # Only this portfolio: a file naming several cannot be restored on its own.
-                queryset = loading.model_to_queryset(model=model).filter(pk=instance.account_id)
-            else:
-                queryset = loading.model_to_queryset(model=model)
-            
-            df = loading.queryset_to_df(queryset)
-            desc = getattr(model, 'MODEL_DESCRIPTION', 'No description available')
-            if not df.empty:
-                gen.add_table(df, table_name=model.__name__, description=desc,
-                              column_descriptions=column_help.describe_columns(model, [str(c) for c in df.columns]))
-
-        logger.info('    - Realised Capital Gains Report')
-        rcg_report = RealisedCapitalGainReport(account=instance.account)
-        
-        df_realised_capital_gains = rcg_report.generate()
-        
-        gen.add_table(df_realised_capital_gains, table_name="RealisedCapitalGains", description="Report of realised capital gains per sale allocation.")
-
-
-        gen.save(temp_file.name)
+        portfolio_export.write_workbook(
+            instance.account, temp_file.name, include_price_history=instance.include_price_history)
         new_name = f'Export_{instance.account.description}.xlsx'
-        instance.file.save(new_name, ContentFile(open(temp_file.name, 'rb').read()))
+        with open(temp_file.name, 'rb') as built:
+            instance.file.save(new_name, ContentFile(built.read()))
         logger.info('Data export process completed successfully.')
-
 
 
 def _delete_file_after_commit(field_file: FieldFile) -> None:

@@ -834,11 +834,43 @@ def full_backup_view(request: HttpRequest) -> HttpResponse:
         messages.info(request, 'There is no data to back up yet.')
         return redirect(dashboard_url)
 
+    exported, failed = _write_backup_exports(result['path'])
     messages.success(
         request,
-        f'Backed up to {result["path"]} — {result["database_bytes"] / 1024 / 1024:.1f} MB '
-        f'database and {result["media_files"]} document(s).')
+        f'Backed up to {result["path"]} - {result["database_bytes"] / 1024 / 1024:.1f} MB '
+        f'database, {result["media_files"]} document(s) and {exported} Excel export(s).')
+    if failed:
+        messages.warning(
+            request,
+            f'The backup is complete, but the Excel export failed for: {", ".join(failed)}. '
+            'The database copy still holds those records.')
     return redirect(dashboard_url)
+
+
+def _write_backup_exports(folder: Path) -> tuple[int, list[str]]:
+    """Put a readable Excel export of each portfolio in the backup `folder`.
+
+    Written straight into the folder, not as a DataExport: that would add a record and a file
+    to the live data on every backup, and count as a "Last exported" the user never asked for.
+    Each backup is pruned with its folder, so only the newest few keep one. Price history is
+    left out, since the market can supply it again. Returns the count written and the names of
+    portfolios that failed, so an export problem never costs the backup itself.
+    """
+    from django.utils.text import get_valid_filename
+
+    from share_dinkum_app import portfolio_export
+
+    written = 0
+    failed: list[str] = []
+    for account in Account.objects.all():
+        try:
+            portfolio_export.write_workbook(
+                account, folder / get_valid_filename(f'Export_{account.description}.xlsx'))
+            written += 1
+        except Exception as exc:
+            logger.warning('Backup export failed for %s: %s', account, exc, exc_info=True)
+            failed.append(str(account))
+    return written, failed
 
 
 @dataclass(frozen=True)

@@ -6917,6 +6917,30 @@ class FullBackupButtonTests(TransactionTestCase):
         self.assertEqual(len(written), 1, 'one timestamped backup directory')
         self.assertTrue(written[0].is_dir())
 
+    def test_the_backup_holds_a_readable_export_and_leaves_no_record(self):
+        """Each backup carries an Excel export, written to the folder and not as a DataExport.
+
+        A DataExport would add a record and a file to the live data on every backup, and
+        make the dashboard's "Last exported" claim an export nobody asked for.
+        """
+        before = DataExport.objects.count()
+        with patch.object(dashboard, '_backup_root', return_value=self.root):
+            self.client.post(self.url, follow=True)
+
+        folder = next(self.root.rglob('Export_*.xlsx')).parent
+        self.assertEqual(len(list(folder.glob('Export_*.xlsx'))), Account.objects.count())
+        self.assertEqual(DataExport.objects.count(), before)
+        self.assertFalse(list(self.root.rglob('Export_*.xlsx'))[0].stat().st_size == 0)
+
+    def test_an_export_that_fails_does_not_fail_the_backup(self):
+        with patch.object(dashboard, '_backup_root', return_value=self.root),                 patch('share_dinkum_app.portfolio_export.write_workbook', side_effect=RuntimeError('boom')):
+            response = self.client.post(self.url, follow=True)
+
+        body = response.content.decode()
+        self.assertIn('Backed up to', body)
+        self.assertIn('Excel export failed', body)
+        self.assertEqual(len(list(self.root.iterdir())), 1)
+
     def test_the_message_says_where_it_went(self):
         """The success message says where the backup went."""
         with patch.object(dashboard, '_backup_root', return_value=self.root):
@@ -6925,6 +6949,7 @@ class FullBackupButtonTests(TransactionTestCase):
         body = response.content.decode()
         self.assertIn('Backed up to', body)
         self.assertIn('document(s)', body)
+        self.assertIn('Excel export(s)', body)
 
     def test_the_two_data_actions_describe_themselves_differently(self):
         """The export and backup actions describe themselves differently."""
@@ -7208,6 +7233,14 @@ class DashboardActionRegistryTests(TransactionTestCase):
         self.user.is_superuser = True
         self.user.save()
         self.client.force_login(self.user)
+        # The full backup action runs for real below. Without this it writes to the home
+        # directory's backup set, and its pruning pushes real backups out. The test database
+        # is in memory, so what it wrote there had no database in it either.
+        backup_root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, backup_root, ignore_errors=True)
+        patcher = patch.object(dashboard, '_backup_root', return_value=Path(backup_root))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_every_declared_action_has_a_live_url(self):
         for action in dashboard.DASHBOARD_ACTIONS:
