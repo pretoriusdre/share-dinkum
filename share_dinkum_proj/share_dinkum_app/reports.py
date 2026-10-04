@@ -267,14 +267,19 @@ class CGTEventReport(BaseReport):
     Asset categories are shown as their ATO labels.
     """
 
-    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None,
+                 every_year: list[cgt.CGTEvent] | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
+        #: Every year's events if the caller has them already, which saves working them out again.
+        self.every_year = every_year
 
     def generate(self) -> pd.DataFrame:
         columns = cgt.event_fields()
         rows: list[dict[str, Any]] = []
-        for event in cgt.all_events(self.account, fiscal_year=self.fiscal_year):
+        events = (cgt.all_events(self.account, fiscal_year=self.fiscal_year)
+                  if self.every_year is None else _in_year(self.every_year, self.fiscal_year))
+        for event in events:
             row = {name: getattr(event, name) for name in columns}
             # The category is stored as a stable code and read as the ATO's wording. This
             # is the boundary between the two: a person filling in a schedule is looking
@@ -290,15 +295,17 @@ class CGTScheduleReport(BaseReport):
     A draft while `warnings()` is non-empty.
     """
 
-    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None) -> None:
+    def __init__(self, account: Account, fiscal_year: FiscalYear | str | None = None,
+                 every_year: list[cgt.CGTEvent] | None = None) -> None:
         super().__init__(account)
         self.fiscal_year = fiscal_year
+        self.every_year = every_year
         self._schedule: Schedule | None = None
 
     @property
     def schedule(self) -> Schedule:
         if self._schedule is None:
-            self._schedule = cgt.build_schedule(self.account, self.fiscal_year)
+            self._schedule = cgt.build_schedule(self.account, self.fiscal_year, every_year=self.every_year)
         return self._schedule
 
     def warnings(self) -> list[str]:
@@ -340,6 +347,12 @@ class CGTScheduleReport(BaseReport):
         }
 
 
+def _in_year(events: list[cgt.CGTEvent], fiscal_year: FiscalYear | str | None) -> list[cgt.CGTEvent]:
+    """`events` narrowed to one fiscal year (a FiscalYear or its name), or all if None."""
+    wanted = getattr(fiscal_year, 'name', fiscal_year)
+    return [e for e in events if wanted is None or e.fiscal_year == wanted]
+
+
 def _plain(value: Any) -> float | None:
     """A Money (or number) as a float, so Excel can sum it. None stays None."""
     if value is None:
@@ -365,11 +378,16 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         fiscal_years = [
             year.name for year in sorted(years, key=lambda year: year.start_year)]
 
+    # Worked out once: each year's schedule, the return frame and the events sheet all need it.
+    every_year = cgt.all_events(account)
+    reports: dict[str, CGTScheduleReport] = {}
+
     summaries: list[dict[str, Any]] = []
     lines: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     for year in fiscal_years:
-        report = CGTScheduleReport(account=account, fiscal_year=year)
+        report = reports[year] = CGTScheduleReport(
+            account=account, fiscal_year=year, every_year=every_year)
         summary = report.summary()
 
         summaries.append({
@@ -398,14 +416,14 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         for warning in summary['warnings']:
             warnings.append({'fiscal_year': year, 'warning': warning})
 
-    events = CGTEventReport(account=account).generate()
+    events = CGTEventReport(account=account, every_year=every_year).generate()
     for column in events.columns:
         events[column] = events[column].map(
             lambda value: _plain(value) if hasattr(value, 'amount') else value)
 
     generator = excelinterface.ExcelGen(title='Capital Gains Tax Schedule')
     generator.add_table(
-        cgt_return_schedule_frame(account, fiscal_years),
+        cgt_return_schedule_frame(account, fiscal_years, reports, every_year),
         table_name='ReturnSchedule', add_hyperlinks=False,
         description=('The ATO capital gains schedule as the form lays it out: one row per '
                      'label, one column per year, to be read across rather than assembled.'))
@@ -464,19 +482,25 @@ CGT_RETURN_LAYOUT: list[tuple[str, str, str | None]] = [
 ]
 
 
-def _cgt_return_figures(account: Account, fiscal_year: str) -> tuple[dict[str, float | None], bool]:
+def _cgt_return_figures(account: Account, fiscal_year: str,
+                        report: CGTScheduleReport | None = None,
+                        every_year: list[cgt.CGTEvent] | None = None,
+                        ) -> tuple[dict[str, float | None], bool]:
     """One year's figures keyed to CGT_RETURN_LAYOUT, and whether the year is a draft.
 
     Per-asset-category gains and losses come from the events, since `Schedule.lines` groups
     by s102-6 category instead. Trust attributions go on their own line.
     """
-    report = CGTScheduleReport(account=account, fiscal_year=fiscal_year)
+    if report is None:
+        report = CGTScheduleReport(account=account, fiscal_year=fiscal_year, every_year=every_year)
     schedule = report.schedule
 
     gains: dict[str, Decimal] = {}
     losses: dict[str, Decimal] = {}
     trust_gains = Decimal('0')
-    for event in cgt.all_events(account, fiscal_year=fiscal_year):
+    year_events = (cgt.all_events(account, fiscal_year=fiscal_year) if every_year is None
+                   else _in_year(every_year, fiscal_year))
+    for event in year_events:
         if event.is_disregarded:
             continue
         gain = Decimal(str(getattr(event.gross_gain, 'amount', 0) or 0))
@@ -517,12 +541,15 @@ def _cgt_return_figures(account: Account, fiscal_year: str) -> tuple[dict[str, f
     return figures, schedule.is_draft
 
 
-def cgt_return_schedule_frame(account: Account, fiscal_years: list[str]) -> pd.DataFrame:
+def cgt_return_schedule_frame(account: Account, fiscal_years: list[str],
+                              reports: dict[str, CGTScheduleReport] | None = None,
+                              every_year: list[cgt.CGTEvent] | None = None) -> pd.DataFrame:
     """The schedule as the form lays it out: a row per line, a column per year, plus a draft row."""
     per_year: dict[str, dict[str, float | None]] = {}
     drafts: dict[str, bool] = {}
     for year in fiscal_years:
-        per_year[year], drafts[year] = _cgt_return_figures(account, year)
+        per_year[year], drafts[year] = _cgt_return_figures(
+            account, year, (reports or {}).get(year), every_year)
 
     rows: list[dict[str, Any]] = []
     for kind, label, key in CGT_RETURN_LAYOUT:
