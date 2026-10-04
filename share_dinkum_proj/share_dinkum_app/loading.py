@@ -130,6 +130,10 @@ def normalise_cells(df: pd.DataFrame, model: type[models.Model]) -> pd.DataFrame
         elif isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
             df[column] = df[column].apply(lambda v, f=field: normalise_date(model, f, v))
 
+    # `Series.apply` gives back NaN where the function returned None, and NaN is truthy: a
+    # blank lookup_legacy_adjustment was looked up as "nan" and the load refused.
+    df = df.astype(object).where(pd.notna(df), None)
+
     if 'legacy_id' in df.columns:
         ids = df['legacy_id'].dropna()
         repeated = sorted(set(ids[ids.duplicated()]))
@@ -639,11 +643,14 @@ class DataLoader():
 
             # An attribution statement names the cost base adjustment from the same annual
             # statement, and each of its components names the statement, by legacy id.
-            for column, field_name, related_model in (
-                    ('lookup_legacy_adjustment', 'cost_base_adjustment', app_models.CostBaseAdjustment),
-                    ('lookup_legacy_statement', 'statement', app_models.AttributionStatement)):
+            # The field filled is whichever of the model's relations points at that model.
+            for column, related_model in (
+                    ('lookup_legacy_adjustment', app_models.CostBaseAdjustment),
+                    ('lookup_legacy_statement', app_models.AttributionStatement)):
                 legacy = record.pop(column, None)
                 if legacy:
+                    field_name = next(f.name for f in model._meta.fields
+                                      if f.is_relation and f.related_model is related_model)
                     record[field_name] = self.get_by_legacy_id(model, related_model, column, legacy)
 
             # This is used for loading buy allocations using legacy buy id.

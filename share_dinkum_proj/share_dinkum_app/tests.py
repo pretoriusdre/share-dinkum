@@ -3443,8 +3443,8 @@ class OptionalTemplateTablesTests(TransactionTestCase):
         self.assertEqual(found, mine)
 
 
-class MakeFakeDataCommandTests(TestCase):
-    """The fake portfolio generator, run on synthetic market data so it needs no network."""
+class FakeMarketMixin:
+    """Runs the fake portfolio generator on synthetic market data, so it needs no network."""
 
     AS_OF = '2026-10-02'
 
@@ -3479,6 +3479,10 @@ class MakeFakeDataCommandTests(TestCase):
         call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache), **options)
         return output, excelinterface.get_all_tables_in_excel(output)
 
+
+class MakeFakeDataCommandTests(FakeMarketMixin, TestCase):
+    """The fake portfolio generator, run on synthetic market data so it needs no network."""
+
     def test_it_will_not_overwrite_without_force(self):
         output = self.folder / 'template.xlsx'
         call_command('make_import_template', output=str(output))
@@ -3494,16 +3498,33 @@ class MakeFakeDataCommandTests(TestCase):
         _, tables = self._run('fake.xlsx')
 
         for name in ('Buy', 'Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment', 'Dividend',
-                     'Distribution', 'ResidencyPeriod'):
+                     'Distribution', 'ResidencyPeriod', 'AttributionStatement', 'AttributionComponent'):
             self.assertTrue(len(tables[name]) > 0, name)
             self.assertIn(make_fake_data.FAKE_NOTE, tables[name].iloc[0]['notes'], name)
 
     def test_the_optional_tables_the_portfolio_does_not_use_stay_empty(self):
         _, tables = self._run('fake.xlsx')
 
-        for name in ('InstrumentValuation', 'CapitalLossCarryForward', 'AttributionStatement',
-                     'AttributionComponent'):
+        for name in ('InstrumentValuation', 'CapitalLossCarryForward'):
             self.assertEqual(len(tables[name]), 0, name)
+
+    def test_each_etf_statement_holds_together_with_its_adjustment(self):
+        _, tables = self._run('fake.xlsx')
+        statements, components = tables['AttributionStatement'], tables['AttributionComponent']
+        adjustments = tables['CostBaseAdjustment'].set_index('legacy_id')['cost_base_increase']
+
+        self.assertEqual(set(statements['instrument__name']), set(make_fake_data.ETFS))
+        self.assertEqual(set(tables['CostBaseAdjustment']['instrument__name']), set(make_fake_data.ETFS))
+        for _, statement in statements.iterrows():
+            lines = components[components['lookup_legacy_statement'] == statement['legacy_id']]
+            amount = lines.set_index('component')['amount'].to_dict()
+            discounted = amount.get('DISCOUNTED_TAP', 0) + amount.get('DISCOUNTED_NTAP', 0)
+            self.assertAlmostEqual(amount['TOTAL_CY_CG'], 2 * discounted + amount.get('OTHER_NTAP', 0), delta=0.015)
+            net = amount.get('COSTBASE_INCREASE', 0) - amount.get('COSTBASE_DECREASE', 0)
+            if not pd.isna(statement['lookup_legacy_adjustment']):
+                self.assertAlmostEqual(adjustments[statement['lookup_legacy_adjustment']], net, delta=0.005)
+        # VAS is sold out in August 2019, so its last statement has no adjustment to link to.
+        self.assertTrue(statements['lookup_legacy_adjustment'].isna().any())
 
     def test_the_same_seed_gives_the_same_file_and_another_seed_a_different_one(self):
         _, first = self._run('one.xlsx', seed=7)
@@ -3540,6 +3561,42 @@ class MakeFakeDataCommandTests(TestCase):
             taken = allocations[allocations['lookup_legacy_sell'] == sale['legacy_id']]['quantity'].sum()
             self.assertEqual(taken, sale['quantity'], sale['legacy_id'])
         self.assertIn('SellAllocation', str(manual.iloc[0]['notes']))
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
+    """The fake portfolio loads, and the app's checks on what it loaded pass."""
+
+    def test_it_loads_and_every_statement_agrees(self, mock_get_rate):
+        output, tables = self._run('fake.xlsx')
+        account = create_account()
+
+        loading.DataLoader(account=account, input_file=output)
+
+        statements = AttributionStatement.objects.filter(account=account)
+        self.assertEqual(statements.count(), len(tables['AttributionStatement']))
+        for statement in statements:
+            self.assertTrue(statement.reconciles, statement)
+            if statement.cost_base_adjustment is not None:
+                self.assertTrue(statement.cost_base_agrees, statement)
+        self.assertEqual(
+            set(CostBaseAdjustment.objects.filter(account=account).values_list('instrument__name', flat=True)),
+            set(make_fake_data.ETFS))
+        self.assertEqual(Sell.objects.filter(account=account).count(), len(tables['Sell']))
+
+
+class NormaliseCellsTests(TestCase):
+
+    def test_a_blank_cell_stays_none(self):
+        """pandas' apply turns a None result back into NaN, which is truthy, so a blank lookup
+        was looked up as "nan"."""
+        df = pd.DataFrame({'legacy_id': ['AS1', 'AS2'], 'lookup_legacy_adjustment': ['A1', None],
+                           'financial_year_end_date': [date(2024, 6, 30), None]}, dtype=object)
+
+        df = loading.normalise_cells(df, AttributionStatement)
+
+        self.assertEqual(df['lookup_legacy_adjustment'].tolist(), ['A1', None])
+        self.assertIsNone(df.at[1, 'financial_year_end_date'])
 
 
 class ColumnHelpTests(TransactionTestCase):
@@ -3749,6 +3806,33 @@ class DropdownTests(TestCase):
         self.assertEqual(lists['ResidencyPeriod.status'], ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
         self.assertIn('AUD', lists['currency'])
         self.assertIn('USD', lists['currency'])
+
+    def test_a_yes_no_column_offers_excel_booleans(self):
+        """The text "TRUE" would not load, so the list holds real booleans. Blank is allowed by the
+        validation itself, not by a blank entry in the list."""
+        workbook, _ = self._template()
+        lists = {column[0].value: [cell.value for cell in column[1:] if cell.value is not None]
+                 for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns}
+
+        self.assertEqual(lists['yes/no'], [True, False])
+        for model, column in ((ResidencyPeriod, 'i1_election_made'), (Market, 'is_exchange_listed')):
+            columns = make_import_template.get_template_columns(model)
+            self.assertEqual(make_import_template.get_dropdowns(model, columns)[column], ('yes/no', [True, False]))
+
+    def test_a_yes_no_pick_loads_as_a_boolean(self):
+        account = create_account()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'residency.xlsx'
+            make_import_template.build_template(path, {'ResidencyPeriod': pd.DataFrame([
+                {'legacy_id': 'R1', 'status': 'RESIDENT', 'start_date': date(2016, 1, 1),
+                 'end_date': date(2021, 6, 30), 'i1_election_made': None},
+                {'legacy_id': 'R2', 'status': 'FOREIGN', 'start_date': date(2021, 7, 1),
+                 'i1_election_made': True},
+            ])})
+            loading.DataLoader(account=account, input_file=path)
+
+        stored = dict(ResidencyPeriod.objects.filter(account=account).values_list('legacy_id', 'i1_election_made'))
+        self.assertEqual(stored, {'R1': None, 'R2': True})
 
     def test_a_lookup_column_gets_no_dropdown(self):
         """An instrument loaded in an earlier file is a legitimate answer, so lookups stay free text."""

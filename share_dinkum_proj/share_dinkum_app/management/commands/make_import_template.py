@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
-from django.db.models import Model
+from django.db.models import BooleanField, Model
 
 from djmoney.models.fields import CurrencyField, MoneyField
 
@@ -134,16 +134,20 @@ def get_template_columns(model: type[Model]) -> list[str]:
     return ordered
 
 
-def get_dropdowns(model: type[Model], columns: list[str]) -> dict[str, list[str] | tuple[str, list[str]]]:
+def get_dropdowns(model: type[Model], columns: list[str]) -> dict[str, excelinterface.Dropdown]:
     """The columns with a fixed set of values, each with its list name and the allowed keys.
 
-    Every currency column shares one list. Lookups such as `instrument__name` are not here: they
-    name a record, and one loaded in an earlier file is a legitimate answer.
+    Every currency column shares one list, and every yes/no column another, of real Excel booleans:
+    the text "TRUE" would not load. Lookups such as `instrument__name` are not here: they name a
+    record, and one loaded in an earlier file is a legitimate answer.
     """
     fields = {field.name: field for field in model._meta.fields}
-    dropdowns: dict[str, list[str] | tuple[str, list[str]]] = {}
+    dropdowns: dict[str, excelinterface.Dropdown] = {}
     for column in columns:
         field = fields.get(column)
+        if isinstance(field, BooleanField):
+            dropdowns[column] = ('yes/no', [True, False])
+            continue
         if field is None or not field.choices:
             continue
         list_name = 'currency' if isinstance(field, CurrencyField) else f'{model.__name__}.{column}'

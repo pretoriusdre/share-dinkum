@@ -1,9 +1,10 @@
 """Fill an import template with a believable fake portfolio, for the sample data.
 
 Prices, splits and per-share dividends are Yahoo's real history, so incomes are in line with what
-the holdings really paid. Everything else (what was bought, when, how much) is invented from a
-seeded random generator, so the same seed and the same market data give the same file. Every
-populated table's first row is marked as fake in `notes`.
+the holdings really paid. Everything else (what was bought, when, how much, and how each ETF's annual
+tax statement breaks its distributions down) is invented from a seeded random generator, so the same
+seed and the same market data give the same file. Every populated table's first row is marked as
+fake in `notes`.
 
 The shape of the portfolio is the block of constants below: change them to change the portfolio.
 Needs network access, unless `--cache` points at market data saved by an earlier run.
@@ -70,10 +71,9 @@ HOLDINGS: dict[str, Holding] = {
     'AAPL': Holding('USD', 'NASDAQ', 'Apple Inc', 'AAPL', 3),
 }
 
-# Income from these is a distribution (an ETF); from the rest, a dividend.
+# Income from these is a distribution (an ETF); from the rest, a dividend. Each is an AMIT trust, so
+# each financial year it paid in comes with an annual tax statement.
 ETFS = ('VGS', 'A200', 'VAS')
-# The one with AMIT cost base adjustments, one per financial year.
-AMIT_INSTRUMENTS = ('VGS',)
 
 # Monthly investing: each month a total is drawn from this range, CORE_SHARE of it goes to the core
 # holdings, split by weight, while the instrument is available.
@@ -122,14 +122,42 @@ US_WITHHOLDING_RATE = 0.15
 # Share of the ETF payment kept as withholding tax: a small random fraction of it.
 ETF_WITHHOLDING_RANGE = (0.0, 0.004)
 ETF_JITTER = (0.97, 1.03)
-# Some years' AMIT adjustment is a decrease; this is the cost base change per unit.
-AMIT_PER_UNIT = (0.15, 0.85)
-AMIT_DECREASE_YEARS = {2023: -0.4}
+
+# Annual tax statements. One is issued this long after its financial year ends; until then the year
+# has none.
+STATEMENT_LAG = dt.timedelta(days=75)
+# The AMIT cost base net amount, as a share of the year's cash. A shortfall (an increase) except in
+# the financial years ending in these years, when it is an excess (a decrease). The same amount is
+# entered as the year's cost base adjustment, if anything is held at the end of the year.
+AMIT_NET_SHARE = (0.02, 0.12)
+AMIT_DECREASE_YEARS = (2018, 2023)
+# Capital gains, grossed up, as a share of what is attributed; the part of them worked out by the
+# other method; and the part of the discounted gains on taxable Australian property, for the ETFs that
+# have any.
+CAPITAL_GAIN_SHARE = (0.05, 0.25)
+OTHER_METHOD_SHARE = (0.0, 0.2)
+TAP_SHARE = {'A200': (0.02, 0.08)}
+# How each ETF's attributed income (the part that is not capital gains) splits over the statement's
+# income lines. The first line takes any rounding remainder.
+INCOME_PROFILE: dict[str, dict[str, float]] = {
+    'VGS': {'FOREIGN_SOURCE_INCOME': 0.94, 'INTEREST': 0.05, 'UNFRANKED_DISTRIBUTION': 0.01},
+    'A200': {'FRANKED_DISTRIBUTION': 0.80, 'UNFRANKED_DISTRIBUTION': 0.12, 'FOREIGN_SOURCE_INCOME': 0.06,
+             'INTEREST': 0.02},
+    'VAS': {'FRANKED_DISTRIBUTION': 0.78, 'UNFRANKED_DISTRIBUTION': 0.13, 'FOREIGN_SOURCE_INCOME': 0.07,
+            'INTEREST': 0.02},
+}
+# The foreign income tax offset, as a share of the foreign income.
+FITO_RATE = 0.10
 
 
 def as_date(value: Any) -> dt.date:
     """A pandas index label (a Timestamp) as a plain date."""
     return cast(dt.date, pd.Timestamp(value).date())
+
+
+def financial_year_end(day: dt.date) -> dt.date:
+    """The 30 June that ends the Australian financial year `day` is in."""
+    return dt.date(day.year + (day.month > 6), 6, 30)
 
 
 class FakePortfolio:
@@ -143,6 +171,8 @@ class FakePortfolio:
         self.dividends: list[dict[str, Any]] = []
         self.distributions: list[dict[str, Any]] = []
         self.adjustments: list[dict[str, Any]] = []
+        self.statements: list[dict[str, Any]] = []
+        self.components: list[dict[str, Any]] = []
         self.splits: list[dict[str, Any]] = []
 
     # ----- market data -----
@@ -205,9 +235,12 @@ class FakePortfolio:
     def generate_buys(self) -> None:
         month_starts = [dt.date(y, m, 1) for y in range(START.year, self.as_of.year + 1) for m in range(1, 13)
                         if START <= dt.date(y, m, 1) <= self.as_of]
+        # A buy is priced on the first trading day on or after it, so there has to be one. Run on a
+        # Sunday, a buy drawn for the Saturday before had none.
+        last_quote = min(as_date(self.history(name).index[-1]) for name, *_ in CORE_SCHEDULE)
         for month in month_starts:
             day = month + dt.timedelta(days=self.rng.randint(1, 5))
-            if day > self.as_of - dt.timedelta(days=1):
+            if day > min(self.as_of - dt.timedelta(days=1), last_quote):
                 continue
             total = round(self.rng.uniform(*MONTHLY_RANGE) / 50) * 50
             core = total * self.rng.uniform(*CORE_SHARE)
@@ -310,8 +343,9 @@ class FakePortfolio:
                 if name in ETFS:
                     per = round(per * self.rng.uniform(*ETF_JITTER), 6)
                     withholding = round(qty * per * self.rng.uniform(*ETF_WITHHOLDING_RANGE), 2)
-                    self.distributions.append(dict(legacy_id=legacy_id, name=name, date=pay, qty=qty, per=per,
-                                                   withholding=withholding, currency=holding.currency))
+                    self.distributions.append(dict(legacy_id=legacy_id, name=name, ex_date=ex_date, date=pay,
+                                                   qty=qty, per=per, withholding=withholding,
+                                                   currency=holding.currency))
                     continue
                 per = round(per, 6)
                 row = dict(legacy_id=legacy_id, name=name, date=pay, qty=qty, currency=holding.currency)
@@ -324,27 +358,73 @@ class FakePortfolio:
         self.distributions.sort(key=lambda d: d['date'])
         self.dividends.sort(key=lambda d: d['date'])
 
-    def generate_adjustments(self) -> None:
-        for name in AMIT_INSTRUMENTS:
-            for year in range(START.year + 1, self.as_of.year + 1):
-                end = dt.date(year, 6, 30)
-                if end > self.as_of:
-                    continue
-                units = self.held(name, end)
-                if units <= 0:
-                    continue
-                amount = round(units * self.rng.uniform(*AMIT_PER_UNIT) * AMIT_DECREASE_YEARS.get(year, 1), 2)
-                self.adjustments.append(dict(name=name, date=end, amount=amount))
-        self.adjustments.sort(key=lambda a: (a['date'], a['name']))
-        for i, adjustment in enumerate(self.adjustments, 1):
-            adjustment['legacy_id'] = f'A{i:03d}'
+    def generate_statements(self) -> None:
+        """An annual tax statement for each financial year an ETF paid in, once it is issued, with
+        the cost base adjustment it declares where anything is held at the end of the year.
+
+        A payment belongs to the year of its ex-date. The lines hold together as a real statement's
+        do: what is attributed is the cash plus the foreign income tax offset plus the cost base net
+        amount, the capital gains total is twice the discounted gains plus the other method ones,
+        and the adjustment is the net amount, so the app's checks on the statement pass.
+        """
+        years: dict[tuple[dt.date, str], list[dict[str, Any]]] = {}
+        for distribution in self.distributions:
+            end = financial_year_end(distribution['ex_date'])
+            if end + STATEMENT_LAG <= self.as_of:
+                years.setdefault((end, distribution['name']), []).append(distribution)
+
+        for (end, name), paid in sorted(years.items(), key=lambda item: item[0]):
+            currency = HOLDINGS[name].currency
+            cash = sum(d['qty'] * d['per'] for d in paid)
+            sign = -1 if end.year in AMIT_DECREASE_YEARS else 1
+            net = round(cash * self.rng.uniform(*AMIT_NET_SHARE) * sign, 2)
+            capital_share = self.rng.uniform(*CAPITAL_GAIN_SHARE)
+            profile = INCOME_PROFILE[name]
+            # The offset is part of what is attributed, and is worked out from part of it.
+            foreign_share = (1 - capital_share) * profile.get('FOREIGN_SOURCE_INCOME', 0)
+            attributed = (cash + net) / (1 - foreign_share * FITO_RATE)
+
+            gains = attributed * capital_share
+            other = round(gains * self.rng.uniform(*OTHER_METHOD_SHARE), 2)
+            discounted = round((gains - other) / 2, 2)
+            tap = round(discounted * self.rng.uniform(*TAP_SHARE[name]), 2) if name in TAP_SHARE else 0.0
+            total_gains = round(2 * discounted + other, 2)
+
+            income = {component: round((attributed - total_gains) * weight, 2) for component, weight in profile.items()}
+            fito = round(income.get('FOREIGN_SOURCE_INCOME', 0) * FITO_RATE, 2)
+            first = next(iter(income))
+            income[first] = round(cash + fito + net - total_gains - sum(income.values()) + income[first], 2)
+
+            statement_id = f'AS{len(self.statements) + 1:03d}'
+            adjustment_id = None
+            if self.held(name, end) > 0:
+                adjustment_id = f'A{len(self.adjustments) + 1:03d}'
+                self.adjustments.append(dict(legacy_id=adjustment_id, name=name, date=end, amount=net,
+                                             currency=currency))
+            self.statements.append(dict(legacy_id=statement_id, name=name, date=end, adjustment=adjustment_id))
+
+            lines = {
+                'DISCOUNTED_TAP': tap,
+                'DISCOUNTED_NTAP': round(discounted - tap, 2),
+                'OTHER_NTAP': other,
+                'AMIT_GROSS_UP': discounted,
+                'TOTAL_CY_CG': total_gains,
+                **income,
+                'FOREIGN_INCOME_TAX_OFFSET': fito,
+                'COSTBASE_INCREASE' if net > 0 else 'COSTBASE_DECREASE': abs(net),
+            }
+            for component, amount in lines.items():
+                if amount:
+                    self.components.append(dict(legacy_id=f'{statement_id}-{component}',
+                                                lookup_legacy_statement=statement_id, component=component,
+                                                amount=amount, amount_currency=currency))
 
     def generate(self) -> None:
         self.generate_buys()
         self.generate_sells()
         self.generate_splits()
         self.generate_income()
-        self.generate_adjustments()
+        self.generate_statements()
 
     # ----- rows as they appear in the template -----
 
@@ -362,10 +442,14 @@ class FakePortfolio:
             'ShareSplit': self.splits,
             'ResidencyPeriod': [dict(legacy_id='R001', description='Australian resident throughout',
                                      status='RESIDENT', start_date=START)],
-            'CostBaseAdjustment': [dict(legacy_id=a['legacy_id'], cost_base_increase_currency='AUD',
+            'CostBaseAdjustment': [dict(legacy_id=a['legacy_id'], cost_base_increase_currency=a['currency'],
                                         cost_base_increase=a['amount'], instrument__name=a['name'],
                                         financial_year_end_date=a['date'], allocation_method='QTY_HELD')
                                    for a in self.adjustments],
+            'AttributionStatement': [dict(legacy_id=s['legacy_id'], instrument__name=s['name'],
+                                          financial_year_end_date=s['date'], lookup_legacy_adjustment=s['adjustment'])
+                                     for s in self.statements],
+            'AttributionComponent': self.components,
             'Dividend': [dict(legacy_id=d['legacy_id'], instrument__name=d['name'], date=d['date'], quantity=d['qty'],
                               dividend_type=d['type'], unfranked_amount_per_share=d['unfranked'],
                               unfranked_amount_per_share_currency=d['currency'],
@@ -498,4 +582,5 @@ class Command(BaseCommand):
         self.stdout.write(
             f'{len(portfolio.buys)} buys, {len(portfolio.sells)} sells ({len(portfolio.allocations)} manual allocations), '
             f'{len(portfolio.splits)} splits, {len(portfolio.adjustments)} cost base adjustments, '
-            f'{len(portfolio.dividends)} dividends, {len(portfolio.distributions)} distributions.')
+            f'{len(portfolio.dividends)} dividends, {len(portfolio.distributions)} distributions, '
+            f'{len(portfolio.statements)} annual tax statements.')

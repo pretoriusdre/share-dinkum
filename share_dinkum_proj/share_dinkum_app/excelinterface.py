@@ -39,6 +39,10 @@ COMMENT_LINE_HEIGHT = 15
 # and the validation points at that range. It has no table, so the loader does not read it.
 VALUE_ASSISTANCE_SHEET = 'ValueAssistance'
 
+#: A dropdown's allowed values, or a `(list name, values)` pair so several columns share one list.
+DropdownValue = str | bool
+Dropdown = list[DropdownValue] | tuple[str, list[DropdownValue]]
+
 # Rows of validated cells left below the written data, so rows a person adds by hand still get their
 # dropdowns.
 DROPDOWN_SPARE_ROWS = 500
@@ -238,7 +242,7 @@ class ExcelGen:
         self.id_col_style.alignment = Alignment(shrinkToFit=True)
 
 
-    def _value_assistance_range(self, name: str, values: list[str]) -> str:
+    def _value_assistance_range(self, name: str, values: list[DropdownValue]) -> str:
         """Write `values` as their own column of the value assistance sheet, and return its range.
 
         A list name used again is written once, so several tables can share it.
@@ -259,7 +263,7 @@ class ExcelGen:
         header.comment = header_comment(f'The values the dropdowns for {name} offer. Edit the dropdown, not this list.')
         for offset, value in enumerate(values, start=2):
             ws.cell(column=column_index, row=offset, value=value)
-        ws.column_dimensions[column_letter].width = min(max([len(name)] + [len(v) for v in values]) + 2, 60)
+        ws.column_dimensions[column_letter].width = min(max([len(name)] + [len(str(v)) for v in values]) + 2, 60)
 
         reference = f'{quote_sheetname(VALUE_ASSISTANCE_SHEET)}!${column_letter}$2:${column_letter}${len(values) + 1}'
         self._value_assistance_columns[name] = reference
@@ -269,7 +273,7 @@ class ExcelGen:
         self,
         ws: Worksheet,
         columns: list[str],
-        dropdowns: 'dict[str, list[str] | tuple[str, list[str]]]',
+        dropdowns: 'dict[str, Dropdown]',
         start_row: int,
         start_col: int,
         row_count: int,
@@ -280,7 +284,9 @@ class ExcelGen:
                 continue
 
             list_name, values = spec if isinstance(spec, tuple) else (column, spec)
-            values = [str(value) for value in values if value is not None and str(value) != '']
+            # A bool stays a bool, so a pick is an Excel TRUE, which loads; the text "TRUE" does not.
+            values = [value if isinstance(value, bool) else str(value)
+                      for value in values if value is not None and str(value) != '']
             if not values:
                 continue
 
@@ -316,7 +322,7 @@ class ExcelGen:
         value_style_map: dict[Any, Any] | None = None,
         tab_color: str | None = None,
         column_descriptions: dict[str, str] | None = None,
-        dropdowns: 'dict[str, list[str] | tuple[str, list[str]]] | None' = None,
+        dropdowns: 'dict[str, Dropdown] | None' = None,
     ) -> None:
         """Add `df` as a named Excel table on a new numbered sheet.
 

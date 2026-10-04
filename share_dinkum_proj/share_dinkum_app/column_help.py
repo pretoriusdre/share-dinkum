@@ -96,6 +96,8 @@ def _template_text(field: 'Field[Any, Any]') -> list[str]:
     parts = []
     if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
         parts.append('A date, such as 2024-07-01.')
+    if isinstance(field, models.BooleanField):
+        parts.append('TRUE or FALSE.')
     choices = _choices_text(field)
     if choices:
         parts.append(choices)
