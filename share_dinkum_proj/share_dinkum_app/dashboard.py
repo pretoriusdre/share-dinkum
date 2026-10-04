@@ -966,7 +966,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='capture-snapshot/',
         group='Tax',
         label='Take capital gains snapshot',
-        description='Freezes the current figures so a later change can be spotted.',
+        description='Records the current figures so a later change can be spotted.',
         view=capture_snapshot_view,
         status=_snapshot_status,
         busy_label='Taking snapshot...',
@@ -976,8 +976,8 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-cgt-schedule/',
         group='Tax',
         label='Export Australian CGT report',
-        description='A year with warnings is marked as a draft.',
-        view=export_cgt_schedule_view,
+        description='Gains and losses laid out as the ATO capital gains schedule, one column per year.',
+        view=export_cgt_schedule_view
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
         # every dashboard load. Each year carries its own `is_draft` inside the file, which
@@ -991,7 +991,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-income-report/',
         group='Tax',
         label='Export Australian income report',
-        description='Dividends and trust income by return label; a year with warnings is marked as a draft.',
+        description='Dividends and trust income by return label.',
         view=export_income_report_view,
         # No status, for the same reason as the CGT report: whether a year is a draft is in the file.
         status=None,
@@ -1003,9 +1003,8 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export/',
         group='Data',
         label='Export portfolio',
-        description=('Your records in one Excel file, which can be loaded back into an empty '
-                     'portfolio. Documents are named, not included; price history is left out '
-                     'unless ticked, since the market can supply it again.'),
+        description=("A single Excel file which can be loaded back into an empty portfolio. "
+                     "Doesn't include attached files. Excludes price history by default."),
         view=export_data_view,
         status=_export_status,
         options=(ActionOption(name='include_price_history', label='include price history'),),
@@ -1017,7 +1016,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='full-backup/',
         group='Data',
         label='Full backup',
-        description='Copies the database and attached documents to a separate folder.',
+        description='Copies the database, Excel export, and all attached documents to a separate folder. Make sure you replicate the output to another place (eg cloud)',
         view=full_backup_view,
         status=_backup_status,
         busy_label='Backing up...',
