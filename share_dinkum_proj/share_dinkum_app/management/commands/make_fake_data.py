@@ -146,8 +146,10 @@ INCOME_PROFILE: dict[str, dict[str, float]] = {
     'VAS': {'FRANKED_DISTRIBUTION': 0.78, 'UNFRANKED_DISTRIBUTION': 0.13, 'FOREIGN_SOURCE_INCOME': 0.07,
             'INTEREST': 0.02},
 }
-# The foreign income tax offset, as a share of the foreign income.
+# The foreign income tax offset, as a share of the foreign income, and the franking credit on a
+# franked distribution, as a share of it (fully franked at the 30% company rate).
 FITO_RATE = 0.10
+FRANKING_GROSS_UP = CORPORATE_TAX_RATE / (100 - CORPORATE_TAX_RATE)
 
 
 def as_date(value: Any) -> dt.date:
@@ -363,9 +365,10 @@ class FakePortfolio:
         the cost base adjustment it declares where anything is held at the end of the year.
 
         A payment belongs to the year of its ex-date. The lines hold together as a real statement's
-        do: what is attributed is the cash plus the foreign income tax offset plus the cost base net
-        amount, the capital gains total is twice the discounted gains plus the other method ones,
-        and the adjustment is the net amount, so the app's checks on the statement pass.
+        do: what is attributed is the cash plus the tax offsets (foreign income tax and franking
+        credits) plus the cost base net amount, the capital gains total is twice the discounted
+        gains plus the other method ones, and the adjustment is the net amount, so the app's
+        checks on the statement pass.
         """
         years: dict[tuple[dt.date, str], list[dict[str, Any]]] = {}
         for distribution in self.distributions:
@@ -380,9 +383,10 @@ class FakePortfolio:
             net = round(cash * self.rng.uniform(*AMIT_NET_SHARE) * sign, 2)
             capital_share = self.rng.uniform(*CAPITAL_GAIN_SHARE)
             profile = INCOME_PROFILE[name]
-            # The offset is part of what is attributed, and is worked out from part of it.
-            foreign_share = (1 - capital_share) * profile.get('FOREIGN_SOURCE_INCOME', 0)
-            attributed = (cash + net) / (1 - foreign_share * FITO_RATE)
+            # The offsets are part of what is attributed, and are worked out from part of it.
+            offset_share = (1 - capital_share) * (profile.get('FOREIGN_SOURCE_INCOME', 0) * FITO_RATE
+                                                  + profile.get('FRANKED_DISTRIBUTION', 0) * FRANKING_GROSS_UP)
+            attributed = (cash + net) / (1 - offset_share)
 
             gains = attributed * capital_share
             other = round(gains * self.rng.uniform(*OTHER_METHOD_SHARE), 2)
@@ -392,8 +396,9 @@ class FakePortfolio:
 
             income = {component: round((attributed - total_gains) * weight, 2) for component, weight in profile.items()}
             fito = round(income.get('FOREIGN_SOURCE_INCOME', 0) * FITO_RATE, 2)
+            franking = round(income.get('FRANKED_DISTRIBUTION', 0) * FRANKING_GROSS_UP, 2)
             first = next(iter(income))
-            income[first] = round(cash + fito + net - total_gains - sum(income.values()) + income[first], 2)
+            income[first] = round(cash + fito + franking + net - total_gains - sum(income.values()) + income[first], 2)
 
             statement_id = f'AS{len(self.statements) + 1:03d}'
             adjustment_id = None
@@ -410,6 +415,7 @@ class FakePortfolio:
                 'AMIT_GROSS_UP': discounted,
                 'TOTAL_CY_CG': total_gains,
                 **income,
+                'FRANKING_CREDIT': franking,
                 'FOREIGN_INCOME_TAX_OFFSET': fito,
                 'COSTBASE_INCREASE' if net > 0 else 'COSTBASE_DECREASE': abs(net),
             }

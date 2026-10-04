@@ -762,41 +762,56 @@ def refresh_prices_view(request: HttpRequest) -> HttpResponse:
     return redirect(dashboard_url)
 
 
-@require_POST
-def export_cgt_schedule_view(request: HttpRequest) -> HttpResponse:
-    """Return the capital gains schedule as an Excel download.
+def _workbook_download(request: HttpRequest, build: Callable[[Account, str], Any], what: str,
+                       prefix: str) -> HttpResponse:
+    """Return the workbook `build(account, path)` writes as an Excel download.
 
-    Built in a temporary file, read into memory and deleted; nothing is stored.
+    Built in a temporary file, read into memory and deleted; nothing is stored. `what` names it
+    in messages, and `prefix` starts the file name.
     """
-    from share_dinkum_app.reports import cgt_schedule_workbook
-
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
 
     if account is None:
         messages.error(
             request,
-            'No portfolio is associated with your user, so there is no schedule to export.')
+            f'No portfolio is associated with your user, so there is no {what} to export.')
         return redirect(dashboard_url)
 
     try:
         with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as handle:
             temp_path = handle.name
-        cgt_schedule_workbook(account, temp_path)
+        build(account, temp_path)
         payload = Path(temp_path).read_bytes()
     except Exception as exc:
-        logger.warning('CGT schedule export failed for %s: %s', account, exc, exc_info=True)
-        messages.error(request, f'Could not build the capital gains schedule: {exc}')
+        logger.warning('%s export failed for %s: %s', what, account, exc, exc_info=True)
+        messages.error(request, f'Could not build the {what}: {exc}')
         return redirect(dashboard_url)
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
-    filename = f'CGT_Schedule_{account.description}_{date.today().isoformat()}.xlsx'
+    filename = f'{prefix}_{account.description}_{date.today().isoformat()}.xlsx'
     response = HttpResponse(
         payload,
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+@require_POST
+def export_cgt_schedule_view(request: HttpRequest) -> HttpResponse:
+    """Return the capital gains schedule as an Excel download."""
+    from share_dinkum_app.reports import cgt_schedule_workbook
+
+    return _workbook_download(request, cgt_schedule_workbook, 'capital gains schedule', 'CGT_Schedule')
+
+
+@require_POST
+def export_income_report_view(request: HttpRequest) -> HttpResponse:
+    """Return the income report as an Excel download."""
+    from share_dinkum_app.reports import income_workbook
+
+    return _workbook_download(request, income_workbook, 'income report', 'Income_Report')
 
 
 @require_POST
@@ -937,6 +952,18 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on
         # every dashboard load. Each year carries its own `is_draft` inside the file, which
         # is where it matters, since that is what travels to the accountant.
+        status=None,
+        busy_label='Building...',
+        returns_file=True,
+    ),
+    DashboardAction(
+        name='export_income_report',
+        route='export-income-report/',
+        group='Tax',
+        label='Export Australian income report',
+        description='Dividends and trust income by return label, every year in one workbook.',
+        view=export_income_report_view,
+        # No status, for the same reason as the CGT report: whether a year is a draft is in the file.
         status=None,
         busy_label='Building...',
         returns_file=True,

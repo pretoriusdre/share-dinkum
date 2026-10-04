@@ -35,8 +35,14 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Reports
 
-- **No income report.** Franking credits, foreign tax credits, withholding and LIC capital gains
-  are stored, but no report uses them.
+- **The income report (`income.py`) does not cover:**
+  - interest (item 10), since no model records it;
+  - a statement's own TFN withholding line, since it has no component. 13R is taken from
+    distribution withholding instead, in the year paid, so a July payment's credit lands a year
+    after the income it belongs to;
+  - apportioning a statement for a mid-year residency change (it is flagged);
+  - the LIC capital gain deduction (shown for reference, not computed);
+  - layouts other than an individual's return.
 - The basis change report keys rows by sell allocation, and both halves of a disposal split at
   the cutover share one, so the pre-cutover half drops out of the comparison
   (`reports.py`, `CGTBasisChangeReport`).

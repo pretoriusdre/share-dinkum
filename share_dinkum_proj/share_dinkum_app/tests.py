@@ -69,7 +69,7 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, column_help, constants, dashboard, excelinterface, loading, reports, version, yfinanceinterface)
+    cgt, column_help, constants, dashboard, excelinterface, income, loading, reports, version, yfinanceinterface)
 from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
@@ -3570,8 +3570,16 @@ class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
     def test_it_loads_and_every_statement_agrees(self, mock_get_rate):
         output, tables = self._run('fake.xlsx')
         account = create_account()
+        account.taxpayer_type = 'INDIVIDUAL'
+        account.save()
 
         loading.DataLoader(account=account, input_file=output)
+
+        # Every year's income report is final: each ETF year has its statement.
+        summary = income.build(account)
+        for year in summary.years():
+            self.assertFalse(summary.is_draft(year), summary.year_warnings(year))
+        self.assertTrue(any(summary.figures(year)['13Q'] > 0 for year in summary.years()))
 
         statements = AttributionStatement.objects.filter(account=account)
         self.assertEqual(statements.count(), len(tables['AttributionStatement']))
@@ -7002,6 +7010,156 @@ class CGTScheduleExportTests(TransactionTestCase):
         before = set(Path(tempfile.gettempdir()).glob('*.xlsx'))
         self.client.post(self.url)
         self.assertEqual(set(Path(tempfile.gettempdir()).glob('*.xlsx')) - before, set())
+
+
+@patch('share_dinkum_app.models.yfinanceinterface.get_exchange_rate', return_value=Decimal('1.5'))
+class IncomeReportTests(TransactionTestCase):
+    """Dividends and trust income by return label, counted by residency on the day."""
+
+    YEAR = 'FY2023/24'
+
+    def setUp(self):
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        market = create_market(account=self.account)
+        self.bhp = create_instrument(account=self.account, market=market, name='BHP')
+        self.aapl = create_instrument(account=self.account, market=market, name='AAPL', currency='USD')
+        self.vgs = create_instrument(account=self.account, market=market, name='VGS')
+
+    def _payments(self, statement=True):
+        """A franked dividend, a USD dividend with foreign tax, and an ETF payment with its statement."""
+        Dividend.objects.create(
+            account=self.account, instrument=self.bhp, date=date(2024, 3, 15), quantity=Decimal('100'),
+            franked_amount_per_share=Money(Decimal('0.7'), 'AUD'),
+            unfranked_amount_per_share=Money(Decimal('0.3'), 'AUD'))
+        Dividend.objects.create(
+            account=self.account, instrument=self.aapl, date=date(2024, 2, 1), quantity=Decimal('100'),
+            dividend_type='FOREIGN', unfranked_amount_per_share=Money(Decimal('0.5'), 'USD'),
+            franked_amount_per_share=Money(Decimal('0'), 'USD'),
+            foreign_tax_credit=Money(Decimal('7.5'), 'USD'))
+        Distribution.objects.create(
+            account=self.account, instrument=self.vgs, date=date(2024, 4, 15), quantity=Decimal('100'),
+            distribution_amount_per_share=Money(Decimal('1'), 'AUD'),
+            total_withholding_tax=Money(Decimal('2'), 'AUD'))
+        if statement:
+            self._statement(date(2024, 6, 30))
+
+    def _statement(self, year_end):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.vgs, financial_year_end_date=year_end)
+        for component, amount in (('FRANKED_DISTRIBUTION', '10'), ('FRANKING_CREDIT', '4.29'),
+                                  ('UNFRANKED_DISTRIBUTION', '5'), ('INTEREST', '2'),
+                                  ('FOREIGN_SOURCE_INCOME', '50'), ('FOREIGN_INCOME_TAX_OFFSET', '5'),
+                                  ('DISCOUNTED_NTAP', '8'), ('NON_ASSESSABLE_NON_EXEMPT', '3')):
+            AttributionComponent.objects.create(
+                account=self.account, statement=statement, component=component,
+                amount=Money(Decimal(amount), 'AUD'))
+        return statement
+
+    def _figures(self):
+        summary = income.build(self.account)
+        return {key: float(value) for key, value in summary.figures(self.YEAR).items()}, summary
+
+    def test_a_resident_year_fills_each_label(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        expected = {'11S': 30, '11T': 70, '11U': 30, '11V': 0, '13U': 7, '13C': 10, '13Q': 4.29,
+                    '13R': 2, '20E': 125, '20M': 125, '20O': 16.25, income.NON_ASSESSABLE: 3,
+                    income.EXCLUDED_CASH: 0}
+        for key, value in expected.items():
+            self.assertAlmostEqual(figures[key], value, places=4, msg=key)
+        self.assertFalse(summary.is_draft(self.YEAR), summary.year_warnings(self.YEAR))
+
+    def test_a_foreign_resident_counts_nothing_and_lists_it(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2023, 12, 31))
+        declare(self.account, 'FOREIGN', date(2024, 1, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        for label in income.LABELS:
+            self.assertEqual(figures[label], 0, label)
+        self.assertAlmostEqual(figures[income.EXCLUDED_CASH], 100 + 75 + 100)
+        self.assertAlmostEqual(figures[income.EXCLUDED_WITHHELD], 2)
+        self.assertTrue(all(not row.counts for row in summary.payments))
+        # The statement is counted by its year end, which is not the whole year here.
+        self.assertTrue(any('Residency changes' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_temporary_resident_counts_australian_income_only(self, mock_rate):
+        declare(self.account, 'TEMPORARY', date(2016, 1, 1))
+        self._payments()
+
+        figures, _ = self._figures()
+
+        self.assertAlmostEqual(figures['11T'], 70)
+        self.assertAlmostEqual(figures['13C'], 10)
+        for label in ('20E', '20M', '20O'):
+            self.assertEqual(figures[label], 0, label)
+
+    def test_etf_cash_with_no_statement_makes_the_year_a_draft(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments(statement=False)
+
+        _, summary = self._figures()
+
+        self.assertTrue(summary.is_draft(self.YEAR))
+        self.assertTrue(any('no annual statement' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_july_payment_is_explained_by_the_year_before(self, mock_rate):
+        """The June distribution is paid in July, and is on the statement for the year it was earned."""
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._statement(date(2024, 6, 30))
+        Distribution.objects.create(
+            account=self.account, instrument=self.vgs, date=date(2024, 7, 16), quantity=Decimal('100'),
+            distribution_amount_per_share=Money(Decimal('1'), 'AUD'))
+
+        summary = income.build(self.account)
+
+        self.assertFalse(summary.is_draft('FY2024/25'), summary.year_warnings('FY2024/25'))
+
+    def test_undeclared_residency_counts_everything_and_says_so(self, mock_rate):
+        self._payments()
+
+        figures, summary = self._figures()
+
+        self.assertAlmostEqual(figures['11T'], 70)
+        self.assertTrue(any('not been declared' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_a_day_the_history_does_not_cover_is_not_counted(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2024, 3, 1))
+        self._payments()
+
+        figures, summary = self._figures()
+
+        # The USD dividend on 1 February falls before the history starts.
+        self.assertEqual(figures['20M'], 50)
+        self.assertTrue(any('no residency period covers' in text for text in summary.year_warnings(self.YEAR)))
+
+    def test_the_workbook_has_its_sheets_and_the_button_returns_it(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1))
+        self._payments()
+        path = Path(tempfile.mkdtemp()) / 'income.xlsx'
+        self.addCleanup(shutil.rmtree, path.parent)
+
+        reports.income_workbook(self.account, path)
+        tables = excelinterface.get_all_tables_in_excel(path)
+
+        self.assertEqual({'ReturnSchedule', 'Payments', 'TrustIncome', 'NonResident', 'Warnings'} - set(tables), set())
+        schedule = tables['ReturnSchedule'].set_index(tables['ReturnSchedule']['line'].str.strip())
+        self.assertAlmostEqual(schedule.loc[f'11T {income.LABELS["11T"]}', self.YEAR], 70)
+
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        response = self.client.post(reverse('admin:dashboard_export_income_report'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Income_Report', response['Content-Disposition'])
+        self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
 
 
 class DashboardActionRegistryTests(TransactionTestCase):
