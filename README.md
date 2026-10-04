@@ -129,9 +129,7 @@ Related commands (run with `uv run dev`): `load_cpi`, `capture_cutover_valuation
 
 - [docs/capital_gains_models.md](docs/capital_gains_models.md): what each table is for and the order
   to fill them in.
-- [docs/2027_capital_gains_tax_changes_are_really_complex.md](docs/2027_capital_gains_tax_changes_are_really_complex.md):
-  background on the rules.
-- [CHANGELOG.md](CHANGELOG.md), version 0.3.0: the full list of behaviour.
+- [CHANGELOG.md](CHANGELOG.md), version 0.4.0: the full list of behaviour.
 
 ---
 
@@ -141,7 +139,7 @@ All screenshots use the fake sample portfolio.
 
 ### Dashboard
 
-The dashboard has the actions (refresh prices, CGT snapshot and report, export, backup) and charts
+The dashboard has the actions (refresh prices, CGT snapshot and report, income report, export, backup) and charts
 of the portfolio.
 
 ![Dashboard](docs/images/portfolio_screen.png)
@@ -157,6 +155,13 @@ of the portfolio.
 The Australian CGT report sets out each year in the layout of the tax return's CGT schedule.
 
 ![CGT report](docs/images/cgt_report.png)
+
+### Income report
+
+The Australian income report sets out each year's dividends and trust income by return label: items
+11 (dividends), 13 (trusts, from each fund's annual statement) and 20 (foreign income). Only income
+received as an Australian resident counts. Payments while a foreign resident are listed separately,
+with what was withheld.
 
 ### Data management
 Buy Screen:
