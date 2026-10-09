@@ -1,0 +1,167 @@
+year,category,field,value
+ALL,,basis,DIVISION_115
+ALL,,current_year_losses_applied,7.5592 AUD
+ALL,,disregarded_gains,0 AUD
+ALL,,fiscal_year,
+ALL,,gross_gains,5998.8620 AUD
+ALL,,gross_losses,7.5592 AUD
+ALL,,losses_carried_forward,0.0000 AUD
+ALL,,minimum_tax_capital_gain_base,3119.93200 AUD
+ALL,,net_capital_gain,3119.93200 AUD
+ALL,,prior_year_losses_applied,0 AUD
+ALL,,total_discount,2871.37080 AUD
+ALL,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, MSFT, TLS, VAS, VGS, WES."
+ALL,,warnings,"These instruments have not been classified, so their gains cannot be placed on the schedule: MSFT, TLS, WES."
+ALL,capital gain,current_year_losses_applied,7.5592 AUD
+ALL,capital gain,discount_applied,2871.37080 AUD
+ALL,capital gain,gain_before_discount,5991.3028 AUD
+ALL,capital gain,gross_gains,5998.8620 AUD
+ALL,capital gain,net_gain,3119.93200 AUD
+ALL,capital gain,prior_year_losses_applied,0 AUD
+FY2016/17,,basis,DIVISION_115
+FY2016/17,,current_year_losses_applied,0 AUD
+FY2016/17,,disregarded_gains,0 AUD
+FY2016/17,,fiscal_year,FY2016/17
+FY2016/17,,gross_gains,40.9300 AUD
+FY2016/17,,gross_losses,0 AUD
+FY2016/17,,losses_carried_forward,0 AUD
+FY2016/17,,minimum_tax_capital_gain_base,23.53000 AUD
+FY2016/17,,net_capital_gain,23.53000 AUD
+FY2016/17,,prior_year_losses_applied,0 AUD
+FY2016/17,,total_discount,17.40000 AUD
+FY2016/17,,warnings,"The asset category for these instruments was suggested rather than confirmed: VAS, VGS."
+FY2016/17,capital gain,current_year_losses_applied,0 AUD
+FY2016/17,capital gain,discount_applied,17.40000 AUD
+FY2016/17,capital gain,gain_before_discount,40.9300 AUD
+FY2016/17,capital gain,gross_gains,40.9300 AUD
+FY2016/17,capital gain,net_gain,23.53000 AUD
+FY2016/17,capital gain,prior_year_losses_applied,0 AUD
+FY2017/18,,basis,DIVISION_115
+FY2017/18,,current_year_losses_applied,0 AUD
+FY2017/18,,disregarded_gains,0 AUD
+FY2017/18,,fiscal_year,FY2017/18
+FY2017/18,,gross_gains,237.4000 AUD
+FY2017/18,,gross_losses,0 AUD
+FY2017/18,,losses_carried_forward,0 AUD
+FY2017/18,,minimum_tax_capital_gain_base,126.85000 AUD
+FY2017/18,,net_capital_gain,126.85000 AUD
+FY2017/18,,prior_year_losses_applied,0 AUD
+FY2017/18,,total_discount,110.55000 AUD
+FY2017/18,,warnings,"The asset category for these instruments was suggested rather than confirmed: VAS, VGS."
+FY2017/18,capital gain,current_year_losses_applied,0 AUD
+FY2017/18,capital gain,discount_applied,110.55000 AUD
+FY2017/18,capital gain,gain_before_discount,237.4000 AUD
+FY2017/18,capital gain,gross_gains,237.4000 AUD
+FY2017/18,capital gain,net_gain,126.85000 AUD
+FY2017/18,capital gain,prior_year_losses_applied,0 AUD
+FY2018/19,,basis,DIVISION_115
+FY2018/19,,current_year_losses_applied,0 AUD
+FY2018/19,,disregarded_gains,0 AUD
+FY2018/19,,fiscal_year,FY2018/19
+FY2018/19,,gross_gains,1666.0004 AUD
+FY2018/19,,gross_losses,0 AUD
+FY2018/19,,losses_carried_forward,0 AUD
+FY2018/19,,minimum_tax_capital_gain_base,845.51020 AUD
+FY2018/19,,net_capital_gain,845.51020 AUD
+FY2018/19,,prior_year_losses_applied,0 AUD
+FY2018/19,,total_discount,820.49020 AUD
+FY2018/19,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, VAS, VGS."
+FY2018/19,capital gain,current_year_losses_applied,0 AUD
+FY2018/19,capital gain,discount_applied,820.49020 AUD
+FY2018/19,capital gain,gain_before_discount,1666.0004 AUD
+FY2018/19,capital gain,gross_gains,1666.0004 AUD
+FY2018/19,capital gain,net_gain,845.51020 AUD
+FY2018/19,capital gain,prior_year_losses_applied,0 AUD
+FY2019/20,,basis,DIVISION_115
+FY2019/20,,current_year_losses_applied,0 AUD
+FY2019/20,,disregarded_gains,0 AUD
+FY2019/20,,fiscal_year,FY2019/20
+FY2019/20,,gross_gains,1106.6495 AUD
+FY2019/20,,gross_losses,0 AUD
+FY2019/20,,losses_carried_forward,0 AUD
+FY2019/20,,minimum_tax_capital_gain_base,560.90475 AUD
+FY2019/20,,net_capital_gain,560.90475 AUD
+FY2019/20,,prior_year_losses_applied,0 AUD
+FY2019/20,,total_discount,545.74475 AUD
+FY2019/20,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, TLS, VAS, VGS."
+FY2019/20,,warnings,"These instruments have not been classified, so their gains cannot be placed on the schedule: TLS."
+FY2019/20,capital gain,current_year_losses_applied,0 AUD
+FY2019/20,capital gain,discount_applied,545.74475 AUD
+FY2019/20,capital gain,gain_before_discount,1106.6495 AUD
+FY2019/20,capital gain,gross_gains,1106.6495 AUD
+FY2019/20,capital gain,net_gain,560.90475 AUD
+FY2019/20,capital gain,prior_year_losses_applied,0 AUD
+FY2021/22,,basis,DIVISION_115
+FY2021/22,,current_year_losses_applied,0 AUD
+FY2021/22,,disregarded_gains,0 AUD
+FY2021/22,,fiscal_year,FY2021/22
+FY2021/22,,gross_gains,467.2599 AUD
+FY2021/22,,gross_losses,0 AUD
+FY2021/22,,losses_carried_forward,0 AUD
+FY2021/22,,minimum_tax_capital_gain_base,244.63495 AUD
+FY2021/22,,net_capital_gain,244.63495 AUD
+FY2021/22,,prior_year_losses_applied,0 AUD
+FY2021/22,,total_discount,222.62495 AUD
+FY2021/22,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, VGS, WES."
+FY2021/22,,warnings,"These instruments have not been classified, so their gains cannot be placed on the schedule: WES."
+FY2021/22,capital gain,current_year_losses_applied,0 AUD
+FY2021/22,capital gain,discount_applied,222.62495 AUD
+FY2021/22,capital gain,gain_before_discount,467.2599 AUD
+FY2021/22,capital gain,gross_gains,467.2599 AUD
+FY2021/22,capital gain,net_gain,244.63495 AUD
+FY2021/22,capital gain,prior_year_losses_applied,0 AUD
+FY2022/23,,basis,DIVISION_115
+FY2022/23,,current_year_losses_applied,0 AUD
+FY2022/23,,disregarded_gains,0 AUD
+FY2022/23,,fiscal_year,FY2022/23
+FY2022/23,,gross_gains,761.2900 AUD
+FY2022/23,,gross_losses,0 AUD
+FY2022/23,,losses_carried_forward,0 AUD
+FY2022/23,,minimum_tax_capital_gain_base,419.63000 AUD
+FY2022/23,,net_capital_gain,419.63000 AUD
+FY2022/23,,prior_year_losses_applied,0 AUD
+FY2022/23,,total_discount,341.66000 AUD
+FY2022/23,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, VGS."
+FY2022/23,capital gain,current_year_losses_applied,0 AUD
+FY2022/23,capital gain,discount_applied,341.66000 AUD
+FY2022/23,capital gain,gain_before_discount,761.2900 AUD
+FY2022/23,capital gain,gross_gains,761.2900 AUD
+FY2022/23,capital gain,net_gain,419.63000 AUD
+FY2022/23,capital gain,prior_year_losses_applied,0 AUD
+FY2023/24,,basis,DIVISION_115
+FY2023/24,,current_year_losses_applied,0 AUD
+FY2023/24,,disregarded_gains,0 AUD
+FY2023/24,,fiscal_year,FY2023/24
+FY2023/24,,gross_gains,920.7400 AUD
+FY2023/24,,gross_losses,0 AUD
+FY2023/24,,losses_carried_forward,0 AUD
+FY2023/24,,minimum_tax_capital_gain_base,480.67000 AUD
+FY2023/24,,net_capital_gain,480.67000 AUD
+FY2023/24,,prior_year_losses_applied,0 AUD
+FY2023/24,,total_discount,440.07000 AUD
+FY2023/24,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, VGS."
+FY2023/24,capital gain,current_year_losses_applied,0 AUD
+FY2023/24,capital gain,discount_applied,440.07000 AUD
+FY2023/24,capital gain,gain_before_discount,920.7400 AUD
+FY2023/24,capital gain,gross_gains,920.7400 AUD
+FY2023/24,capital gain,net_gain,480.67000 AUD
+FY2023/24,capital gain,prior_year_losses_applied,0 AUD
+FY2024/25,,basis,DIVISION_115
+FY2024/25,,current_year_losses_applied,7.5592 AUD
+FY2024/25,,disregarded_gains,0 AUD
+FY2024/25,,fiscal_year,FY2024/25
+FY2024/25,,gross_gains,798.5922 AUD
+FY2024/25,,gross_losses,7.5592 AUD
+FY2024/25,,losses_carried_forward,0.0000 AUD
+FY2024/25,,minimum_tax_capital_gain_base,418.20210 AUD
+FY2024/25,,net_capital_gain,418.20210 AUD
+FY2024/25,,prior_year_losses_applied,0 AUD
+FY2024/25,,total_discount,372.83090 AUD
+FY2024/25,,warnings,"The asset category for these instruments was suggested rather than confirmed: A200, MSFT, VGS."
+FY2024/25,,warnings,"These instruments have not been classified, so their gains cannot be placed on the schedule: MSFT."
+FY2024/25,capital gain,current_year_losses_applied,7.5592 AUD
+FY2024/25,capital gain,discount_applied,372.83090 AUD
+FY2024/25,capital gain,gain_before_discount,791.0330 AUD
+FY2024/25,capital gain,gross_gains,798.5922 AUD
+FY2024/25,capital gain,net_gain,418.20210 AUD
+FY2024/25,capital gain,prior_year_losses_applied,0 AUD

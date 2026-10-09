@@ -1,6 +1,7 @@
 """Test suite for share_dinkum_app. Run with: python manage.py test share_dinkum_app"""
 import io
 import json
+import os
 import shutil
 import sqlite3
 import pickle
@@ -70,7 +71,8 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, column_help, constants, dashboard, excelinterface, income, loading, reports, version, yfinanceinterface)
+    cgt, column_help, constants, dashboard, excelinterface, figures_dump, income, loading, reports, version,
+    yfinanceinterface)
 from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
@@ -3594,6 +3596,158 @@ class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
         self.assertEqual(Sell.objects.filter(account=account).count(), len(tables['Sell']))
 
 
+TEST_FIXTURES = Path(__file__).resolve().parent / 'test_fixtures'
+GOLDEN_FIGURES = TEST_FIXTURES / 'golden_figures'
+
+
+class PinnedToday(date):
+    """`date` with `today()` fixed at the fake portfolio's as-of date, so the golden figures
+    do not change as the current year ends."""
+
+    @classmethod
+    def today(cls):
+        return date.fromisoformat(FakeMarketMixin.AS_OF)
+
+
+@patch('share_dinkum_app.cgt.schedule.date', PinnedToday)
+@patch('share_dinkum_app.cgt.residency.date', PinnedToday)
+class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
+    """The figures dump, which shows whether a change moved any figure.
+
+    The fake portfolio's dump is committed in `test_fixtures/golden_figures`. A change that is
+    meant to move figures regenerates it with SHARE_DINKUM_UPDATE_GOLDEN=1 and commits the diff.
+    """
+
+    def _load(self, path, account=None):
+        """Load a file offline, at the rate the other fake portfolio tests use. Returns the account."""
+        with figures_dump.offline(), patch.object(
+                yfinanceinterface, 'get_exchange_rate', return_value=Decimal('1.5')):
+            return loading.DataLoader(account=account, input_file=path).account
+
+    def _fake_portfolio(self):
+        output, _ = self._run('fake.xlsx')
+        account = create_account()
+        account.taxpayer_type = 'INDIVIDUAL'
+        account.save()
+        return self._load(output, account)
+
+    def assertSameFigures(self, expected, actual):
+        """Every table equal; otherwise one failure naming each table that differs, and how."""
+        self.assertEqual(sorted(expected), sorted(actual), 'the dump has different tables')
+        problems = []
+        for name in expected:
+            if expected[name] == actual[name]:
+                continue
+            missing = [row for row in expected[name] if row not in actual[name]]
+            extra = [row for row in actual[name] if row not in expected[name]]
+            problems.append(
+                f'{name}: {len(missing)} row(s) expected but not found, {len(extra)} unexpected.\n'
+                f'  expected: {missing[:3]}\n  found:    {extra[:3]}')
+        if problems:
+            self.fail('The figures differ.\n' + '\n'.join(problems))
+
+    def test_the_fake_portfolio_figures_match_the_golden_copy(self):
+        figures = figures_dump.dump(self._fake_portfolio())
+
+        if os.environ.get('SHARE_DINKUM_UPDATE_GOLDEN'):
+            shutil.rmtree(GOLDEN_FIGURES, ignore_errors=True)
+            figures_dump.write(figures, GOLDEN_FIGURES)
+            self.skipTest(f'Rewrote {GOLDEN_FIGURES}. Review the diff before committing it.')
+
+        # Through the files, so the comparison is with what was written, not what was meant.
+        written = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, written, True)
+        figures_dump.write(figures, written)
+        self.assertSameFigures(figures_dump.read(GOLDEN_FIGURES), figures_dump.read(written))
+
+    #: Stored copies that are stale before an export and refreshed by the restore's recalculation,
+    #: so they differ for a known reason. `calculated_related_parcels` is the parcels' text as it
+    #: stood when the buy was entered, before later cost base adjustments; the portfolio value is
+    #: 0 when the account was saved and blank after a restore. Remove an entry once it is fixed.
+    STALE_BEFORE_EXPORT = {('Buy', 'calculated_related_parcels'),
+                           ('Account', 'calculated_portfolio_value_converted')}
+
+    def _without_stale(self, tables):
+        calculated = tables['calculated']
+        kept = [row for row in calculated[1:] if (row[0], row[2]) not in self.STALE_BEFORE_EXPORT]
+        return {**tables, 'calculated': [calculated[0], *kept]}
+
+    def test_an_export_restores_to_the_same_figures(self):
+        account = self._fake_portfolio()
+        before = figures_dump.dump(account)
+
+        export = DataExport.objects.create(account=account)
+        export.refresh_from_db()
+        path = Path(tempfile.mkdtemp()) / Path(export.file.path).name
+        self.addCleanup(shutil.rmtree, path.parent, True)
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        restored = self._load(path)
+
+        self.assertSameFigures(self._without_stale(before), self._without_stale(figures_dump.dump(restored)))
+
+    def test_the_dump_writes_nothing(self):
+        """Reading figures creates fiscal years and placeholder rates, so the dump rolls back."""
+        account = self._fake_portfolio()
+        FiscalYear.objects.all().delete()
+        counts = {model.__name__: model.objects.count() for model in apps.get_app_config('share_dinkum_app').get_models()}
+
+        with patch.object(figures_dump, 'collect', wraps=figures_dump.collect) as collect:
+            figures_dump.dump(account)
+        self.assertTrue(collect.called)
+
+        self.assertEqual(
+            counts, {model.__name__: model.objects.count() for model in apps.get_app_config('share_dinkum_app').get_models()})
+
+    def test_the_dump_is_the_same_twice(self):
+        account = self._fake_portfolio()
+        self.assertSameFigures(figures_dump.dump(account), figures_dump.dump(account))
+
+    def test_every_export_ever_taken_still_loads(self):
+        """Exports taken by earlier releases, from fake data, restore into an empty database."""
+        for path in sorted(TEST_FIXTURES.glob('export_*.xlsx')):
+            with self.subTest(path.name):
+                call_command('flush', interactive=False, verbosity=0)
+                account = self._load(path)
+                self.assertGreater(Buy.objects.filter(account=account).count(), 0)
+                self.assertGreater(Parcel.objects.filter(account=account).count(), 0)
+                figures = figures_dump.dump(account)
+                self.assertGreater(len(figures['cgt_events']), 1, 'the restored portfolio has no sales')
+        self.assertEqual(len(list(TEST_FIXTURES.glob('export_*.xlsx'))), 2)
+
+    def test_the_command_writes_a_csv_per_table(self):
+        account = create_account(description='Dumped')
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, True)
+
+        call_command('dump_figures', account='Dumped', out=str(out), stdout=io.StringIO())
+
+        self.assertEqual(sorted(path.stem for path in out.glob('*.csv')), sorted(figures_dump.dump(account)))
+        with self.assertRaisesMessage(CommandError, 'No portfolio named'):
+            call_command('dump_figures', account='Missing', out=str(out))
+
+
+class FiguresDumpKeyTests(TestCase):
+
+    def test_every_model_with_stored_figures_has_a_natural_key(self):
+        """A new model with `calculated_*` fields needs a key in `figures_dump.Keys`."""
+        stored = {model.__name__ for model in figures_dump.models_with_calculated_fields()}
+        self.assertLessEqual(stored, {*figures_dump.KEYED_MODELS, 'Account'})
+
+    def test_an_id_in_text_becomes_the_key_of_what_it_names(self):
+        keys = figures_dump.Keys(account=None)
+        keys.by_id['01a1212d-8aae-715f-9afd-ca57c926698a'] = 'Parcel X'
+        self.assertEqual(
+            keys.translate('01a1212d-8aae-715f-9afd-ca57c926698a | INACTIVE\n01a1212d-0000-715f-9afd-ca57c926698a'),
+            'Parcel X | INACTIVE\n<id>')
+
+    def test_decimals_are_exact_and_without_an_exponent(self):
+        self.assertEqual(figures_dump._text(Decimal('1E+2')), '100')
+        self.assertEqual(figures_dump._text(Decimal('1.50')), '1.50')
+        self.assertEqual(figures_dump._text(Money(Decimal('2.5'), 'AUD')), '2.5 AUD')
+
+
 class NormaliseCellsTests(TestCase):
 
     def test_a_blank_cell_stays_none(self):
@@ -6877,6 +7031,27 @@ class FullBackupTests(TransactionTestCase):
         latest = self.backup.latest_backup(self.destination)
         self.assertEqual(latest.name, '2026-09-05T141921')
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 1)
+
+    def test_the_database_is_the_one_env_names(self):
+        """`uv run update` backs up the database `.env` names, not a hard-coded one."""
+        project = Path(tempfile.mkdtemp())
+        (project / '.env').write_text('DB_ENGINE=django.db.backends.sqlite3\nDB_NAME=portfolio.sqlite3\n')
+        with patch.dict(os.environ):
+            os.environ.pop('DB_NAME', None)
+            os.environ.pop('DB_ENGINE', None)
+            self.assertEqual(self.backup.configured_database(project), project / 'portfolio.sqlite3')
+
+            absolute = self.root / 'elsewhere.sqlite3'
+            (project / '.env').write_text(f'DB_ENGINE=django.db.backends.sqlite3\nDB_NAME={absolute}\n')
+            self.assertEqual(self.backup.configured_database(project), absolute)
+
+            (project / '.env').write_text('DB_ENGINE=django.db.backends.postgresql\nDB_NAME=dinkum\n')
+            self.assertIsNone(self.backup.configured_database(project))
+
+    def test_media_alone_is_backed_up_without_a_sqlite_database(self):
+        result = self.backup.make_backup(None, self.media, self.destination)
+        self.assertEqual(result['database_bytes'], 0)
+        self.assertEqual(result['media_files'], 1)
 
     def test_the_old_flat_layout_is_never_pruned(self):
         """Old-layout backups are never pruned."""

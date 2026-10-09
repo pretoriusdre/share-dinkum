@@ -63,8 +63,6 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 - Deleting a FiscalYear leaves `calculated_fiscal_year` null on the rows that pointed at it.
 - `refetch_price_history` names only the holdings the provider returned nothing for. One it has
   only part of the history for keeps its older prices adjusted, and is not named.
-- `devserver.py` backs up `db.sqlite3` before an update whatever `.env` says `DB_NAME` is, so
-  with another name `uv run update` skips the backup and says there is no data.
 - The CGT schedule download builds `Content-Disposition` by hand, so a portfolio name with a
   quote in it breaks the filename (`dashboard.export_cgt_schedule_view`).
 

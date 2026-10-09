@@ -4,6 +4,21 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
+## Unreleased
+
+This release is primarily related to refactoring code to improve the maintainability of the code.
+No behaviour changes.
+
+### Added
+
+- `uv run dev dump_figures --account NAME --out DIR` writes every figure for a portfolio (parcels,
+  allocations, stored calculated values, CGT events and schedules, income) to sorted CSVs, so two
+  dumps taken before and after a change can be compared. It changes nothing in the database.
+
+### Changed
+
+- `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
+
 ## 0.4.0 - 2026-10-04
 
 A minor release focused on documentation, improved sample data, ease of importing, and reporting.

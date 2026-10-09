@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / "share_dinkum_proj"
 MANAGE = PROJECT / "manage.py"
 
-DATABASE = PROJECT / "db.sqlite3"
 MEDIA = PROJECT / "media"
 
 # The backup itself is shared with the application, so the update path and the dashboard
@@ -106,8 +105,15 @@ def conflicting_paths(local_changes: set[str], incoming_changes: set[str] | None
 
 
 def _backup() -> Path | None:
-    """Back up the database and media to the shared backup folder. Returns its path, or None."""
-    result = backup.make_backup(DATABASE, MEDIA)
+    """Back up the database and media to the shared backup folder. Returns its path, or None.
+
+    The database is the one `.env` names, so a portfolio kept under another `DB_NAME` is backed up
+    too. A database that is not a SQLite file is left to its own tools, and only media is copied.
+    """
+    database = backup.configured_database(PROJECT)
+    if database is None:
+        print("\n==> The database is not a SQLite file, so only media is backed up.")
+    result = backup.make_backup(database, MEDIA)
     if result is None:
         print("\n==> No data to back up yet, skipping.")
         return None
