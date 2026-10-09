@@ -7,7 +7,7 @@ To upgrade, stop the server and run `uv run update`.
 ## Unreleased
 
 This release is primarily related to refactoring code to improve the maintainability of the code.
-No behaviour changes.
+No behaviour changes other than a fix that keeps share splits protected after a portfolio is restored from an export.
 
 ### Added
 
@@ -18,6 +18,13 @@ No behaviour changes.
 ### Changed
 
 - `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
+
+### Fixed
+
+- A share split restored from an export keeps its link to the parcels it created. Without it, a sale
+  dated before the split was accepted, and the split could be deleted without being reversed.
+  Figures were not affected. For a portfolio already restored, `uv run dev repair_portfolio_data`
+  restores the links, and the dashboard says when it is needed.
 
 ## 0.4.0 - 2026-10-04
 

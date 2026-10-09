@@ -1899,6 +1899,32 @@ class ShareSplit(BaseModel):
             f'allocated, and this split is {when}, so that sale was worked out in pre-split '
             f'units. Delete that sale, enter the split, then enter the sale again.')
 
+    def parcels_created(self) -> list['Parcel']:
+        """The parcels this split created, found from the parcel tree rather than the links.
+
+        An export does not carry `affected_parcels`, so a restore rebuilds them from this.
+        Applying the split replaced each parcel with a single child dated on the split, holding
+        its units times the ratio. A sale the same day also replaces a parcel, with two children.
+        """
+        quantity_field = Parcel._meta.get_field('parcel_quantity')
+        multiplier_field = Parcel._meta.get_field('cumulative_split_multiplier')
+        replaced = Parcel.objects.filter(
+            account_id=self.account_id, buy__instrument_id=self.instrument_id,
+            buy__date__lt=self.date, deactivation_date=self.date,
+        ).prefetch_related('children')
+
+        created: list[Parcel] = []
+        for parent in replaced:
+            children = [child for child in parent.children.all() if child.activation_date == self.date]
+            if len(children) != 1:
+                continue
+            child = children[0]
+            if (child.parcel_quantity == convert_to_decimal_field(parent.parcel_quantity * self.ratio, quantity_field)
+                    and child.cumulative_split_multiplier == convert_to_decimal_field(
+                        parent.cumulative_split_multiplier * self.ratio, multiplier_field)):
+                created.append(child)
+        return created
+
     def deletion_blocker(self) -> str | None:
         """Why this split cannot be deleted, or None if it can.
 

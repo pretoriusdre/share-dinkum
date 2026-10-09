@@ -57,6 +57,7 @@ class Command(BaseCommand):
         with transaction.atomic():
             reattached = recalculate.reattach_adjustments(account)
             refetched = recalculate.refetch_placeholder_rates(account)
+            relinked = recalculate.relink_split_parcels(account)
             recalculated = recalculate.account(account)
 
         if reattached:
@@ -65,6 +66,9 @@ class Command(BaseCommand):
                 f'that replaced theirs.'))
         if refetched:
             self.stdout.write(self.style.SUCCESS(f'  fetched {refetched} exchange rate(s).'))
+        if relinked:
+            self.stdout.write(self.style.SUCCESS(
+                f'  linked {relinked} share split(s) back to the parcels they created.'))
         self.stdout.write(self.style.SUCCESS(
             f'  recalculated the stored figures of {recalculated} record(s).'))
 

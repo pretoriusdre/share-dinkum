@@ -111,6 +111,19 @@ def _push_down(allocation: 'CostBaseAdjustmentAllocation') -> None:
             allocation.pk, parcel.pk, len(children))
 
 
+def relink_split_parcels(account: 'Account') -> int:
+    """Link each applied split back to the parcels it created. Returns the splits relinked.
+
+    See `data_checks.splits_without_parcels`.
+    """
+    from share_dinkum_app import data_checks
+
+    splits = data_checks.splits_without_parcels(account)
+    for split in splits:
+        split.affected_parcels.set(split.parcels_created())
+    return len(splits)
+
+
 def refetch_placeholder_rates(account: 'Account') -> int:
     """Fetch again every stand-in exchange rate. Returns the number now real."""
     from share_dinkum_app import data_checks

@@ -71,7 +71,7 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, column_help, constants, dashboard, excelinterface, figures_dump, income, loading, reports, version,
+    cgt, column_help, constants, dashboard, data_checks, excelinterface, figures_dump, income, loading, reports, version,
     yfinanceinterface)
 from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
@@ -5699,6 +5699,66 @@ class ExportRoundTripTests(TransactionTestCase):
         self.assertEqual(
             Parcel.objects.filter(buy__isnull=False).count(), parcels_before,
             'every parcel should be one the file supplied, not one a signal invented')
+
+    def test_a_split_keeps_the_parcels_it_was_applied_to(self):
+        """A restored split still knows its parcels, so it still guards the history.
+
+        `affected_parcels` is many-to-many, which the export does not write. Without it, the
+        split could be deleted after its parcels were sold, reversing nothing, and a sale dated
+        before it would be accepted.
+        """
+        data = create_golden_master_portfolio()
+        account, split = data['account'], data['share_split']
+        affected = set(split.affected_parcels.values_list('id', flat=True))
+        self.assertTrue(affected)
+        self.assertIsNotNone(split.deletion_blocker())
+        path = self._detached_export(account)
+
+        self._wipe()
+        loading.DataLoader(input_file=path)
+
+        restored = ShareSplit.objects.get(pk=split.pk)
+        self.assertEqual(set(restored.affected_parcels.values_list('id', flat=True)), affected)
+        self.assertIsNotNone(restored.deletion_blocker(), 'the split can be deleted after its parcels were sold')
+        early_sale = Sell(
+            account=restored.account, instrument=restored.instrument, date=date(2023, 6, 1),
+            quantity=Decimal('10'), unit_price=Money(Decimal('9.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        self.assertIsNotNone(early_sale.chronology_problem(), 'a sale dated before the split is accepted')
+
+    def test_a_split_restored_without_its_parcels_is_found_and_repaired(self):
+        """A portfolio restored before the loader relinked splits is flagged and repaired."""
+        data = create_golden_master_portfolio()
+        account, split = data['account'], data['share_split']
+        affected = set(split.affected_parcels.all())
+        split.affected_parcels.clear()
+
+        finding = {f.key: f for f in data_checks.run(account)}['splits_without_parcels']
+        self.assertTrue(finding.repairable)
+
+        call_command('repair_portfolio_data', stdout=io.StringIO())
+
+        self.assertEqual(set(split.affected_parcels.all()), affected)
+        self.assertNotIn('splits_without_parcels', {f.key for f in data_checks.run(account)})
+
+    def test_a_sale_on_the_split_date_is_not_taken_for_the_split(self):
+        """A sale the same day also replaces a parcel, with two children, not one."""
+        account = create_account()
+        instrument = create_instrument(account=account)
+        Buy.objects.create(account=account, instrument=instrument, date=date(2023, 1, 10),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Buy.objects.create(account=account, instrument=instrument, date=date(2023, 2, 10),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        split = ShareSplit.objects.create(account=account, instrument=instrument, date=date(2023, 6, 1),
+                                          quantity_before=Decimal('1'), quantity_after=Decimal('2'))
+        Sell.objects.create(account=account, instrument=instrument, date=date(2023, 6, 1),
+                            quantity=Decimal('50'), unit_price=Money(Decimal('6'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+
+        self.assertEqual(set(split.parcels_created()), set(split.affected_parcels.all()))
+        self.assertEqual(len(split.parcels_created()), 2)
 
     def test_a_column_the_model_no_longer_has_is_ignored(self):
         """A column the model no longer has is ignored on import."""

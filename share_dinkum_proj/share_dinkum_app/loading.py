@@ -364,7 +364,9 @@ class DataLoader():
             if not template and self.account is not None:
                 # An export's derived rows arrive already handled, so the saves that would
                 # have kept the stored figures current (an instrument's holding, a parcel's
-                # sold flag) ran before the rows they count had loaded.
+                # sold flag) ran before the rows they count had loaded. Nor does it carry a
+                # split's links to its parcels, which are many-to-many.
+                recalculate.relink_split_parcels(self.account)
                 recalculate.account(self.account)
 
     @staticmethod

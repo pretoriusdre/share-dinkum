@@ -14,7 +14,7 @@ from django.db.models.functions import Abs, Coalesce
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell,
+        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell, ShareSplit,
     )
 
 COMMAND = 'uv run dev repair_portfolio_data'
@@ -111,6 +111,18 @@ def empty_adjustments(account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
     )
 
 
+def splits_without_parcels(account: 'Account') -> list['ShareSplit']:
+    """Applied splits that have lost the links to the parcels they created.
+
+    Exports did not carry them, so a portfolio restored from one has none. Such a split no longer stops a sale being
+    entered before it, and can be deleted without reversing anything.
+    """
+    from share_dinkum_app.models import ShareSplit
+    unlinked = ShareSplit.objects.filter(
+        account=account, _creation_handled=True, affected_parcels__isnull=True)
+    return [split for split in unlinked if split.parcels_created()]
+
+
 def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
@@ -147,6 +159,10 @@ def run(account: 'Account') -> list[Finding]:
          'cost base adjustment allocation(s) left behind by a share split, and so missing '
          'from the cost base',
          True, True),
+        ('splits_without_parcels', len(splits_without_parcels(account)),
+         'share split(s) no longer linked to the parcels they created, so a sale dated before '
+         'one is not refused',
+         True, False),
         ('placeholder_rates', placeholder_rates(account).count(),
          'exchange rate(s) standing in for one that could not be fetched',
          True, True),
