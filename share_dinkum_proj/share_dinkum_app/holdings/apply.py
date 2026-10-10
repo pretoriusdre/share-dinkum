@@ -14,9 +14,12 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from share_dinkum_app.holdings.state import AdjustmentRow, Holding, Lineage, SaleRow
+
+if TYPE_CHECKING:
+    from share_dinkum_app.models import Account
 
 #: The parcel fields a rebuild sets.
 PARCEL_FIELDS = ('parent', 'activation', 'deactivation', 'quantity', 'multiplier', 'sale_date')
@@ -32,6 +35,10 @@ class NewPart:
 
 @dataclass
 class Plan:
+    #: Every stored parcel's id, by lineage, so the writer can find what it updates.
+    parcel_refs: dict[Lineage, Any] = field(default_factory=dict)
+    #: Every replayed parcel's fields, by lineage.
+    wanted_parcels: dict[Lineage, dict[str, Any]] = field(default_factory=dict)
     #: lineage -> the replayed fields, for a parcel the stored holding lacks. Parents first.
     create_parcels: dict[Lineage, dict[str, Any]] = field(default_factory=dict)
     #: stored ref -> the fields that change.
@@ -72,12 +79,21 @@ def _parcel_fields(holding: Holding, lineages: dict[Any, Lineage], ref: Any) -> 
     }
 
 
+def _creation_order(lineage: Lineage) -> tuple[Any, ...]:
+    """Sorts parents before children, and siblings by date then place."""
+    return (len(lineage), tuple((str(made), place) for made, place in lineage[1:]))
+
+
 def _plan_parcels(result: Plan, stored: Holding, replayed: Holding,
                   stored_lineages: dict[Any, Lineage], replayed_lineages: dict[Any, Lineage]) -> None:
     stored_by_lineage = {lineage: ref for ref, lineage in stored_lineages.items()}
     replayed_by_lineage = {lineage: ref for ref, lineage in replayed_lineages.items()}
-    for lineage, ref in sorted(replayed_by_lineage.items(), key=lambda item: len(item[0])):
+    result.parcel_refs = dict(stored_by_lineage)
+    # Parents before children, and siblings in their place: a stored parcel's place among its
+    # siblings is read from the order of their ids, so they must be made in that order.
+    for lineage, ref in sorted(replayed_by_lineage.items(), key=lambda item: _creation_order(item[0])):
         wanted = _parcel_fields(replayed, replayed_lineages, ref)
+        result.wanted_parcels[lineage] = wanted
         if lineage not in stored_by_lineage:
             result.create_parcels[lineage] = wanted
             continue
@@ -156,4 +172,115 @@ def plan(stored: Holding, replayed: Holding) -> Plan:
     _plan_parcels(result, stored, replayed, stored_lineages, replayed_lineages)
     _plan_sales(result, stored, replayed, stored_lineages, replayed_lineages)
     _plan_parts(result, stored, replayed, stored_lineages, replayed_lineages)
+    return result
+
+
+# --- writing -------------------------------------------------------------------------------
+
+def write(account: 'Account', plan: Plan) -> None:
+    """Make the stored holding what `plan` says, in the caller's transaction.
+
+    In this order, so nothing is pointed at a row that does not exist yet or is about to go:
+    allocations and parts the replay does not make are removed; parcels are created (parents
+    first) and updated; allocations and parts are created and updated; then parcels the replay
+    does not make are removed. Last, each split is linked to the parcels it made, and the stored
+    figures of the instruments touched are worked out again.
+    """
+    from django.db import transaction
+    from djmoney.money import Money
+
+    from share_dinkum_app import recalculate
+    from share_dinkum_app.models import (
+        CostBaseAdjustmentAllocation, Instrument, Parcel, Sell, SellAllocation, ShareSplit,
+    )
+
+    if plan.empty:
+        return
+    currency = str(account.currency)
+    refs = dict(plan.parcel_refs)
+    buys: set[Any] = set()
+
+    with transaction.atomic():
+        # Deleting an allocation clears its parcel's sale date if nothing else sells it. Where
+        # the replay keeps that parcel sold, the date is set again below.
+        unsold = set(SellAllocation.objects.filter(pk__in=plan.delete_sales).values_list('parcel_id', flat=True))
+        SellAllocation.objects.filter(pk__in=plan.delete_sales).delete()
+        CostBaseAdjustmentAllocation.objects.filter(pk__in=plan.delete_parts).delete()
+        lineage_of = {ref: lineage for lineage, ref in plan.parcel_refs.items()}
+        for ref in unsold:
+            wanted = plan.wanted_parcels.get(lineage_of.get(ref, ()))
+            if wanted is not None and ref not in plan.update_parcels:
+                Parcel.objects.filter(pk=ref).update(sale_date=wanted['sale_date'])
+
+        for lineage, fields in plan.create_parcels.items():
+            parcel = Parcel(
+                account=account, buy_id=lineage[0], parent_parcel_id=refs.get(fields['parent']),
+                parcel_quantity=fields['quantity'], cumulative_split_multiplier=fields['multiplier'],
+                activation_date=fields['activation'], deactivation_date=fields['deactivation'],
+                sale_date=fields['sale_date'])
+            parcel.save()
+            refs[lineage] = parcel.pk
+            buys.add(lineage[0])
+
+        attributes = {'activation': 'activation_date', 'deactivation': 'deactivation_date',
+                      'quantity': 'parcel_quantity', 'multiplier': 'cumulative_split_multiplier',
+                      'sale_date': 'sale_date'}
+        for ref, changes in plan.update_parcels.items():
+            parcel = Parcel.objects.get(pk=ref)
+            for name, value in changes.items():
+                if name == 'parent':
+                    parcel.parent_parcel_id = refs.get(value)
+                else:
+                    setattr(parcel, attributes[name], value)
+            parcel.save()
+            buys.add(parcel.buy_id)
+
+        for sale_id, lineage, quantity in plan.create_sales:
+            SellAllocation(account=account, sell_id=sale_id, parcel_id=refs[lineage], quantity=quantity,
+                           _creation_handled=True).save()
+            buys.add(lineage[0])
+        for ref, quantity in plan.update_sales.items():
+            # Quantity is structural, so a save refuses it; the rebuild is what works it out.
+            SellAllocation.objects.filter(pk=ref).update(quantity=quantity)
+            SellAllocation.objects.get(pk=ref).save()
+
+        for part in plan.create_parts:
+            CostBaseAdjustmentAllocation(
+                account=account, cost_base_adjustment_id=part.adjustment_id, parcel_id=refs[part.lineage],
+                cost_base_increase=Money(part.amount, currency), activation_date=part.activation).save()
+            buys.add(part.lineage[0])
+        for ref, changes in plan.update_parts.items():
+            allocation = CostBaseAdjustmentAllocation.objects.get(pk=ref)
+            if 'amount' in changes:
+                allocation.cost_base_increase = Money(changes['amount'], currency)
+            if 'deactivation' in changes:
+                allocation.deactivation_date = changes['deactivation']
+            allocation.save()
+
+        if plan.delete_parcels:
+            gone = Parcel.objects.filter(pk__in=plan.delete_parcels)
+            buys.update(gone.values_list('buy_id', flat=True))
+            # Their own history goes with them: parts long since moved on, which block the delete.
+            CostBaseAdjustmentAllocation.objects.filter(parcel__in=gone).delete()
+            gone.delete()
+
+        instruments = Instrument.objects.filter(buy__in=buys).distinct()
+        for split in ShareSplit.objects.filter(account=account, instrument__in=instruments):
+            made = split.parcels_created()
+            if set(split.affected_parcels.all()) != set(made):
+                split.affected_parcels.set(made)
+                split.save()
+        recalculate.parcels(Parcel.objects.filter(buy__instrument__in=instruments, deactivation_date__isnull=True))
+        for sell in Sell.objects.filter(instrument__in=instruments):
+            sell.save()
+        for instrument in instruments:
+            instrument.save()
+
+
+def rebuild(account: 'Account') -> Plan:
+    """Work `account`'s holding out again and write it. Returns what was changed."""
+    from share_dinkum_app.holdings import facts, replay, state
+
+    result = plan(state.stored(account), replay.replay(facts.load(account)).holding)
+    write(account, result)
     return result

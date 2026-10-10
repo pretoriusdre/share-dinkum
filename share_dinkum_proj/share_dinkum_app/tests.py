@@ -79,6 +79,12 @@ from share_dinkum_app.management.commands import make_fake_data, make_import_tem
 # --- Test data factories (minimal objects for isolation) ---
 
 
+def holdings_may_differ(method):
+    """For a test that leaves a holding a rebuild would change, on purpose: the runner's replay check skips it."""
+    method.HOLDINGS_MAY_DIFFER = True
+    return method
+
+
 def create_fiscal_year_type(description='Australian Tax Year', start_month=7, start_day=1):
     return FiscalYearType.objects.create(
         description=description,
@@ -1275,6 +1281,8 @@ class SellAllocationTests(TransactionTestCase):
         self.assertTrue(sold.calculated_is_sold)
         self.assertEqual(sold.calculated_remaining_quantity, Decimal('0'))
 
+    # After the allocation is deleted the parcel stays divided; a rebuild joins it again. The figures agree.
+    @holdings_may_differ
     def test_deleting_an_allocation_clears_the_parcels_sale_date(self):
         """Otherwise a later adjustment weights the parcel as if it were sold that day."""
         account, _, parcel, sell = self._manual_sale(quantity='40')
@@ -1304,6 +1312,8 @@ class ParcelTests(TransactionTestCase):
         parcel = Parcel.objects.get(buy__instrument=inst)
         self.assertEqual(parcel.remaining_quantity, Decimal('100'))
 
+    # Splits a parcel directly, with no share split for a replay to follow.
+    @holdings_may_differ
     def test_split_or_consolidate_multiplier(self):
         acc = create_account()
         inst = create_instrument(account=acc)
@@ -1386,6 +1396,8 @@ class ShareSplitTests(TransactionTestCase):
         self.assertEqual(
             parcel.total_cost_base.amount.quantize(Decimal('0.01')), Decimal('3000.00'))
 
+    # Reversing a split adds a parcel; a rebuild has none to reverse. The figures agree.
+    @holdings_may_differ
     def test_deleting_a_split_restores_the_parcels_it_split(self):
         account, instrument, buy = self._holding()
         CostBaseAdjustment.objects.create(
@@ -2800,6 +2812,8 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(snapshot.captured_rows.count(), 2001)
         self.assertEqual(snapshot.totals['row_count'], 2001)
 
+    # Deletes an automatic sale allocation directly, so the sale is left unallocated.
+    @holdings_may_differ
     def test_the_allocation_reference_is_not_a_foreign_key(self):
         """A snapshot row survives deletion of its sell allocation."""
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
@@ -2915,6 +2929,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         gain_row = df[df['field'] == 'capital_gain'].iloc[0]
         self.assertEqual(gain_row['difference'], -cost_base_row['difference'])
 
+    # A sale dated before one already allocated is split from parcels made after it; a rebuild orders them by date. The figures agree.
+    @holdings_may_differ
     def test_a_new_allocation_is_reported_as_added(self):
         CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
 
@@ -3841,6 +3857,7 @@ class HoldingsReplayTests(TransactionTestCase):
         self.check()
         self.assertEqual(before, {model.__name__: model.objects.count() for model in models})
 
+    @holdings_may_differ
     def test_adjustment_moved_between_the_parts_of_a_buy_is_found(self):
         """Per buy the total is pinned, but how it lies between units sold and held is worked out."""
         sold = CostBaseAdjustmentAllocation.objects.filter(
@@ -3855,6 +3872,7 @@ class HoldingsReplayTests(TransactionTestCase):
         kinds = {difference.kind for difference in self.check().differences}
         self.assertIn('Adjustment on units sold', kinds)
 
+    @holdings_may_differ
     def test_a_held_parcel_with_the_wrong_quantity_is_found(self):
         Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
             parcel_quantity=Decimal('210'))
@@ -3862,11 +3880,13 @@ class HoldingsReplayTests(TransactionTestCase):
         self.assertEqual([d.kind for d in differences], ['Units held'])
         self.assertIn('210', differences[0].stored)
 
+    @holdings_may_differ
     def test_a_sale_of_more_than_the_buy_held_is_a_problem(self):
         allocation = SellAllocation.objects.filter(sell=self.data['sell_loss'], is_active=True).order_by('id').first()
         SellAllocation.objects.filter(pk=allocation.pk).update(quantity=allocation.quantity + 5000)
         self.assertTrue(self.check().problems)
 
+    @holdings_may_differ
     def test_a_sale_entered_before_its_buy_is_found(self):
         """A sale entered before the buy it draws on was left unallocated; replayed, it is not."""
         account = create_account(owner=self.account.owner, description='Out of order',
@@ -3891,6 +3911,7 @@ class HoldingsReplayTests(TransactionTestCase):
         plan = self.rebuild_plan()
         self.assertTrue(plan.empty, plan.summary())
 
+    @holdings_may_differ
     def test_a_rebuild_corrects_a_wrong_quantity_in_place(self):
         parcel = Parcel.objects.get(buy=self.data['buy_three'], deactivation_date__isnull=True)
         Parcel.objects.filter(pk=parcel.pk).update(parcel_quantity=Decimal('210'))
@@ -3898,6 +3919,7 @@ class HoldingsReplayTests(TransactionTestCase):
         self.assertEqual(plan.update_parcels, {parcel.pk: {'quantity': Decimal('200')}})
         self.assertEqual(plan.summary(), 'parcels +0 ~1 -0, sale allocations +0 ~0 -0, adjustment parts +0 ~0 -0')
 
+    @holdings_may_differ
     def test_a_rebuild_allocates_a_sale_entered_before_its_buy(self):
         account = create_account(owner=self.account.owner, description='Out of order',
                                  fy_type=self.account.fiscal_year_type)
@@ -3915,6 +3937,72 @@ class HoldingsReplayTests(TransactionTestCase):
         self.assertEqual(len(plan.create_parcels), 2, 'the units sold and the remainder')
         self.assertEqual([(q) for _, _, q in plan.create_sales], [Decimal('4')])
 
+    def rebuild(self, account=None):
+        from share_dinkum_app.holdings import apply
+        with figures_dump.offline():
+            return apply.rebuild(account or self.account)
+
+    def test_a_rebuild_of_an_agreeing_holding_writes_nothing(self):
+        before = figures_dump.dump(self.account)
+        counts = {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)}
+        self.assertTrue(self.rebuild().empty)
+        self.assertEqual(counts, {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)})
+        self.assertEqual(before, figures_dump.dump(self.account))
+
+    def test_a_rebuild_repairs_a_wrong_quantity_in_place(self):
+        before = figures_dump.dump(self.account)
+        parcel = Parcel.objects.get(buy=self.data['buy_three'], deactivation_date__isnull=True)
+        Parcel.objects.filter(pk=parcel.pk).update(parcel_quantity=Decimal('210'))
+
+        self.rebuild()
+
+        parcel.refresh_from_db()
+        self.assertEqual(parcel.parcel_quantity, Decimal('200'), 'the same parcel, put right')
+        self.assertTrue(self.rebuild_plan().empty)
+        self.assertEqual(before, figures_dump.dump(self.account))
+
+    def test_a_rebuild_puts_moved_adjustment_back(self):
+        before = figures_dump.dump(self.account)
+        sold = CostBaseAdjustmentAllocation.objects.filter(
+            account=self.account, deactivation_date__isnull=True,
+            parcel__buy=self.data['buy_one'], parcel__sale_allocation__isnull=False).order_by('id')
+        first, second = sold[0], sold[1]
+        CostBaseAdjustmentAllocation.objects.filter(pk=first.pk).update(
+            cost_base_increase=first.cost_base_increase.amount + 1)
+        CostBaseAdjustmentAllocation.objects.filter(pk=second.pk).update(
+            cost_base_increase=second.cost_base_increase.amount - 1)
+
+        self.rebuild()
+
+        self.assertEqual(CostBaseAdjustmentAllocation.objects.get(pk=first.pk).cost_base_increase,
+                         first.cost_base_increase)
+        self.assertEqual(before, figures_dump.dump(self.account))
+
+    def test_a_rebuild_writes_the_sale_entered_before_its_buy(self):
+        account = create_account(owner=self.account.owner, description='Rebuilt',
+                                  fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='RRR')
+        sale = Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                                   quantity=Decimal('4'), unit_price=Money(Decimal('5'), 'AUD'),
+                                   total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        buy = Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                                 quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                                 total_brokerage=Money(Decimal('0'), 'AUD'))
+        root = Parcel.objects.get(buy=buy)
+
+        self.rebuild(account)
+
+        allocation = SellAllocation.objects.get(sell=sale)
+        self.assertEqual(allocation.quantity, Decimal('4'))
+        self.assertEqual(allocation.parcel.parent_parcel, root, 'the original parcel is kept, and split')
+        self.assertEqual(allocation.parcel.sale_date, date(2024, 3, 1))
+        instrument.refresh_from_db()
+        self.assertEqual(instrument.calculated_quantity_held, Decimal('6'))
+        sale.refresh_from_db()
+        self.assertEqual(sale.calculated_unallocated_quantity, Decimal('0'))
+        self.assertEqual(self.compare.check(account).count, 0)
+
+    @holdings_may_differ
     def test_the_dashboard_check_and_the_command_report_it(self):
         self.assertNotIn('holdings_differ', {f.key for f in data_checks.run(self.account)})
         Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(

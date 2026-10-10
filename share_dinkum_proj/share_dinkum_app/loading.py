@@ -20,6 +20,7 @@ from djmoney.models.fields import MoneyField
 
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
+from share_dinkum_app.holdings import shadow
 from share_dinkum_app.choices import SellStrategy
 from django.db import models
 
@@ -362,6 +363,9 @@ class DataLoader():
                 # split's links to its parcels, which are many-to-many.
                 recalculate.relink_split_parcels(self.account)
                 recalculate.account(self.account)
+
+            if self.account is not None:
+                shadow.check(self.account, 'loading a file')
 
     @staticmethod
     def _matched_only_by_legacy_id(model: type[models.Model]) -> bool:

@@ -184,6 +184,10 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 # Tests save files too. This keeps them out of MEDIA_ROOT above (see the runner).
 TEST_RUNNER = 'share_dinkum_proj.test_runner.TempMediaRunner'
 
+# Whether the holdings replay checks the holdings the signals build: 'off', 'log' or 'assert'.
+# See share_dinkum_app/holdings/shadow.py. The test runner uses 'assert'.
+HOLDINGS_SHADOW = config('HOLDINGS_SHADOW', default='off')
+
 
 # Django's default is 1000, which a change page here passes without trying. The admin
 # builds an inline for every related model, so an instrument held for a decade arrives with
