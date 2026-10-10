@@ -3732,15 +3732,18 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
         self.assertSameFigures(figures_dump.dump(account), figures_dump.dump(account))
 
     def test_the_fake_portfolio_agrees_with_its_replay(self):
-        from share_dinkum_app.holdings import compare
-        report = compare.check(self._fake_portfolio())
+        from share_dinkum_app.holdings import apply, compare, facts, replay, state
+        account = self._fake_portfolio()
+        report = compare.check(account)
         self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
         self.assertEqual(report.respread, [], 'a spread made by the app differs from a fresh one')
+        plan = apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+        self.assertTrue(plan.empty, plan.summary())
 
     def test_every_export_ever_taken_still_loads(self):
         """Exports taken by earlier releases, from fake data, restore into an empty database,
         and their holdings agree with a replay."""
-        from share_dinkum_app.holdings import compare
+        from share_dinkum_app.holdings import apply, compare, facts, replay, state
         for path in sorted(TEST_FIXTURES.glob('export_*.xlsx')):
             with self.subTest(path.name):
                 call_command('flush', interactive=False, verbosity=0)
@@ -3751,6 +3754,8 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
                 self.assertGreater(len(figures['cgt_events']), 1, 'the restored portfolio has no sales')
                 report = compare.check(account)
                 self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+                plan = apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+                self.assertTrue(plan.empty, plan.summary())
         self.assertEqual(len(list(TEST_FIXTURES.glob('export_*.xlsx'))), 2)
 
     def test_the_command_writes_a_csv_per_table(self):
@@ -3876,6 +3881,39 @@ class HoldingsReplayTests(TransactionTestCase):
 
         kinds = {difference.kind for difference in self.compare.check(account).differences}
         self.assertEqual(kinds, {'Units sold', 'Units held', 'Units allocated to no parcel'})
+
+    def rebuild_plan(self, account=None):
+        from share_dinkum_app.holdings import apply, facts, replay, state
+        account = account or self.account
+        return apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+
+    def test_a_rebuild_of_a_holding_entered_in_order_changes_nothing(self):
+        plan = self.rebuild_plan()
+        self.assertTrue(plan.empty, plan.summary())
+
+    def test_a_rebuild_corrects_a_wrong_quantity_in_place(self):
+        parcel = Parcel.objects.get(buy=self.data['buy_three'], deactivation_date__isnull=True)
+        Parcel.objects.filter(pk=parcel.pk).update(parcel_quantity=Decimal('210'))
+        plan = self.rebuild_plan()
+        self.assertEqual(plan.update_parcels, {parcel.pk: {'quantity': Decimal('200')}})
+        self.assertEqual(plan.summary(), 'parcels +0 ~1 -0, sale allocations +0 ~0 -0, adjustment parts +0 ~0 -0')
+
+    def test_a_rebuild_allocates_a_sale_entered_before_its_buy(self):
+        account = create_account(owner=self.account.owner, description='Out of order',
+                                 fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='OOO')
+        Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                            quantity=Decimal('4'), unit_price=Money(Decimal('5'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        buy = Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                                 quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                                 total_brokerage=Money(Decimal('0'), 'AUD'))
+        root = Parcel.objects.get(buy=buy)
+
+        plan = self.rebuild_plan(account)
+        self.assertEqual(plan.update_parcels, {root.pk: {'deactivation': date(2024, 3, 1)}})
+        self.assertEqual(len(plan.create_parcels), 2, 'the units sold and the remainder')
+        self.assertEqual([(q) for _, _, q in plan.create_sales], [Decimal('4')])
 
     def test_the_dashboard_check_and_the_command_report_it(self):
         self.assertNotIn('holdings_differ', {f.key for f in data_checks.run(self.account)})

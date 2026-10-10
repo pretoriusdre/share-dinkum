@@ -14,10 +14,10 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from django.db.models import Sum
 from djmoney.money import Money
 
-from share_dinkum_app.holdings import strategies
+from share_dinkum_app.holdings import state, strategies
+from share_dinkum_app.holdings.state import Lineage
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account
@@ -102,6 +102,9 @@ class Facts:
     adjustments: list[AdjustmentFact] = field(default_factory=list)
     #: (adjustment id, buy id) -> amount, for each adjustment spread when it was entered.
     pinned_spreads: dict[tuple[Any, Any], Decimal] = field(default_factory=dict)
+    #: adjustment id -> {parcel lineage: amount}: the same, on each stored parcel. The replay
+    #: follows these where its parcels match the stored ones, so a rebuild changes no amount.
+    pinned_parts: dict[Any, dict[Lineage, Decimal]] = field(default_factory=dict)
     #: Ranks a MIN_CGT parcel: (sale, buy, unit cost base) -> net gain per unit after discount.
     net_gain_per_unit: Callable[[SaleFact, BuyFact, Decimal], Any] | None = None
 
@@ -114,7 +117,7 @@ def load(account: 'Account') -> Facts:
     """Every fact for `account`."""
     from share_dinkum_app import cgt
     from share_dinkum_app.models import (
-        Buy, CostBaseAdjustment, CostBaseAdjustmentAllocation, Sell, SellAllocation, ShareSplit,
+        Buy, CostBaseAdjustment, Sell, SellAllocation, ShareSplit,
     )
 
     currency = str(account.currency)
@@ -148,14 +151,17 @@ def load(account: 'Account') -> Facts:
             year_end=end, method=adjustment.allocation_method,
             amount=adjustment.cost_base_increase_converted.amount, legacy_id=adjustment.legacy_id,
             spread_at_entry=adjustment._creation_handled))
-    spreads = (
-        CostBaseAdjustmentAllocation.objects
-        .filter(account=account, deactivation_date__isnull=True)
-        .values('cost_base_adjustment_id', 'parcel__buy_id')
-        .annotate(total=Sum('cost_base_increase'))
-    )
-    for row in spreads:
-        facts.pinned_spreads[(row['cost_base_adjustment_id'], row['parcel__buy_id'])] = row['total']
+    # Summed here rather than in SQL, which rounds a sum to the column's places, so the per-buy
+    # totals agree exactly with the per-parcel amounts they are made of.
+    holding = state.stored(account)
+    lineages = holding.lineages()
+    for part in holding.adjustments:
+        if part.active:
+            parts = facts.pinned_parts.setdefault(part.adjustment_id, {})
+            lineage = lineages[part.parcel_ref]
+            parts[lineage] = parts.get(lineage, Decimal('0')) + part.amount
+            key = (part.adjustment_id, holding.parcels[part.parcel_ref].buy_id)
+            facts.pinned_spreads[key] = facts.pinned_spreads.get(key, Decimal('0')) + part.amount
 
     def net_gain_per_unit(sale: SaleFact, buy: BuyFact, unit_cost_base: Decimal) -> Any:
         """As the MIN_CGT signal ranks a parcel: the reports' discount on the gain per unit."""

@@ -15,13 +15,12 @@ from typing import TYPE_CHECKING, Any
 
 from share_dinkum_app.holdings import facts as facts_module
 from share_dinkum_app.holdings.facts import Facts
-from share_dinkum_app.holdings.replay import AdjustmentRow, Holding, ParcelRow, Replayed, SaleRow, replay
+from share_dinkum_app.holdings.replay import Replayed, replay
+from share_dinkum_app.holdings.state import TOLERANCE, Holding, stored
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account
 
-#: Adjustment differences smaller than this are rounding.
-TOLERANCE = Decimal('0.01')
 
 
 @dataclass(frozen=True)
@@ -53,28 +52,6 @@ class Report:
     def count(self) -> int:
         """Differences and problems: what a person should look at."""
         return len(self.differences) + len(self.problems)
-
-
-def stored(account: 'Account') -> Holding:
-    """The holding as stored, in the replay's shape."""
-    from share_dinkum_app.models import CostBaseAdjustmentAllocation, Parcel, SellAllocation
-
-    holding = Holding()
-    for row in Parcel.objects.filter(account=account).values(
-            'id', 'buy_id', 'parent_parcel_id', 'activation_date', 'deactivation_date', 'parcel_quantity',
-            'cumulative_split_multiplier', 'sale_date'):
-        holding.parcels[row['id']] = ParcelRow(
-            row['id'], row['buy_id'], row['parent_parcel_id'], row['activation_date'], row['deactivation_date'],
-            row['parcel_quantity'], row['cumulative_split_multiplier'], row['sale_date'])
-    holding.sales = [SaleRow(row['sell_id'], row['parcel_id'], row['quantity'])
-                     for row in SellAllocation.objects.filter(account=account, is_active=True).values(
-                         'sell_id', 'parcel_id', 'quantity')]
-    holding.adjustments = [
-        AdjustmentRow(row['cost_base_adjustment_id'], row['parcel_id'], row['cost_base_increase'],
-                      row['deactivation_date'] is None)
-        for row in CostBaseAdjustmentAllocation.objects.filter(account=account).values(
-            'cost_base_adjustment_id', 'parcel_id', 'cost_base_increase', 'deactivation_date')]
-    return holding
 
 
 @dataclass

@@ -17,11 +17,13 @@ from typing import Any
 from share_dinkum_app.choices import AllocationMethod, SellStrategy
 from share_dinkum_app.holdings import strategies
 from share_dinkum_app.holdings.facts import AdjustmentFact, BuyFact, Facts, SaleFact, SplitFact
+from share_dinkum_app.holdings.state import TOLERANCE, AdjustmentRow, Holding, Lineage, ParcelRow, SaleRow
 
 #: The precision each figure is stored at, so the replay rounds where the database does.
 QUANTITY_PLACES = Decimal('0.0001')
 MULTIPLIER_PLACES = Decimal('0.0000000001')
 AMOUNT_PLACES = Decimal('0.0001')
+ROUNDING = TOLERANCE
 
 SPLIT, BUY, SALE, ADJUSTMENT = range(4)
 
@@ -34,42 +36,15 @@ def _amount(value: Decimal) -> Decimal:
     return _round(value, AMOUNT_PLACES)
 
 
-# --- the result, in the shape `compare` reads the stored holding in too ----------------------
+def _only_rounding(total: Decimal, pairs: list[tuple[Decimal, Decimal]]) -> bool:
+    """Whether stored amounts (each paired with what the rule gives) add up to `total` and each
+    is within rounding of the rule.
 
-@dataclass(frozen=True)
-class ParcelRow:
-    ref: Any
-    buy_id: Any
-    parent_ref: Any
-    activation: date | None
-    deactivation: date | None
-    quantity: Decimal
-    multiplier: Decimal
-    sale_date: date | None
-
-
-@dataclass(frozen=True)
-class SaleRow:
-    sale_id: Any
-    parcel_ref: Any
-    quantity: Decimal
-    #: Chosen by the sale's strategy in the replay, rather than taken from what is stored.
-    chosen: bool = False
-
-
-@dataclass(frozen=True)
-class AdjustmentRow:
-    adjustment_id: Any
-    parcel_ref: Any
-    amount: Decimal
-    active: bool
-
-
-@dataclass
-class Holding:
-    parcels: dict[Any, ParcelRow] = field(default_factory=dict)
-    sales: list[SaleRow] = field(default_factory=list)
-    adjustments: list[AdjustmentRow] = field(default_factory=list)
+    The replay then keeps the stored amounts exactly, so rebuilding a holding changes none of
+    them. A larger difference is the rule's, and is reported.
+    """
+    return (sum((stored for stored, _ in pairs), Decimal('0')) == total
+            and all(abs(stored - ruled) < ROUNDING for stored, ruled in pairs))
 
 
 @dataclass
@@ -92,6 +67,7 @@ class _Parcel:
     quantity: Decimal
     multiplier: Decimal
     activation: date
+    lineage: Lineage
     parent: '_Parcel | None' = None
     deactivation: date | None = None
     sale_date: date | None = None
@@ -111,6 +87,7 @@ class _Part:
     adjustment_id: Any
     parcel: _Parcel
     amount: Decimal
+    activation: date | None
     deactivation: date | None = None
 
 
@@ -136,14 +113,28 @@ class _Replay:
         for pin in sorted(facts.pinned_sales, key=lambda pin: pin.order):
             self.pins[pin.sale_id].append(pin)
         self.claims = self._later_claims()
+        self.places: dict[tuple[int, date], int] = defaultdict(int)
 
     # --- parcels ---
 
     def _new(self, buy: BuyFact, quantity: Decimal, multiplier: Decimal, activation: date,
              parent: _Parcel | None = None) -> _Parcel:
-        parcel = _Parcel(len(self.parcels), buy, quantity, multiplier, activation, parent)
+        if parent is None:
+            lineage: Lineage = (buy.id,)
+        else:
+            place = self.places[(parent.ref, activation)]
+            self.places[(parent.ref, activation)] += 1
+            lineage = parent.lineage + ((activation, place),)
+        parcel = _Parcel(len(self.parcels), buy, quantity, multiplier, activation, lineage, parent)
         self.parcels.append(parcel)
         return parcel
+
+    def _pinned_under(self, adjustment_id: Any, lineage: Lineage) -> Decimal | None:
+        """The stored amount of an adjustment on `lineage` and the parcels made from it, or None
+        if none of them carries any."""
+        pins = self.facts.pinned_parts.get(adjustment_id, {})
+        found = [amount for pinned, amount in pins.items() if pinned[:len(lineage)] == lineage]
+        return sum(found, Decimal('0')) if found else None
 
     def _active(self, instrument: str) -> list[_Parcel]:
         return [p for p in self.parcels if p.active and p.buy.instrument == instrument]
@@ -152,7 +143,11 @@ class _Replay:
         return [part for part in self.parts if part.parcel is parcel and part.deactivation is None]
 
     def _bifurcate(self, parcel: _Parcel, quantity: Decimal, day: date) -> _Parcel:
-        """As `Parcel.bifurcate`: split off `quantity`, carrying adjustments by quantity."""
+        """As `Parcel.bifurcate`: split off `quantity`, carrying adjustments by quantity.
+
+        Where the stored holding has these two parcels, each carries what it stores instead, so
+        an adjustment spread after the sale keeps the amounts it was spread as.
+        """
         if quantity == parcel.quantity:
             return parcel
         target = self._new(parcel.buy, quantity, parcel.multiplier, day, parent=parcel)
@@ -161,8 +156,15 @@ class _Replay:
         fraction = target.quantity / (target.quantity + remainder.quantity)
         for part in self._parts_on(parcel):
             target_amount = _amount(part.amount * fraction)
-            self.parts.append(_Part(part.adjustment_id, target, target_amount))
-            self.parts.append(_Part(part.adjustment_id, remainder, part.amount - target_amount))
+            remainder_amount = part.amount - target_amount
+            on_target = self._pinned_under(part.adjustment_id, target.lineage)
+            on_remainder = self._pinned_under(part.adjustment_id, remainder.lineage)
+            if on_target is not None or on_remainder is not None:
+                stored = [(on_target or Decimal('0'), target_amount), (on_remainder or Decimal('0'), remainder_amount)]
+                if _only_rounding(part.amount, stored):
+                    target_amount, remainder_amount = stored[0][0], stored[1][0]
+            self.parts.append(_Part(part.adjustment_id, target, target_amount, day))
+            self.parts.append(_Part(part.adjustment_id, remainder, remainder_amount, day))
             part.deactivation = day
         return target
 
@@ -177,7 +179,7 @@ class _Replay:
                 _round(parcel.multiplier * split.ratio, MULTIPLIER_PLACES), split.date, parent=parcel)
             parcel.deactivation = split.date
             for part in self._parts_on(parcel):
-                self.parts.append(_Part(part.adjustment_id, new, part.amount))
+                self.parts.append(_Part(part.adjustment_id, new, part.amount, split.date))
                 part.deactivation = split.date
 
     def buy(self, buy: BuyFact) -> None:
@@ -269,27 +271,35 @@ class _Replay:
         qty_held = adjustment.method == AllocationMethod.QTY_HELD
         fresh = strategies.spread(adjustment.amount, [(p, weight(p)) for p in eligible], _amount) if qty_held else []
 
+        activation = start if qty_held else None
         if not adjustment.spread_at_entry:
             for parcel, amount, _ in fresh:
-                self.parts.append(_Part(adjustment.id, parcel, amount))
+                self.parts.append(_Part(adjustment.id, parcel, amount, activation))
             return
 
         pinned = {buy_id: amount for (adjustment_id, buy_id), amount in self.facts.pinned_spreads.items()
                   if adjustment_id == adjustment.id}
         for buy_id, amount in sorted(pinned.items(), key=lambda item: str(item[0])):
             if qty_held:
-                parts = strategies.spread(amount, [(p, weight(p)) for p in eligible if p.buy.id == buy_id], _amount)
+                candidates = [p for p in eligible if p.buy.id == buy_id]
+                weights = [(p, weight(p)) for p in candidates]
             else:
                 # Entered by hand: spread over what the buy held, by units.
-                parts = strategies.spread(amount, [(p, p.quantity) for p in self._active(adjustment.instrument)
-                                                   if p.buy.id == buy_id], _amount)
+                candidates = [p for p in self._active(adjustment.instrument) if p.buy.id == buy_id]
+                weights = [(p, p.quantity) for p in candidates]
+            parts = strategies.spread(amount, weights, _amount)
+            ruled = {parcel.ref: part_amount for parcel, part_amount, _ in parts}
+            on_parcels = [(p, self._pinned_under(adjustment.id, p.lineage)) for p in candidates]
+            if any(found is not None for _, found in on_parcels) and _only_rounding(
+                    amount, [(found or Decimal('0'), ruled.get(p.ref, Decimal('0'))) for p, found in on_parcels]):
+                parts = [(p, found, None) for p, found in on_parcels if found is not None]
             if not parts:
                 self.result.problems.append(
                     f'{adjustment.label()} gave {amount:f} to {self.buys[buy_id].label()}, which held '
                     f'nothing in that year.')
                 continue
             for parcel, part_amount, _ in parts:
-                self.parts.append(_Part(adjustment.id, parcel, part_amount))
+                self.parts.append(_Part(adjustment.id, parcel, part_amount, activation))
 
         if qty_held:
             fresh_by_buy: dict[Any, Decimal] = defaultdict(Decimal)
@@ -318,7 +328,8 @@ class _Replay:
                 p.quantity, p.multiplier, p.sale_date)
         holding.sales = list(self.sale_rows)
         holding.adjustments = [AdjustmentRow(part.adjustment_id, part.parcel.ref, part.amount,
-                                             part.deactivation is None) for part in self.parts]
+                                             part.deactivation is None, part.activation,
+                                             part.deactivation) for part in self.parts]
         return self.result
 
 
