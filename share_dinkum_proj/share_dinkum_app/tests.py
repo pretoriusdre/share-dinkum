@@ -1862,6 +1862,33 @@ class DividendTests(TestCase):
         self.assertEqual(div.total_franked_amount.amount, Decimal('50'))
         self.assertEqual(str(div.total_franked_amount.currency), 'AUD')
 
+    def test_a_zero_dividend_stays_in_its_own_currency(self):
+        """A zero total is in the dividend's currency, so its rate still applies to it."""
+        acc = create_account()
+        inst = create_instrument(account=acc, name='MSFT', currency='USD')
+        div = Dividend.objects.create(
+            account=acc, instrument=inst, date=date(2024, 4, 1), quantity=Decimal('100'),
+            franked_amount_per_share=Money(0, 'USD'), unfranked_amount_per_share=Money(0, 'USD'),
+            exchange_rate=create_exchange_rate(acc, 'USD', 'AUD', exchange_date=date(2024, 4, 1)),
+        )
+        self.assertEqual(div.total_dividend, Money(0, 'USD'))
+        self.assertEqual(div.total_dividend_converted, Money(0, 'AUD'))
+
+
+class ZeroCostParcelTests(TestCase):
+
+    def test_a_zero_cost_base_is_in_the_account_currency(self):
+        """A parcel with nothing in its cost base is still in the portfolio's currency."""
+        account = create_account(currency='USD')
+        instrument = create_instrument(account=account, name='MSFT', currency='USD')
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10), quantity=Decimal('10'),
+            unit_price=Money(0, 'USD'), total_brokerage=Money(0, 'USD'))
+
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.total_cost_base, Money(0, 'USD'))
+        self.assertEqual(parcel.calculated_total_cost_base, Money(0, 'USD'))
+
 
 # =============================================================================
 # Reports
@@ -3726,6 +3753,28 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
         self.assertEqual(sorted(path.stem for path in out.glob('*.csv')), sorted(figures_dump.dump(account)))
         with self.assertRaisesMessage(CommandError, 'No portfolio named'):
             call_command('dump_figures', account='Missing', out=str(out))
+
+
+class CalculatedSourceTests(TestCase):
+
+    def test_every_stored_figure_has_a_property_to_copy(self):
+        """A `calculated_*` field with no safe property of its name is never filled.
+
+        `calculated_affected_parcels` was such a column, since its property is
+        `affected_parcel_list`. Name the property after the field, or map it in
+        `signals.CALCULATED_SOURCES`.
+        """
+        from share_dinkum_app import signals
+        from share_dinkum_app.models import BaseModel
+
+        missing = []
+        for model in figures_dump.models_with_calculated_fields():
+            if not issubclass(model, BaseModel):
+                continue  # Account stores its own, in its save.
+            sourced = {field for field, _ in signals.calculated_sources(model)}
+            missing += [f'{model.__name__}.{field.name}' for field in figures_dump.calculated_fields(model)
+                        if field.name not in sourced]
+        self.assertEqual(missing, [])
 
 
 class FiguresDumpKeyTests(TestCase):
@@ -6075,6 +6124,18 @@ class RefreshPricesButtonTests(TransactionTestCase):
              patch.object(Account, 'update_all_exchange_rate_history'):
             self.client.post(self.url)
 
+        self.account.refresh_from_db()
+        self.assertFalse(self.account.update_price_history)
+
+    def test_ticking_the_old_field_still_refreshes(self):
+        """`update_price_history` is deprecated, but saving it ticked still refreshes, once."""
+        with patch.object(Account, 'update_all_price_history') as prices, \
+             patch.object(Account, 'update_all_exchange_rate_history') as rates:
+            self.account.update_price_history = True
+            self.account.save()
+
+        prices.assert_called_once()
+        rates.assert_called_once()
         self.account.refresh_from_db()
         self.assertFalse(self.account.update_price_history)
 

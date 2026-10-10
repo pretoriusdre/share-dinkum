@@ -7,7 +7,7 @@ Each action is one entry in `DASHBOARD_ACTIONS`, which supplies its URL, button,
 
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -724,7 +724,6 @@ def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
 def refresh_prices_view(request: HttpRequest) -> HttpResponse:
     """Refresh prices and exchange rates for the user's portfolio.
 
-    Sets `Account.update_price_history` and saves; a signal does the work.
     """
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
@@ -736,8 +735,7 @@ def refresh_prices_view(request: HttpRequest) -> HttpResponse:
         return redirect(dashboard_url)
 
     try:
-        account.update_price_history = True
-        account.save()
+        account.refresh_market_data()
     except Exception as exc:  # pragma: no cover - depends on an external provider
         logger.warning(
             'Price refresh failed for %s: %s', account, exc, exc_info=True)

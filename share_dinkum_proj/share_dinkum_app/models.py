@@ -3,13 +3,11 @@ from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import bisect
 import copy
-import json
 from typing import Any, cast
 
 # Django imports
 from django.db import models, transaction
 from django.contrib.auth.models import AbstractUser
-from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
@@ -17,7 +15,6 @@ from django.core.validators import MinValueValidator
 from django.urls import reverse
 from django.db.models import Sum, F, Q, QuerySet
 from django.db.models.functions import Coalesce
-from django.forms.models import model_to_dict
 
 # Djmoney imports
 from djmoney.models.fields import MoneyField, CurrencyField
@@ -327,6 +324,19 @@ class Account(models.Model):
                     convert_to=convert_to,
                     force_refresh=True,
                 )
+
+    def refresh_market_data(self) -> None:
+        """Fetch exchange rates, then prices, and store the portfolio value they give.
+
+        Rates come first. Saving an instrument stores its value converted at whatever the
+        current rate is at that moment, and nothing re-converts it afterwards, so refreshing
+        the rate second leaves every holding valued at the previous rate.
+        """
+        # Ideally run this as a background task (Celery, Django-Q, etc.)
+        self.update_all_exchange_rate_history()
+        self.update_all_price_history()
+        self.update_price_history = False
+        self.save(update_fields=['update_price_history'])  # save() adds the portfolio value
 
     CALCULATED_FIELDS = frozenset({
         'calculated_portfolio_value_converted',
@@ -1554,7 +1564,8 @@ class Parcel(BaseModel):
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
         total_cost_base += (self.adjusted_unit_brokerage * parcel_quantity)
-        total_cost_base = add_currencies(total_cost_base, self.total_adjustments)
+        total_cost_base = add_currencies(total_cost_base, self.total_adjustments,
+                                         default_currency=str(self.buy.account.currency))
 
         return total_cost_base
     
@@ -2261,8 +2272,10 @@ class Dividend(Income):
     
     @safe_property
     def total_dividend(self) -> Money:
-        # handle zero amounts in wrong currency
-        return add_currencies(self.total_unfranked_amount, self.total_franked_amount)
+        # A zero amount may be in any currency, so a zero total takes the dividend's own, which
+        # its exchange rate converts from.
+        return add_currencies(self.total_unfranked_amount, self.total_franked_amount,
+                              default_currency=str(self.unfranked_amount_per_share.currency))
 
     calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text='Total dividend in the portfolio currency. Set by the app; do not edit.')

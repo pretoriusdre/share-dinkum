@@ -121,6 +121,7 @@ def relink_split_parcels(account: 'Account') -> int:
     splits = data_checks.splits_without_parcels(account)
     for split in splits:
         split.affected_parcels.set(split.parcels_created())
+        split.save()  # Its stored list of parcels was worked out without them.
     return len(splits)
 
 

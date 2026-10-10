@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
 import shutil
-import sqlite3
 from typing import Any, cast
 from tqdm import tqdm
 from pathlib import Path
@@ -18,7 +17,6 @@ from django.core.management import call_command
 
 
 from djmoney.models.fields import MoneyField
-from djmoney.money import Money
 
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
@@ -27,7 +25,6 @@ from django.db import models
 
 import share_dinkum_app.models as app_models
 from share_dinkum_app.utils import convert_to_decimal_field, save_with_logging, process_filefield
-from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
 
 
 import logging
@@ -194,9 +191,6 @@ def queryset_to_df(queryset: 'models.QuerySet[Any]') -> pd.DataFrame:
 
     fields = [f.name for f in model._meta.fields]
     related_fields = [f.name for f in model._meta.fields if f.is_relation]
-
-    # Include model properties (calculated fields)
-    properties = [attr for attr in dir(model) if isinstance(getattr(model, attr), property)]
 
     data: list[dict[str, Any]] = []
     for obj in queryset:

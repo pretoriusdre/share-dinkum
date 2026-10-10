@@ -7,7 +7,7 @@ To upgrade, stop the server and run `uv run update`.
 ## Unreleased
 
 This release is primarily related to refactoring code to improve the maintainability of the code.
-No behaviour changes other than a fix that keeps share splits protected after a portfolio is restored from an export.
+No behaviour changes other than the fixes below.
 
 ### Added
 
@@ -17,6 +17,10 @@ No behaviour changes other than a fix that keeps share splits protected after a 
 
 ### Changed
 
+- Saving a record works out its stored figures once, rather than evaluating every property twice.
+  Loading a file takes about half as long.
+- A share split's `calculated_affected_parcels` column, which was always blank, now lists the parcels
+  the split created.
 - `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
 
 ### Fixed
@@ -25,6 +29,8 @@ No behaviour changes other than a fix that keeps share splits protected after a 
   dated before the split was accepted, and the split could be deleted without being reversed.
   Figures were not affected. For a portfolio already restored, `uv run dev repair_portfolio_data`
   restores the links, and the dashboard says when it is needed.
+- In a portfolio whose currency is not AUD, a parcel with a zero cost base stored it as AUD. A
+  foreign dividend of zero could not be converted. Neither affects an AUD portfolio.
 
 ## 0.4.0 - 2026-10-04
 

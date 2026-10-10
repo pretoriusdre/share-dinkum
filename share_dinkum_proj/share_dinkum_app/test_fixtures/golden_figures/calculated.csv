@@ -4864,5 +4864,15 @@ SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_fiscal_year,FY2021/22
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_sale_date,2022-03-22
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_total_capital_gain,54.498649 AUD
-ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_affected_parcels,
+ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_affected_parcels,"2017-03-06 | PARCEL |  AAPL | 8.0000 unit @ A$77.97 / unit | Total cost base = A$631.26 |
+2017-05-22 | PARCEL |  AAPL | 16.0000 unit @ A$78.80 / unit | Total cost base = A$1,268.22 |
+2017-06-22 | PARCEL |  AAPL | 12.0000 unit @ A$79.14 / unit | Total cost base = A$957.18 |
+2018-10-11 | PARCEL |  AAPL | 8.0000 unit @ A$84.24 / unit | Total cost base = A$681.42 |
+2018-11-21 | PARCEL |  AAPL | 8.0000 unit @ A$84.68 / unit | Total cost base = A$684.90 |
+2019-03-11 | PARCEL |  AAPL | 8.0000 unit @ A$85.84 / unit | Total cost base = A$694.26 |
+2019-10-21 | PARCEL |  AAPL | 12.0000 unit @ A$88.24 / unit | Total cost base = A$1,066.44 |
+2020-01-16 | PARCEL |  AAPL | 12.0000 unit @ A$89.19 / unit | Total cost base = A$1,077.78 |
+2020-07-27 | PARCEL |  AAPL | 12.0000 unit @ A$91.24 / unit | Total cost base = A$1,102.44 |
+2020-07-28 | PARCEL |  AAPL | 8.0000 unit @ A$91.26 / unit | Total cost base = A$737.58 |
+"
 ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_split_multiplier,4.000000

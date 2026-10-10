@@ -4,20 +4,18 @@ from decimal import Decimal
 import threading
 from typing import Any, cast
 
-from django.core.files.temp import NamedTemporaryFile
-from django.core.files.base import ContentFile
 from django.db.models.signals import pre_save, post_save, pre_delete, post_delete
 from django.dispatch import receiver
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Model, Sum, Q, Max, Min
+from django.db.models import Model, Q
 from django.db.models.fields.files import FieldFile
 from django.forms.models import model_to_dict
 
-from djmoney.models.fields import MoneyField
+from djmoney.models.fields import CurrencyField, MoneyField
 from djmoney.money import Money
 
-from share_dinkum_app import loading, portfolio_export
+from share_dinkum_app import portfolio_export
 from share_dinkum_app import cgt
 from share_dinkum_app.choices import (
     AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
@@ -458,35 +456,17 @@ def update_account_price_history(sender: type[Model], instance: Account, created
 
     assert isinstance(instance, Account)
 
+    # Deprecated: the dashboard calls `refresh_market_data` directly. Kept for anyone who
+    # ticks the box in the admin.
     if instance.update_price_history:
-        # Ideally run this as a background task (Celery, Django-Q, etc.)
-        # Exchange rates must be refreshed first. Saving an instrument stores its value converted at
-        # whatever the current rate is at that moment, and nothing re-converts it afterwards, so
-        # refreshing the rate second leaves every holding valued at the previous rate.
-        instance.update_all_exchange_rate_history()
-        instance.update_all_price_history()
-
-        # Mark flag as cleared
-        instance.update_price_history = False
-        instance.save(update_fields=['update_price_history'])
+        instance.refresh_market_data()
 
 
 @receiver(post_save, sender=DataExport)
 def generate_export_file(sender: type[Model], instance: DataExport, created: bool, **kwargs: Any) -> None:
-
+    """Write the file for a new export: the admin's add button, and scheduled exports."""
     assert isinstance(instance, DataExport)
-
-    if instance.file:
-        return  # already has a file
-    logger.info('Starting data export process.')
-
-    with NamedTemporaryFile(suffix='.xlsx') as temp_file:
-        portfolio_export.write_workbook(
-            instance.account, temp_file.name, include_price_history=instance.include_price_history)
-        new_name = f'Export_{instance.account.description}.xlsx'
-        with open(temp_file.name, 'rb') as built:
-            instance.file.save(new_name, ContentFile(built.read()))
-        logger.info('Data export process completed successfully.')
+    portfolio_export.create_export(instance)
 
 
 def _delete_file_after_commit(field_file: FieldFile) -> None:
@@ -622,46 +602,63 @@ def attach_exchange_rate(sender: type[Model], instance: Model, raw: bool = False
     )
 
 
+#: A stored figure whose property is not named after it. Otherwise `calculated_X` copies `X`.
+CALCULATED_SOURCES = {'calculated_affected_parcels': 'affected_parcel_list'}
+
+_calculated_sources: dict[type[Model], list[tuple[str, str]]] = {}
+
+
+def calculated_sources(model: type[Model]) -> list[tuple[str, str]]:
+    """`(stored field, safe property)` for each of the model's `calculated_*` fields.
+
+    Worked out once per model. In property name order, as `dir()` gave them before.
+    """
+    sources = _calculated_sources.get(model)
+    if sources is None:
+        pairs: list[tuple[str, str]] = []
+        for field in model._meta.concrete_fields:
+            if not field.name.startswith('calculated_') or isinstance(field, CurrencyField):
+                continue
+            source = CALCULATED_SOURCES.get(field.name, field.name.removeprefix('calculated_'))
+            attr = getattr(model, source, None)
+            if isinstance(attr, property) and getattr(attr.fget, '_is_safe_property', False):
+                pairs.append((field.name, source))
+        sources = _calculated_sources[model] = sorted(pairs, key=lambda pair: pair[1])
+    return sources
+
+
 @receiver(post_save)
 def persist_safe_properties(sender: type[Model], instance: Model, created: bool, **kwargs: Any) -> None:
-    logger.debug('Setting calculated fields for %s', instance)
-    logger.debug('Instance data is: %s', model_to_dict(instance))
+    """Copy each safe property to its `calculated_*` field, and save them in one more save.
 
-    # Prevent recursion
-    if getattr(_save_lock, "active", False):
+    That save runs with `_save_lock` set, so it does not come back here, and nor does any save
+    it causes.
+    """
+    if getattr(_save_lock, "active", False) or not isinstance(instance, BaseModel):
         return
 
-    # Only act on subclasses of BaseModel
-    if not isinstance(instance, BaseModel):
-        return
+    debug = logger.isEnabledFor(logging.DEBUG)
+    if debug:
+        logger.debug('Setting calculated fields for %s: %s', instance, model_to_dict(instance))
 
     updated_fields: list[str] = []
-
-    for attr_name in dir(instance):
-        attr = getattr(type(instance), attr_name, None)
+    for field_name, source in calculated_sources(type(instance)):
         try:
-            val = getattr(instance, attr_name, None)
-            # --- Step 2: safe_property fields ---
-            if isinstance(attr, property) and getattr(attr.fget, "_is_safe_property", False):
-                value = getattr(instance, attr_name)
-
-                calc_field_name = f"calculated_{attr_name}"
-                if hasattr(instance, calc_field_name):
-                    setattr(instance, calc_field_name, value)
-                    updated_fields.append(calc_field_name)
-                    if isinstance(value, Money):
-                        updated_fields.append(f"{calc_field_name}_currency")
-
+            value = getattr(instance, source)
         except AttributeError:
-            continue
+            continue  # A property that cannot be worked out yet, e.g. a missing relation.
+        setattr(instance, field_name, value)
+        updated_fields.append(field_name)
+        if isinstance(value, Money):
+            updated_fields.append(f"{field_name}_currency")
 
-    # Save once if anything was updated
     if updated_fields:
         with transaction.atomic():
             _save_lock.active = True
             try:
                 instance.save(update_fields=updated_fields)
             finally:
-                    _save_lock.active = False
+                _save_lock.active = False
 
-    logger.debug('Updated instance data is: %s', model_to_dict(instance))
+    if debug:
+        logger.debug('Updated instance data is: %s', model_to_dict(instance))
