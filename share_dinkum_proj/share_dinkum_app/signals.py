@@ -17,7 +17,7 @@ from djmoney.money import Money
 
 from share_dinkum_app import portfolio_export
 from share_dinkum_app import cgt
-from share_dinkum_app.holdings import strategies
+from share_dinkum_app.holdings import live, strategies
 from share_dinkum_app.choices import (
     AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
 )
@@ -73,6 +73,9 @@ def suggest_instrument_legal_form(sender: type[Model], instance: Instrument, cre
 @receiver(post_save, sender=Buy)
 def create_buy_parcel(sender: type[Model], instance: Buy, created: bool, **kwargs: Any) -> None:
 
+    if live.active():
+        return  # The replay builds the holding (holdings/live.py).
+
     assert isinstance(instance, Buy)
 
     logger.debug('Creating parcel for buy trade %s', instance)
@@ -99,6 +102,9 @@ def create_buy_parcel(sender: type[Model], instance: Buy, created: bool, **kwarg
 @receiver(post_save, sender=Sell)
 def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, **kwargs: Any) -> None:
     
+    if live.active():
+        return  # The replay builds the holding (holdings/live.py).
+
     assert isinstance(instance, Sell)
 
     logger.debug('Creating sell allocations for %s', instance)
@@ -162,6 +168,9 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
 @receiver(post_save, sender=SellAllocation)
 def handle_sell_allocation_creation(sender: type[Model], instance: SellAllocation, created: bool, **kwargs: Any) -> None:
 
+    if live.active():
+        return  # The replay builds the holding (holdings/live.py).
+
     assert isinstance(instance, SellAllocation)
 
     if not created or instance._creation_handled:
@@ -190,6 +199,9 @@ def handle_sell_allocation_creation(sender: type[Model], instance: SellAllocatio
 
 @receiver(post_delete, sender=SellAllocation)
 def handle_sell_allocation_deletion(sender: type[Model], instance: SellAllocation, **kwargs: Any) -> None:
+
+    if live.active():
+        return  # The replay builds the holding (holdings/live.py).
 
     assert isinstance(instance, SellAllocation)
 
@@ -222,7 +234,7 @@ def allocate_cost_base_adjustment(sender: type[Model], instance: CostBaseAdjustm
     """
     assert isinstance(instance, CostBaseAdjustment)
 
-    if not created or instance._creation_handled:
+    if live.active() or not created or instance._creation_handled:
         return
 
     allocate_cost_base_adjustment_now(instance)
@@ -316,7 +328,7 @@ def handle_share_split(sender: type[Model], instance: ShareSplit, created: bool,
 
     assert isinstance(instance, ShareSplit)
 
-    if not created or instance._creation_handled:
+    if live.active() or not created or instance._creation_handled:
         return
     
     logger.debug('Splitting parcels as a result of %s', instance)
@@ -357,6 +369,8 @@ def remove_share_split(sender: type[Model], instance: ShareSplit, **kwargs: Any)
     blocker = instance.deletion_blocker()
     if blocker:
         raise ValueError(blocker)
+    if live.active():
+        return  # The rebuild after the delete drops the parcels it made.
 
     logger.debug('Removing the applied share split %s', instance)
 
@@ -383,10 +397,17 @@ def update_instrument_position(sender: type[Model], instance: Buy | Sell, **kwar
     refresh instrument totals.
     """
 
+    # Inside another record's re-save of its stored figures, `_save_lock` stops this save
+    # working its figures out, so it would write back whatever the cached instrument held,
+    # undoing a fresher save. The outer save refreshes it.
+    if getattr(_save_lock, "active", False):
+        return
+
     logger.debug('Updating instrument net position after %s', instance)
-    
-    instrument = instance.instrument
+    # Read again rather than saving the cached instance, whose figures may be out of date.
+    instrument = Instrument.objects.get(pk=instance.instrument_id)
     instrument.save(update_fields=None)  # triggers the aggregate recalculation
+    instance.instrument = instrument
     logger.debug('...done')
 
 
@@ -564,6 +585,77 @@ def calculated_sources(model: type[Model]) -> list[tuple[str, str]]:
                 pairs.append((field.name, source))
         sources = _calculated_sources[model] = sorted(pairs, key=lambda pair: pair[1])
     return sources
+
+
+#: Per fact, the fields a holding is worked out from. Changing one rebuilds the instrument.
+HOLDINGS_FACT_FIELDS: dict[type[Model], tuple[str, ...]] = {
+    Buy: ('instrument', 'date', 'quantity'),
+    Sell: ('instrument', 'date', 'quantity', 'strategy'),
+    SellAllocation: ('parcel', 'sell', 'quantity', 'is_active'),
+    ShareSplit: ('instrument', 'date', 'quantity_before', 'quantity_after', 'is_active'),
+    CostBaseAdjustment: ('instrument', 'financial_year_end_date', 'cost_base_increase',
+                         'cost_base_increase_currency', 'allocation_method', 'exchange_rate'),
+    CostBaseAdjustmentAllocation: ('parcel', 'cost_base_adjustment', 'cost_base_increase', 'deactivation_date'),
+}
+
+
+def _fact_changed(sender: type[Model], instance: Model, stored: Model) -> bool:
+    for name in HOLDINGS_FACT_FIELDS[sender]:
+        field: Any = sender._meta.get_field(name)
+        if field.to_python(getattr(stored, field.attname)) != field.to_python(getattr(instance, field.attname)):
+            return True
+    return False
+
+
+@receiver(pre_save)
+def note_holdings_change(sender: type[Model], instance: Model, raw: bool = False, **kwargs: Any) -> None:
+    """Before a fact is saved: which instruments it changes, checked against their trades first."""
+    if raw or sender not in HOLDINGS_FACT_FIELDS or not live.active() or live.rebuilding():
+        return
+    stored = None
+    if instance._state.adding:
+        if getattr(instance, '_creation_handled', False):
+            return  # From an export, with its parcels beside it; the loader rebuilds after.
+    else:
+        stored = sender._default_manager.filter(pk=instance.pk).first()
+        if stored is not None and not _fact_changed(sender, instance, stored):
+            return
+    candidates = [live.instrument_of(instance), live.instrument_of(stored) if stored is not None else None]
+    instruments = {instrument for instrument in candidates if instrument is not None}
+    for instrument in instruments:
+        live.ensure_verified(instrument)
+    instance._holdings_instruments = instruments  # type: ignore[attr-defined]
+
+
+@receiver(pre_delete)
+def note_holdings_deletion(sender: type[Model], instance: Model, **kwargs: Any) -> None:
+    """Before a fact is deleted. Deleting an allocation of an automatic sale makes the sale
+    MANUAL: left automatic, the rebuild would allocate it again straight away."""
+    if sender not in HOLDINGS_FACT_FIELDS or not live.active() or live.rebuilding():
+        return
+    instrument = live.instrument_of(instance)
+    if instrument is None:
+        return
+    live.ensure_verified(instrument)
+    if isinstance(instance, SellAllocation) and instance.sell.strategy != SellStrategy.MANUAL:
+        # Strategy is structural, so a save refuses it; this is the user's own decision.
+        Sell.objects.filter(pk=instance.sell_id).update(strategy=SellStrategy.MANUAL)
+    instance._holdings_instruments = {instrument}  # type: ignore[attr-defined]
+
+
+@receiver(post_save)
+@receiver(post_delete)
+def rebuild_holdings(sender: type[Model], instance: Model, created: bool = False, **kwargs: Any) -> None:
+    """After a fact is saved or deleted: rebuild what it changed, in the same transaction."""
+    instruments = getattr(instance, '_holdings_instruments', None)
+    if not instruments:
+        return
+    instance._holdings_instruments = None  # type: ignore[attr-defined]
+    for instrument in instruments:
+        live.rebuild(instrument)
+    if created and getattr(instance, '_creation_handled', True) is False:
+        sender._default_manager.filter(pk=instance.pk).update(_creation_handled=True)
+        instance._creation_handled = True  # type: ignore[attr-defined]
 
 
 @receiver(post_save)

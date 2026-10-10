@@ -3,6 +3,7 @@ import pandas as pd
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
+import contextlib
 import shutil
 from typing import Any, cast
 from tqdm import tqdm
@@ -20,7 +21,7 @@ from djmoney.models.fields import MoneyField
 
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
-from share_dinkum_app.holdings import shadow
+from share_dinkum_app.holdings import compare, live, shadow
 from share_dinkum_app.choices import SellStrategy
 from django.db import models
 
@@ -320,7 +321,11 @@ class DataLoader():
         template = self.is_template()
         self._had_rows = self._models_with_rows()
 
-        with transaction.atomic():
+        # An export carries its parcels and allocations beside its trades, so nothing is rebuilt
+        # as its rows load; each instrument is checked against its trades once they all have.
+        # A template's trades are rebuilt row by row, since its allocations name parcels.
+        restoring = live.writing() if not template else contextlib.nullcontext()
+        with transaction.atomic(), restoring:
             for model in model_load_order:
                 table_name = model.__name__
 
@@ -363,6 +368,9 @@ class DataLoader():
                 # split's links to its parcels, which are many-to-many.
                 recalculate.relink_split_parcels(self.account)
                 recalculate.account(self.account)
+                if live.active():
+                    for instrument in app_models.Instrument.objects.filter(account=self.account):
+                        compare.verify(instrument)
 
             if self.account is not None:
                 shadow.check(self.account, 'loading a file')

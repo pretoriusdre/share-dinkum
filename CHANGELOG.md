@@ -6,8 +6,11 @@ To upgrade, stop the server and run `uv run update`.
 
 ## Unreleased
 
-This release is primarily related to refactoring code to improve the maintainability of the code.
-No behaviour changes other than the fixes below.
+Holdings are now worked out from your trades in date order, rather than built up as each record
+is entered, so trades can be entered and corrected in any order. Decisions already made, such as
+which parcels a sale used, are kept. Your figures do not change: on upgrade, each instrument is
+checked against its trades before it is next changed, and one that differs is left alone until you
+accept a rebuild.
 
 ### Added
 
@@ -22,10 +25,30 @@ No behaviour changes other than the fixes below.
 
 ### Changed
 
+- **Holdings follow the trades.** Saving or deleting a buy, sale, share split, cost base adjustment or
+  allocation works the instrument's parcels out again from its trades, in date order, in the same
+  save. So these are now accepted:
+  - a buy or sale dated before a share split already entered;
+  - a buy or sale dated inside a year whose cost base adjustment was already spread. The spread is
+    kept as it was, and the admin says so; delete the adjustment and enter it again to spread it
+    over the holding as it now stands;
+  - a corrected date, quantity or instrument on a buy. A correction a sale already made cannot
+    follow (fewer units than were sold, say) is refused.
+
+  A share split dated before a sale already allocated is still refused. Parcels keep their ids,
+  and sale allocations keep theirs, so lodged snapshots still match.
+- Deleting an allocation of a FIFO, LIFO or minimum-CGT sale makes the sale MANUAL, so it is not
+  allocated again straight away.
+- If an instrument's stored parcels give different figures from its trades, changes to it are
+  refused until `uv run dev check_holdings --rebuild` accepts the difference. `check_holdings` lists
+  it first.
+- Each sale allocation records the buy it took units from, and exports carry it.
+- `HOLDINGS_WRITER=signals` in `.env` goes back to building holdings as records are entered.
 - Saving a record works out its stored figures once, rather than evaluating every property twice.
-  Loading a file takes about half as long.
+- Loading an import template takes longer (about 28 s for the 10-year sample, from 18 s), since each
+  trade rebuilds its instrument.
 - A share split's `calculated_affected_parcels` column, which was always blank, now lists the parcels
-  the split created.
+  the split created, and a buy's `calculated_related_parcels` includes their cost base adjustments.
 - `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
 
 ### Fixed

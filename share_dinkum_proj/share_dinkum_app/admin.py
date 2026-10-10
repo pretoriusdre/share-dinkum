@@ -60,6 +60,31 @@ class GenericModelAdmin(admin.ModelAdmin):
 
     search_fields = ('id',)
 
+    def save_model(self, request: HttpRequest, obj: Any, form: Any, change: bool) -> None:
+        super().save_model(request, obj, form, change)
+        self.mention_kept_spreads(request, obj)
+
+    @staticmethod
+    def mention_kept_spreads(request: HttpRequest, obj: Any) -> None:
+        """A trade dated in a year whose adjustment was already spread leaves that spread as it is."""
+        from share_dinkum_app.choices import AllocationMethod
+        from share_dinkum_app.holdings import live
+        from share_dinkum_app.models import Buy, CostBaseAdjustment, Sell
+
+        if not live.active() or not isinstance(obj, (Buy, Sell)):
+            return
+        kept = CostBaseAdjustment.objects.filter(
+            account_id=obj.account_id, instrument_id=obj.instrument_id, _creation_handled=True,
+            allocation_method=AllocationMethod.QTY_HELD, financial_year_end_date__gte=obj.date,
+        ).order_by('financial_year_end_date')
+        if kept:
+            years = ', '.join(str(adjustment.financial_year_end_date) for adjustment in kept)
+            messages.info(
+                request,
+                f'Cost base adjustments for the years ending {years} were spread before this was '
+                f'entered, and are kept as they were. Delete one and enter it again to spread it '
+                f'over the holding as it now stands.')
+
     # Set on the instance rather than the class, since they are worked out from the model.
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

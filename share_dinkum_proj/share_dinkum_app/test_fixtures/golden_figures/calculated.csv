@@ -19,427 +19,427 @@ AttributionStatement,AttributionStatement | VGS | 2023-06-30,calculated_fiscal_y
 AttributionStatement,AttributionStatement | VGS | 2024-06-30,calculated_fiscal_year,FY2023/24
 AttributionStatement,AttributionStatement | VGS | 2025-06-30,calculated_fiscal_year,FY2024/25
 Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_fiscal_year,FY2017/18
-Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_related_parcels,2018-06-06 | PARCEL |  A200 | 15.0000 unit @ A$55.25 / unit | Total cost base = A$838.25 |
+Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_related_parcels,2018-06-06 | PARCEL |  A200 | 15.0000 unit @ A$55.25 / unit | Total cost base = A$841.30 |
 Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | A200 | 2018-06-06 | 15.0000 | B056,calculated_unit_price_converted,55.250000 AUD
 Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_related_parcels,"2018-07-02 | PARCEL |  A200 | 29.0000 unit @ A$55.43 / unit | Total cost base = A$1,616.97 |"
+Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_related_parcels,"2018-07-02 | PARCEL |  A200 | 29.0000 unit @ A$55.43 / unit | Total cost base = A$1,622.86 |"
 Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_unit_brokerage_converted,0.327586 AUD
 Buy,Buy | A200 | 2018-07-02 | 29.0000 | B058,calculated_unit_price_converted,55.430000 AUD
 Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_related_parcels,"2018-08-02 | PARCEL |  A200 | 24.0000 unit @ A$55.66 / unit | Total cost base = A$1,345.34 |"
+Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_related_parcels,"2018-08-02 | PARCEL |  A200 | 24.0000 unit @ A$55.66 / unit | Total cost base = A$1,350.04 |"
 Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | A200 | 2018-08-02 | 24.0000 | B060,calculated_unit_price_converted,55.660000 AUD
 Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_related_parcels,"2018-09-03 | PARCEL |  A200 | 19.0000 unit @ A$55.88 / unit | Total cost base = A$1,071.22 |"
+Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_related_parcels,"2018-09-03 | PARCEL |  A200 | 19.0000 unit @ A$55.88 / unit | Total cost base = A$1,074.80 |"
 Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2018-09-03 | 19.0000 | B063,calculated_unit_price_converted,55.880000 AUD
 Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_related_parcels,"2018-10-02 | PARCEL |  A200 | 23.0000 unit @ A$56.09 / unit | Total cost base = A$1,299.57 |"
+Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_related_parcels,"2018-10-02 | PARCEL |  A200 | 23.0000 unit @ A$56.09 / unit | Total cost base = A$1,303.75 |"
 Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | A200 | 2018-10-02 | 23.0000 | B067,calculated_unit_price_converted,56.090000 AUD
 Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_related_parcels,"2018-11-05 | PARCEL |  A200 | 26.0000 unit @ A$56.33 / unit | Total cost base = A$1,474.08 |"
+Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_related_parcels,"2018-11-05 | PARCEL |  A200 | 26.0000 unit @ A$56.33 / unit | Total cost base = A$1,478.59 |"
 Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | A200 | 2018-11-05 | 26.0000 | B071,calculated_unit_price_converted,56.330000 AUD
 Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_related_parcels,2018-12-06 | PARCEL |  A200 | 16.0000 unit @ A$56.56 / unit | Total cost base = A$914.46 |
+Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_related_parcels,2018-12-06 | PARCEL |  A200 | 16.0000 unit @ A$56.56 / unit | Total cost base = A$917.12 |
 Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2018-12-06 | 16.0000 | B075,calculated_unit_price_converted,56.560000 AUD
 Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_related_parcels,"2019-01-04 | PARCEL |  A200 | 21.0000 unit @ A$56.77 / unit | Total cost base = A$1,201.67 |"
+Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_related_parcels,"2019-01-04 | PARCEL |  A200 | 21.0000 unit @ A$56.77 / unit | Total cost base = A$1,205.02 |"
 Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | A200 | 2019-01-04 | 21.0000 | B078,calculated_unit_price_converted,56.770000 AUD
 Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_related_parcels,"2019-02-05 | PARCEL |  A200 | 25.0000 unit @ A$56.99 / unit | Total cost base = A$1,434.25 |"
+Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_related_parcels,"2019-02-05 | PARCEL |  A200 | 25.0000 unit @ A$56.99 / unit | Total cost base = A$1,438.05 |"
 Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2019-02-05 | 25.0000 | B081,calculated_unit_price_converted,56.990000 AUD
 Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_related_parcels,2019-03-04 | PARCEL |  A200 | 16.0000 unit @ A$57.18 / unit | Total cost base = A$924.38 |
+Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_related_parcels,2019-03-04 | PARCEL |  A200 | 16.0000 unit @ A$57.18 / unit | Total cost base = A$926.71 |
 Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2019-03-04 | 16.0000 | B084,calculated_unit_price_converted,57.180000 AUD
 Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_related_parcels,2019-04-02 | PARCEL |  A200 | 14.0000 unit @ A$57.39 / unit | Total cost base = A$812.96 |
+Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_related_parcels,2019-04-02 | PARCEL |  A200 | 14.0000 unit @ A$57.39 / unit | Total cost base = A$814.90 |
 Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2019-04-02 | 14.0000 | B087,calculated_unit_price_converted,57.390000 AUD
 Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_related_parcels,"2019-05-06 | PARCEL |  A200 | 27.0000 unit @ A$57.63 / unit | Total cost base = A$1,565.51 |"
+Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_related_parcels,"2019-05-06 | PARCEL |  A200 | 27.0000 unit @ A$57.63 / unit | Total cost base = A$1,569.04 |"
 Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | A200 | 2019-05-06 | 27.0000 | B089,calculated_unit_price_converted,57.630000 AUD
 Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_fiscal_year,FY2018/19
-Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_related_parcels,"2019-06-04 | PARCEL |  A200 | 26.0000 unit @ A$57.84 / unit | Total cost base = A$1,513.34 |"
+Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_related_parcels,"2019-06-04 | PARCEL |  A200 | 26.0000 unit @ A$57.84 / unit | Total cost base = A$1,516.56 |"
 Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | A200 | 2019-06-04 | 26.0000 | B092,calculated_unit_price_converted,57.840000 AUD
 Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_related_parcels,"2019-07-05 | PARCEL |  A200 | 20.0000 unit @ A$58.07 / unit | Total cost base = A$1,170.90 |"
+Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_related_parcels,"2019-07-05 | PARCEL |  A200 | 20.0000 unit @ A$58.07 / unit | Total cost base = A$1,173.24 |"
 Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | A200 | 2019-07-05 | 20.0000 | B095,calculated_unit_price_converted,58.070000 AUD
 Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_related_parcels,"2019-08-05 | PARCEL |  A200 | 25.0000 unit @ A$58.28 / unit | Total cost base = A$1,466.50 |"
+Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_related_parcels,"2019-08-05 | PARCEL |  A200 | 25.0000 unit @ A$58.28 / unit | Total cost base = A$1,469.36 |"
 Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2019-08-05 | 25.0000 | B100,calculated_unit_price_converted,58.280000 AUD
 Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_related_parcels,"2019-09-02 | PARCEL |  A200 | 25.0000 unit @ A$58.48 / unit | Total cost base = A$1,471.50 |"
+Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_related_parcels,"2019-09-02 | PARCEL |  A200 | 25.0000 unit @ A$58.48 / unit | Total cost base = A$1,474.30 |"
 Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2019-09-02 | 25.0000 | B102,calculated_unit_price_converted,58.480000 AUD
 Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_related_parcels,"2019-10-02 | PARCEL |  A200 | 19.0000 unit @ A$58.70 / unit | Total cost base = A$1,124.80 |"
+Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_related_parcels,"2019-10-02 | PARCEL |  A200 | 19.0000 unit @ A$58.70 / unit | Total cost base = A$1,126.88 |"
 Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2019-10-02 | 19.0000 | B105,calculated_unit_price_converted,58.700000 AUD
 Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_related_parcels,2019-11-06 | PARCEL |  A200 | 16.0000 unit @ A$58.95 / unit | Total cost base = A$952.70 |
+Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_related_parcels,2019-11-06 | PARCEL |  A200 | 16.0000 unit @ A$58.95 / unit | Total cost base = A$954.40 |
 Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2019-11-06 | 16.0000 | B108,calculated_unit_price_converted,58.950000 AUD
 Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_related_parcels,"2019-12-03 | PARCEL |  A200 | 29.0000 unit @ A$59.14 / unit | Total cost base = A$1,724.56 |"
+Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_related_parcels,"2019-12-03 | PARCEL |  A200 | 29.0000 unit @ A$59.14 / unit | Total cost base = A$1,727.57 |"
 Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_unit_brokerage_converted,0.327586 AUD
 Buy,Buy | A200 | 2019-12-03 | 29.0000 | B110,calculated_unit_price_converted,59.140000 AUD
 Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_related_parcels,"2020-01-06 | PARCEL |  A200 | 27.0000 unit @ A$59.38 / unit | Total cost base = A$1,612.76 |"
+Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_related_parcels,"2020-01-06 | PARCEL |  A200 | 27.0000 unit @ A$59.38 / unit | Total cost base = A$1,615.49 |"
 Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | A200 | 2020-01-06 | 27.0000 | B112,calculated_unit_price_converted,59.380000 AUD
 Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_related_parcels,2020-02-05 | PARCEL |  A200 | 16.0000 unit @ A$59.60 / unit | Total cost base = A$963.10 |
+Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_related_parcels,2020-02-05 | PARCEL |  A200 | 16.0000 unit @ A$59.60 / unit | Total cost base = A$964.67 |
 Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2020-02-05 | 16.0000 | B115,calculated_unit_price_converted,59.600000 AUD
 Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_related_parcels,2020-03-05 | PARCEL |  A200 | 14.0000 unit @ A$59.81 / unit | Total cost base = A$846.84 |
+Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_related_parcels,2020-03-05 | PARCEL |  A200 | 14.0000 unit @ A$59.81 / unit | Total cost base = A$848.18 |
 Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2020-03-05 | 14.0000 | B118,calculated_unit_price_converted,59.810000 AUD
 Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_related_parcels,2020-04-02 | PARCEL |  A200 | 11.0000 unit @ A$60.01 / unit | Total cost base = A$669.61 |
+Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_related_parcels,2020-04-02 | PARCEL |  A200 | 11.0000 unit @ A$60.01 / unit | Total cost base = A$670.64 |
 Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2020-04-02 | 11.0000 | B121,calculated_unit_price_converted,60.010000 AUD
 Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_related_parcels,"2020-05-04 | PARCEL |  A200 | 20.0000 unit @ A$60.23 / unit | Total cost base = A$1,214.10 |"
+Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_related_parcels,"2020-05-04 | PARCEL |  A200 | 20.0000 unit @ A$60.23 / unit | Total cost base = A$1,215.91 |"
 Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | A200 | 2020-05-04 | 20.0000 | B125,calculated_unit_price_converted,60.230000 AUD
 Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_fiscal_year,FY2019/20
-Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_related_parcels,"2020-06-02 | PARCEL |  A200 | 22.0000 unit @ A$60.44 / unit | Total cost base = A$1,339.18 |"
+Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_related_parcels,"2020-06-02 | PARCEL |  A200 | 22.0000 unit @ A$60.44 / unit | Total cost base = A$1,341.12 |"
 Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2020-06-02 | 22.0000 | B127,calculated_unit_price_converted,60.440000 AUD
 Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_related_parcels,"2020-07-06 | PARCEL |  A200 | 22.0000 unit @ A$60.68 / unit | Total cost base = A$1,344.46 |"
+Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_related_parcels,"2020-07-06 | PARCEL |  A200 | 22.0000 unit @ A$60.68 / unit | Total cost base = A$1,346.34 |"
 Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2020-07-06 | 22.0000 | B131,calculated_unit_price_converted,60.680000 AUD
 Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_related_parcels,2020-08-03 | PARCEL |  A200 | 11.0000 unit @ A$60.88 / unit | Total cost base = A$679.18 |
+Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_related_parcels,2020-08-03 | PARCEL |  A200 | 11.0000 unit @ A$60.88 / unit | Total cost base = A$680.12 |
 Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2020-08-03 | 11.0000 | B136,calculated_unit_price_converted,60.880000 AUD
 Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_related_parcels,"2020-09-07 | PARCEL |  A200 | 25.0000 unit @ A$61.13 / unit | Total cost base = A$1,537.75 |"
+Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_related_parcels,"2020-09-07 | PARCEL |  A200 | 25.0000 unit @ A$61.13 / unit | Total cost base = A$1,539.89 |"
 Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2020-09-07 | 25.0000 | B138,calculated_unit_price_converted,61.130000 AUD
 Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_related_parcels,"2020-10-05 | PARCEL |  A200 | 23.0000 unit @ A$61.33 / unit | Total cost base = A$1,420.09 |"
+Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_related_parcels,"2020-10-05 | PARCEL |  A200 | 23.0000 unit @ A$61.33 / unit | Total cost base = A$1,422.06 |"
 Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | A200 | 2020-10-05 | 23.0000 | B141,calculated_unit_price_converted,61.330000 AUD
 Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_related_parcels,2020-11-06 | PARCEL |  A200 | 14.0000 unit @ A$61.57 / unit | Total cost base = A$871.48 |
+Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_related_parcels,2020-11-06 | PARCEL |  A200 | 14.0000 unit @ A$61.57 / unit | Total cost base = A$872.68 |
 Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2020-11-06 | 14.0000 | B144,calculated_unit_price_converted,61.570000 AUD
 Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_related_parcels,"2020-12-07 | PARCEL |  A200 | 25.0000 unit @ A$61.78 / unit | Total cost base = A$1,554.00 |"
+Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_related_parcels,"2020-12-07 | PARCEL |  A200 | 25.0000 unit @ A$61.78 / unit | Total cost base = A$1,556.14 |"
 Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2020-12-07 | 25.0000 | B146,calculated_unit_price_converted,61.780000 AUD
 Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_related_parcels,"2021-01-04 | PARCEL |  A200 | 16.0000 unit @ A$61.98 / unit | Total cost base = A$1,001.18 |"
+Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_related_parcels,"2021-01-04 | PARCEL |  A200 | 16.0000 unit @ A$61.98 / unit | Total cost base = A$1,002.55 |"
 Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2021-01-04 | 16.0000 | B148,calculated_unit_price_converted,61.980000 AUD
 Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_related_parcels,"2021-02-03 | PARCEL |  A200 | 24.0000 unit @ A$62.20 / unit | Total cost base = A$1,502.30 |"
+Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_related_parcels,"2021-02-03 | PARCEL |  A200 | 24.0000 unit @ A$62.20 / unit | Total cost base = A$1,504.35 |"
 Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | A200 | 2021-02-03 | 24.0000 | B150,calculated_unit_price_converted,62.200000 AUD
 Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_related_parcels,"2021-03-04 | PARCEL |  A200 | 18.0000 unit @ A$62.41 / unit | Total cost base = A$1,132.88 |"
+Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_related_parcels,"2021-03-04 | PARCEL |  A200 | 18.0000 unit @ A$62.41 / unit | Total cost base = A$1,134.42 |"
 Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2021-03-04 | 18.0000 | B153,calculated_unit_price_converted,62.410000 AUD
 Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_related_parcels,"2021-04-05 | PARCEL |  A200 | 18.0000 unit @ A$62.63 / unit | Total cost base = A$1,136.84 |"
+Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_related_parcels,"2021-04-05 | PARCEL |  A200 | 18.0000 unit @ A$62.63 / unit | Total cost base = A$1,138.38 |"
 Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2021-04-05 | 18.0000 | B155,calculated_unit_price_converted,62.630000 AUD
 Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_related_parcels,"2021-05-03 | PARCEL |  A200 | 25.0000 unit @ A$62.83 / unit | Total cost base = A$1,580.25 |"
+Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_related_parcels,"2021-05-03 | PARCEL |  A200 | 25.0000 unit @ A$62.83 / unit | Total cost base = A$1,582.39 |"
 Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2021-05-03 | 25.0000 | B158,calculated_unit_price_converted,62.830000 AUD
 Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_fiscal_year,FY2020/21
-Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_related_parcels,2021-06-02 | PARCEL |  A200 | 11.0000 unit @ A$63.05 / unit | Total cost base = A$703.05 |
+Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_related_parcels,2021-06-02 | PARCEL |  A200 | 11.0000 unit @ A$63.05 / unit | Total cost base = A$703.99 |
 Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2021-06-02 | 11.0000 | B161,calculated_unit_price_converted,63.050000 AUD
 Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_related_parcels,"2021-07-05 | PARCEL |  A200 | 26.0000 unit @ A$63.28 / unit | Total cost base = A$1,654.78 |"
+Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_related_parcels,"2021-07-05 | PARCEL |  A200 | 26.0000 unit @ A$63.28 / unit | Total cost base = A$1,656.99 |"
 Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | A200 | 2021-07-05 | 26.0000 | B163,calculated_unit_price_converted,63.280000 AUD
 Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_related_parcels,"2021-08-02 | PARCEL |  A200 | 18.0000 unit @ A$63.48 / unit | Total cost base = A$1,152.14 |"
+Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_related_parcels,"2021-08-02 | PARCEL |  A200 | 18.0000 unit @ A$63.48 / unit | Total cost base = A$1,153.61 |"
 Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2021-08-02 | 18.0000 | B166,calculated_unit_price_converted,63.480000 AUD
 Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_related_parcels,"2021-09-06 | PARCEL |  A200 | 18.0000 unit @ A$63.73 / unit | Total cost base = A$1,156.64 |"
+Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_related_parcels,"2021-09-06 | PARCEL |  A200 | 18.0000 unit @ A$63.73 / unit | Total cost base = A$1,158.03 |"
 Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2021-09-06 | 18.0000 | B168,calculated_unit_price_converted,63.730000 AUD
 Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_related_parcels,"2021-10-05 | PARCEL |  A200 | 25.0000 unit @ A$63.94 / unit | Total cost base = A$1,608.00 |"
+Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_related_parcels,"2021-10-05 | PARCEL |  A200 | 25.0000 unit @ A$63.94 / unit | Total cost base = A$1,609.84 |"
 Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | A200 | 2021-10-05 | 25.0000 | B170,calculated_unit_price_converted,63.940000 AUD
 Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_related_parcels,2021-11-03 | PARCEL |  A200 | 12.0000 unit @ A$64.15 / unit | Total cost base = A$779.30 |
+Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_related_parcels,2021-11-03 | PARCEL |  A200 | 12.0000 unit @ A$64.15 / unit | Total cost base = A$780.14 |
 Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2021-11-03 | 12.0000 | B173,calculated_unit_price_converted,64.150000 AUD
 Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_related_parcels,"2021-12-06 | PARCEL |  A200 | 19.0000 unit @ A$64.38 / unit | Total cost base = A$1,232.72 |"
+Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_related_parcels,"2021-12-06 | PARCEL |  A200 | 19.0000 unit @ A$64.38 / unit | Total cost base = A$1,233.98 |"
 Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2021-12-06 | 19.0000 | B176,calculated_unit_price_converted,64.380000 AUD
 Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_related_parcels,"2022-01-03 | PARCEL |  A200 | 19.0000 unit @ A$64.58 / unit | Total cost base = A$1,236.52 |"
+Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_related_parcels,"2022-01-03 | PARCEL |  A200 | 19.0000 unit @ A$64.58 / unit | Total cost base = A$1,237.71 |"
 Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2022-01-03 | 19.0000 | B180,calculated_unit_price_converted,64.580000 AUD
 Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_related_parcels,2022-02-07 | PARCEL |  A200 | 11.0000 unit @ A$64.83 / unit | Total cost base = A$722.63 |
+Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_related_parcels,2022-02-07 | PARCEL |  A200 | 11.0000 unit @ A$64.83 / unit | Total cost base = A$723.27 |
 Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2022-02-07 | 11.0000 | B184,calculated_unit_price_converted,64.830000 AUD
 Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_related_parcels,2022-03-03 | PARCEL |  A200 | 11.0000 unit @ A$65.01 / unit | Total cost base = A$724.61 |
+Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_related_parcels,2022-03-03 | PARCEL |  A200 | 11.0000 unit @ A$65.01 / unit | Total cost base = A$725.22 |
 Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2022-03-03 | 11.0000 | B187,calculated_unit_price_converted,65.010000 AUD
 Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_related_parcels,"2022-04-04 | PARCEL |  A200 | 17.0000 unit @ A$65.23 / unit | Total cost base = A$1,118.41 |"
+Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_related_parcels,"2022-04-04 | PARCEL |  A200 | 17.0000 unit @ A$65.23 / unit | Total cost base = A$1,119.28 |"
 Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | A200 | 2022-04-04 | 17.0000 | B190,calculated_unit_price_converted,65.230000 AUD
 Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_related_parcels,"2022-05-03 | PARCEL |  A200 | 18.0000 unit @ A$65.44 / unit | Total cost base = A$1,187.42 |"
+Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_related_parcels,"2022-05-03 | PARCEL |  A200 | 18.0000 unit @ A$65.44 / unit | Total cost base = A$1,188.28 |"
 Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2022-05-03 | 18.0000 | B193,calculated_unit_price_converted,65.440000 AUD
 Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_fiscal_year,FY2021/22
-Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_related_parcels,2022-06-02 | PARCEL |  A200 | 12.0000 unit @ A$65.66 / unit | Total cost base = A$797.42 |
+Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_related_parcels,2022-06-02 | PARCEL |  A200 | 12.0000 unit @ A$65.66 / unit | Total cost base = A$797.95 |
 Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2022-06-02 | 12.0000 | B195,calculated_unit_price_converted,65.660000 AUD
 Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_related_parcels,"2022-07-06 | PARCEL |  A200 | 22.0000 unit @ A$65.90 / unit | Total cost base = A$1,459.30 |"
+Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_related_parcels,"2022-07-06 | PARCEL |  A200 | 22.0000 unit @ A$65.90 / unit | Total cost base = A$1,460.23 |"
 Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2022-07-06 | 22.0000 | B198,calculated_unit_price_converted,65.900000 AUD
 Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_related_parcels,"2022-08-03 | PARCEL |  A200 | 15.0000 unit @ A$66.10 / unit | Total cost base = A$1,001.00 |"
+Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_related_parcels,"2022-08-03 | PARCEL |  A200 | 15.0000 unit @ A$66.10 / unit | Total cost base = A$1,001.76 |"
 Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | A200 | 2022-08-03 | 15.0000 | B202,calculated_unit_price_converted,66.100000 AUD
 Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_related_parcels,"2022-09-05 | PARCEL |  A200 | 22.0000 unit @ A$66.33 / unit | Total cost base = A$1,468.76 |"
+Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_related_parcels,"2022-09-05 | PARCEL |  A200 | 22.0000 unit @ A$66.33 / unit | Total cost base = A$1,470.10 |"
 Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2022-09-05 | 22.0000 | B204,calculated_unit_price_converted,66.330000 AUD
 Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_related_parcels,2022-10-03 | PARCEL |  A200 | 14.0000 unit @ A$66.53 / unit | Total cost base = A$940.92 |
+Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_related_parcels,2022-10-03 | PARCEL |  A200 | 14.0000 unit @ A$66.53 / unit | Total cost base = A$941.89 |
 Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2022-10-03 | 14.0000 | B208,calculated_unit_price_converted,66.530000 AUD
 Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_related_parcels,"2022-11-07 | PARCEL |  A200 | 26.0000 unit @ A$66.78 / unit | Total cost base = A$1,745.78 |"
+Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_related_parcels,"2022-11-07 | PARCEL |  A200 | 26.0000 unit @ A$66.78 / unit | Total cost base = A$1,747.86 |"
 Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | A200 | 2022-11-07 | 26.0000 | B211,calculated_unit_price_converted,66.780000 AUD
 Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_related_parcels,"2022-12-05 | PARCEL |  A200 | 16.0000 unit @ A$66.98 / unit | Total cost base = A$1,081.18 |"
+Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_related_parcels,"2022-12-05 | PARCEL |  A200 | 16.0000 unit @ A$66.98 / unit | Total cost base = A$1,082.60 |"
 Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2022-12-05 | 16.0000 | B213,calculated_unit_price_converted,66.980000 AUD
 Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_related_parcels,"2023-01-05 | PARCEL |  A200 | 16.0000 unit @ A$67.21 / unit | Total cost base = A$1,084.86 |"
+Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_related_parcels,"2023-01-05 | PARCEL |  A200 | 16.0000 unit @ A$67.21 / unit | Total cost base = A$1,086.43 |"
 Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | A200 | 2023-01-05 | 16.0000 | B215,calculated_unit_price_converted,67.210000 AUD
 Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_related_parcels,"2023-02-06 | PARCEL |  A200 | 22.0000 unit @ A$67.43 / unit | Total cost base = A$1,492.96 |"
+Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_related_parcels,"2023-02-06 | PARCEL |  A200 | 22.0000 unit @ A$67.43 / unit | Total cost base = A$1,495.33 |"
 Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2023-02-06 | 22.0000 | B217,calculated_unit_price_converted,67.430000 AUD
 Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_related_parcels,2023-03-03 | PARCEL |  A200 | 14.0000 unit @ A$67.62 / unit | Total cost base = A$956.18 |
+Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_related_parcels,2023-03-03 | PARCEL |  A200 | 14.0000 unit @ A$67.62 / unit | Total cost base = A$957.80 |
 Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2023-03-03 | 14.0000 | B221,calculated_unit_price_converted,67.620000 AUD
 Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_related_parcels,"2023-04-05 | PARCEL |  A200 | 19.0000 unit @ A$67.85 / unit | Total cost base = A$1,298.65 |"
+Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_related_parcels,"2023-04-05 | PARCEL |  A200 | 19.0000 unit @ A$67.85 / unit | Total cost base = A$1,301.04 |"
 Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2023-04-05 | 19.0000 | B224,calculated_unit_price_converted,67.850000 AUD
 Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_related_parcels,"2023-05-03 | PARCEL |  A200 | 23.0000 unit @ A$68.05 / unit | Total cost base = A$1,574.65 |"
+Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_related_parcels,"2023-05-03 | PARCEL |  A200 | 23.0000 unit @ A$68.05 / unit | Total cost base = A$1,577.73 |"
 Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | A200 | 2023-05-03 | 23.0000 | B226,calculated_unit_price_converted,68.050000 AUD
 Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_fiscal_year,FY2022/23
-Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_related_parcels,"2023-06-05 | PARCEL |  A200 | 15.0000 unit @ A$68.28 / unit | Total cost base = A$1,033.70 |"
+Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_related_parcels,"2023-06-05 | PARCEL |  A200 | 15.0000 unit @ A$68.28 / unit | Total cost base = A$1,035.86 |"
 Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | A200 | 2023-06-05 | 15.0000 | B229,calculated_unit_price_converted,68.280000 AUD
 Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_related_parcels,2023-07-06 | PARCEL |  A200 | 13.0000 unit @ A$68.51 / unit | Total cost base = A$900.13 |
+Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_related_parcels,2023-07-06 | PARCEL |  A200 | 13.0000 unit @ A$68.51 / unit | Total cost base = A$902.08 |
 Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | A200 | 2023-07-06 | 13.0000 | B232,calculated_unit_price_converted,68.510000 AUD
 Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_related_parcels,"2023-08-04 | PARCEL |  A200 | 17.0000 unit @ A$68.72 / unit | Total cost base = A$1,177.74 |"
+Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_related_parcels,"2023-08-04 | PARCEL |  A200 | 17.0000 unit @ A$68.72 / unit | Total cost base = A$1,180.12 |"
 Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | A200 | 2023-08-04 | 17.0000 | B234,calculated_unit_price_converted,68.720000 AUD
 Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_related_parcels,"2023-09-04 | PARCEL |  A200 | 18.0000 unit @ A$68.93 / unit | Total cost base = A$1,250.24 |"
+Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_related_parcels,"2023-09-04 | PARCEL |  A200 | 18.0000 unit @ A$68.93 / unit | Total cost base = A$1,252.56 |"
 Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | A200 | 2023-09-04 | 18.0000 | B237,calculated_unit_price_converted,68.930000 AUD
 Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_related_parcels,2023-10-06 | PARCEL |  A200 | 12.0000 unit @ A$69.17 / unit | Total cost base = A$839.54 |
+Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_related_parcels,2023-10-06 | PARCEL |  A200 | 12.0000 unit @ A$69.17 / unit | Total cost base = A$840.95 |
 Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2023-10-06 | 12.0000 | B242,calculated_unit_price_converted,69.170000 AUD
 Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_related_parcels,"2023-11-02 | PARCEL |  A200 | 22.0000 unit @ A$69.36 / unit | Total cost base = A$1,535.42 |"
+Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_related_parcels,"2023-11-02 | PARCEL |  A200 | 22.0000 unit @ A$69.36 / unit | Total cost base = A$1,537.78 |"
 Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | A200 | 2023-11-02 | 22.0000 | B245,calculated_unit_price_converted,69.360000 AUD
 Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_related_parcels,"2023-12-04 | PARCEL |  A200 | 21.0000 unit @ A$69.58 / unit | Total cost base = A$1,470.68 |"
+Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_related_parcels,"2023-12-04 | PARCEL |  A200 | 21.0000 unit @ A$69.58 / unit | Total cost base = A$1,472.69 |"
 Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | A200 | 2023-12-04 | 21.0000 | B248,calculated_unit_price_converted,69.580000 AUD
 Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_related_parcels,"2024-01-03 | PARCEL |  A200 | 17.0000 unit @ A$69.80 / unit | Total cost base = A$1,196.10 |"
+Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_related_parcels,"2024-01-03 | PARCEL |  A200 | 17.0000 unit @ A$69.80 / unit | Total cost base = A$1,197.55 |"
 Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | A200 | 2024-01-03 | 17.0000 | B251,calculated_unit_price_converted,69.800000 AUD
 Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_related_parcels,2024-02-05 | PARCEL |  A200 | 14.0000 unit @ A$70.03 / unit | Total cost base = A$989.92 |
+Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_related_parcels,2024-02-05 | PARCEL |  A200 | 14.0000 unit @ A$70.03 / unit | Total cost base = A$990.94 |
 Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2024-02-05 | 14.0000 | B255,calculated_unit_price_converted,70.030000 AUD
 Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_related_parcels,"2024-03-04 | PARCEL |  A200 | 21.0000 unit @ A$70.23 / unit | Total cost base = A$1,484.33 |"
+Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_related_parcels,"2024-03-04 | PARCEL |  A200 | 21.0000 unit @ A$70.23 / unit | Total cost base = A$1,485.65 |"
 Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | A200 | 2024-03-04 | 21.0000 | B257,calculated_unit_price_converted,70.230000 AUD
 Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_related_parcels,2024-04-04 | PARCEL |  A200 | 10.0000 unit @ A$70.46 / unit | Total cost base = A$714.10 |
+Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_related_parcels,2024-04-04 | PARCEL |  A200 | 10.0000 unit @ A$70.46 / unit | Total cost base = A$714.62 |
 Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_unit_brokerage_converted,0.950000 AUD
 Buy,Buy | A200 | 2024-04-04 | 10.0000 | B259,calculated_unit_price_converted,70.460000 AUD
 Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_related_parcels,2024-05-06 | PARCEL |  A200 | 14.0000 unit @ A$70.68 / unit | Total cost base = A$999.02 |
+Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_related_parcels,2024-05-06 | PARCEL |  A200 | 14.0000 unit @ A$70.68 / unit | Total cost base = A$999.58 |
 Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | A200 | 2024-05-06 | 14.0000 | B263,calculated_unit_price_converted,70.680000 AUD
 Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_fiscal_year,FY2023/24
-Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_related_parcels,2024-06-03 | PARCEL |  A200 | 12.0000 unit @ A$70.88 / unit | Total cost base = A$860.06 |
+Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_related_parcels,2024-06-03 | PARCEL |  A200 | 12.0000 unit @ A$70.88 / unit | Total cost base = A$860.42 |
 Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2024-06-03 | 12.0000 | B266,calculated_unit_price_converted,70.880000 AUD
 Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_related_parcels,"2024-07-02 | PARCEL |  A200 | 19.0000 unit @ A$71.09 / unit | Total cost base = A$1,360.21 |"
+Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_related_parcels,"2024-07-02 | PARCEL |  A200 | 19.0000 unit @ A$71.09 / unit | Total cost base = A$1,360.59 |"
 Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2024-07-02 | 19.0000 | B269,calculated_unit_price_converted,71.090000 AUD
 Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_related_parcels,2024-08-05 | PARCEL |  A200 | 13.0000 unit @ A$71.33 / unit | Total cost base = A$936.79 |
+Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_related_parcels,2024-08-05 | PARCEL |  A200 | 13.0000 unit @ A$71.33 / unit | Total cost base = A$937.03 |
 Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | A200 | 2024-08-05 | 13.0000 | B271,calculated_unit_price_converted,71.330000 AUD
 Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_related_parcels,2024-09-06 | PARCEL |  A200 | 9.0000 unit @ A$71.57 / unit | Total cost base = A$653.63 |
+Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_related_parcels,2024-09-06 | PARCEL |  A200 | 9.0000 unit @ A$71.57 / unit | Total cost base = A$653.78 |
 Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_unit_brokerage_converted,1.055556 AUD
 Buy,Buy | A200 | 2024-09-06 | 9.0000 | B273,calculated_unit_price_converted,71.570000 AUD
 Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_related_parcels,2024-10-07 | PARCEL |  A200 | 12.0000 unit @ A$71.78 / unit | Total cost base = A$870.86 |
+Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_related_parcels,2024-10-07 | PARCEL |  A200 | 12.0000 unit @ A$71.78 / unit | Total cost base = A$871.04 |
 Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2024-10-07 | 12.0000 | B275,calculated_unit_price_converted,71.780000 AUD
 Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_related_parcels,"2024-11-04 | PARCEL |  A200 | 19.0000 unit @ A$71.98 / unit | Total cost base = A$1,377.12 |"
+Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_related_parcels,"2024-11-04 | PARCEL |  A200 | 19.0000 unit @ A$71.98 / unit | Total cost base = A$1,377.37 |"
 Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | A200 | 2024-11-04 | 19.0000 | B277,calculated_unit_price_converted,71.980000 AUD
 Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_related_parcels,"2024-12-04 | PARCEL |  A200 | 15.0000 unit @ A$72.20 / unit | Total cost base = A$1,092.50 |"
+Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_related_parcels,"2024-12-04 | PARCEL |  A200 | 15.0000 unit @ A$72.20 / unit | Total cost base = A$1,092.67 |"
 Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | A200 | 2024-12-04 | 15.0000 | B280,calculated_unit_price_converted,72.200000 AUD
 Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_related_parcels,2025-01-06 | PARCEL |  A200 | 10.0000 unit @ A$72.43 / unit | Total cost base = A$733.80 |
+Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_related_parcels,2025-01-06 | PARCEL |  A200 | 10.0000 unit @ A$72.43 / unit | Total cost base = A$733.90 |
 Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_unit_brokerage_converted,0.950000 AUD
 Buy,Buy | A200 | 2025-01-06 | 10.0000 | B284,calculated_unit_price_converted,72.430000 AUD
 Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_related_parcels,2025-02-03 | PARCEL |  A200 | 12.0000 unit @ A$72.63 / unit | Total cost base = A$881.06 |
+Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_related_parcels,2025-02-03 | PARCEL |  A200 | 12.0000 unit @ A$72.63 / unit | Total cost base = A$881.16 |
 Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | A200 | 2025-02-03 | 12.0000 | B286,calculated_unit_price_converted,72.630000 AUD
 Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_related_parcels,2025-03-03 | PARCEL |  A200 | 13.0000 unit @ A$72.83 / unit | Total cost base = A$956.29 |
+Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_related_parcels,2025-03-03 | PARCEL |  A200 | 13.0000 unit @ A$72.83 / unit | Total cost base = A$956.38 |
 Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | A200 | 2025-03-03 | 13.0000 | B289,calculated_unit_price_converted,72.830000 AUD
 Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_related_parcels,"2025-04-07 | PARCEL |  A200 | 21.0000 unit @ A$73.08 / unit | Total cost base = A$1,544.18 |"
+Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_related_parcels,"2025-04-07 | PARCEL |  A200 | 21.0000 unit @ A$73.08 / unit | Total cost base = A$1,544.28 |"
 Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | A200 | 2025-04-07 | 21.0000 | B291,calculated_unit_price_converted,73.080000 AUD
 Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_related_parcels,2025-05-05 | PARCEL |  A200 | 11.0000 unit @ A$73.28 / unit | Total cost base = A$815.58 |
+Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_related_parcels,2025-05-05 | PARCEL |  A200 | 11.0000 unit @ A$73.28 / unit | Total cost base = A$815.61 |
 Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | A200 | 2025-05-05 | 11.0000 | B294,calculated_unit_price_converted,73.280000 AUD
 Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_fiscal_year,FY2024/25
-Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_related_parcels,2025-06-02 | PARCEL |  A200 | 10.0000 unit @ A$73.48 / unit | Total cost base = A$744.30 |
+Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_related_parcels,2025-06-02 | PARCEL |  A200 | 10.0000 unit @ A$73.48 / unit | Total cost base = A$744.32 |
 Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_unit_brokerage_converted,0.950000 AUD
 Buy,Buy | A200 | 2025-06-02 | 10.0000 | B296,calculated_unit_price_converted,73.480000 AUD
@@ -519,52 +519,62 @@ Buy,Buy | A200 | 2026-09-02 | 21.0000 | B345,calculated_total_brokerage_converte
 Buy,Buy | A200 | 2026-09-02 | 21.0000 | B345,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | A200 | 2026-09-02 | 21.0000 | B345,calculated_unit_price_converted,76.750000 AUD
 Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_fiscal_year,FY2016/17
-Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_related_parcels,2017-03-06 | PARCEL |  AAPL | 2.0000 unit @ A$311.88 / unit | Total cost base = A$631.26 |
+Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_related_parcels,"Buy | AAPL | 2017-03-06 | 2.0000 | B015 | 2017-03-06 | 2020-08-31 | 2.0000 |  | INACTIVE
+2017-03-06 | PARCEL |  AAPL | 8.0000 unit @ A$77.97 / unit | Total cost base = A$631.26 |"
 Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_unit_brokerage_converted,3.750000 AUD
 Buy,Buy | AAPL | 2017-03-06 | 2.0000 | B015,calculated_unit_price_converted,311.880000 AUD
 Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_fiscal_year,FY2016/17
-Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_related_parcels,"2017-05-22 | PARCEL |  AAPL | 4.0000 unit @ A$315.18 / unit | Total cost base = A$1,268.22 |"
+Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_related_parcels,"Buy | AAPL | 2017-05-22 | 4.0000 | B023 | 2017-05-22 | 2020-08-31 | 4.0000 |  | INACTIVE
+2017-05-22 | PARCEL |  AAPL | 16.0000 unit @ A$78.80 / unit | Total cost base = A$1,268.22 |"
 Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_unit_brokerage_converted,1.875000 AUD
 Buy,Buy | AAPL | 2017-05-22 | 4.0000 | B023,calculated_unit_price_converted,315.180000 AUD
 Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_fiscal_year,FY2016/17
-Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_related_parcels,2017-06-22 | PARCEL |  AAPL | 3.0000 unit @ A$316.56 / unit | Total cost base = A$957.18 |
+Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_related_parcels,"Buy | AAPL | 2017-06-22 | 3.0000 | B026 | 2017-06-22 | 2020-08-31 | 3.0000 |  | INACTIVE
+2017-06-22 | PARCEL |  AAPL | 12.0000 unit @ A$79.14 / unit | Total cost base = A$957.18 |"
 Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_unit_brokerage_converted,2.500000 AUD
 Buy,Buy | AAPL | 2017-06-22 | 3.0000 | B026,calculated_unit_price_converted,316.560000 AUD
 Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_fiscal_year,FY2018/19
-Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_related_parcels,2018-10-11 | PARCEL |  AAPL | 2.0000 unit @ A$336.96 / unit | Total cost base = A$681.42 |
+Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_related_parcels,"Buy | AAPL | 2018-10-11 | 2.0000 | B069 | 2018-10-11 | 2020-08-31 | 2.0000 |  | INACTIVE
+2018-10-11 | PARCEL |  AAPL | 8.0000 unit @ A$84.24 / unit | Total cost base = A$681.42 |"
 Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_unit_brokerage_converted,3.750000 AUD
 Buy,Buy | AAPL | 2018-10-11 | 2.0000 | B069,calculated_unit_price_converted,336.960000 AUD
 Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_fiscal_year,FY2018/19
-Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_related_parcels,2018-11-21 | PARCEL |  AAPL | 2.0000 unit @ A$338.70 / unit | Total cost base = A$684.90 |
+Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_related_parcels,"Buy | AAPL | 2018-11-21 | 2.0000 | B074 | 2018-11-21 | 2020-08-31 | 2.0000 |  | INACTIVE
+2018-11-21 | PARCEL |  AAPL | 8.0000 unit @ A$84.68 / unit | Total cost base = A$684.90 |"
 Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_unit_brokerage_converted,3.750000 AUD
 Buy,Buy | AAPL | 2018-11-21 | 2.0000 | B074,calculated_unit_price_converted,338.700000 AUD
 Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_fiscal_year,FY2018/19
-Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_related_parcels,2019-03-11 | PARCEL |  AAPL | 2.0000 unit @ A$343.38 / unit | Total cost base = A$694.26 |
+Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_related_parcels,"Buy | AAPL | 2019-03-11 | 2.0000 | B086 | 2019-03-11 | 2020-08-31 | 2.0000 |  | INACTIVE
+2019-03-11 | PARCEL |  AAPL | 8.0000 unit @ A$85.84 / unit | Total cost base = A$694.26 |"
 Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_unit_brokerage_converted,3.750000 AUD
 Buy,Buy | AAPL | 2019-03-11 | 2.0000 | B086,calculated_unit_price_converted,343.380000 AUD
 Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_fiscal_year,FY2019/20
-Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_related_parcels,"2019-10-21 | PARCEL |  AAPL | 3.0000 unit @ A$352.98 / unit | Total cost base = A$1,066.44 |"
+Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_related_parcels,"Buy | AAPL | 2019-10-21 | 3.0000 | B107 | 2019-10-21 | 2020-08-31 | 3.0000 |  | INACTIVE
+2019-10-21 | PARCEL |  AAPL | 12.0000 unit @ A$88.24 / unit | Total cost base = A$1,066.44 |"
 Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_unit_brokerage_converted,2.500000 AUD
 Buy,Buy | AAPL | 2019-10-21 | 3.0000 | B107,calculated_unit_price_converted,352.980000 AUD
 Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_fiscal_year,FY2019/20
-Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_related_parcels,"2020-01-16 | PARCEL |  AAPL | 3.0000 unit @ A$356.76 / unit | Total cost base = A$1,077.78 |"
+Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_related_parcels,"Buy | AAPL | 2020-01-16 | 3.0000 | B114 | 2020-01-16 | 2020-08-31 | 3.0000 |  | INACTIVE
+2020-01-16 | PARCEL |  AAPL | 12.0000 unit @ A$89.19 / unit | Total cost base = A$1,077.78 |"
 Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_unit_brokerage_converted,2.500000 AUD
 Buy,Buy | AAPL | 2020-01-16 | 3.0000 | B114,calculated_unit_price_converted,356.760000 AUD
 Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_fiscal_year,FY2020/21
-Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_related_parcels,"2020-07-27 | PARCEL |  AAPL | 3.0000 unit @ A$364.98 / unit | Total cost base = A$1,102.44 |"
+Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_related_parcels,"Buy | AAPL | 2020-07-27 | 3.0000 | B134 | 2020-07-27 | 2020-08-31 | 3.0000 |  | INACTIVE
+2020-07-27 | PARCEL |  AAPL | 12.0000 unit @ A$91.24 / unit | Total cost base = A$1,102.44 |"
 Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_unit_brokerage_converted,2.500000 AUD
 Buy,Buy | AAPL | 2020-07-27 | 3.0000 | B134,calculated_unit_price_converted,364.980000 AUD
 Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_fiscal_year,FY2020/21
-Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_related_parcels,2020-07-28 | PARCEL |  AAPL | 2.0000 unit @ A$365.04 / unit | Total cost base = A$737.58 |
+Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_related_parcels,"Buy | AAPL | 2020-07-28 | 2.0000 | B135 | 2020-07-28 | 2020-08-31 | 2.0000 |  | INACTIVE
+2020-07-28 | PARCEL |  AAPL | 8.0000 unit @ A$91.26 / unit | Total cost base = A$737.58 |"
 Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_unit_brokerage_converted,3.750000 AUD
 Buy,Buy | AAPL | 2020-07-28 | 2.0000 | B135,calculated_unit_price_converted,365.040000 AUD
@@ -939,47 +949,49 @@ Buy,Buy | MSFT | 2021-04-26 | 14.0000 | B157,calculated_total_brokerage_converte
 Buy,Buy | MSFT | 2021-04-26 | 14.0000 | B157,calculated_unit_brokerage_converted,0.535714 AUD
 Buy,Buy | MSFT | 2021-04-26 | 14.0000 | B157,calculated_unit_price_converted,94.170000 AUD
 Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_fiscal_year,FY2021/22
-Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_related_parcels,"2021-10-05 | PARCEL |  MSFT | 13.0000 unit @ A$95.91 / unit | Total cost base = A$1,254.33 |"
+Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_related_parcels,"Buy | MSFT | 2021-10-05 | 13.0000 | B171 | 2021-10-05 | 2024-11-12 | 13.0000 |  | INACTIVE
+2021-10-05 | PARCEL |  MSFT | 1.0000 unit @ A$95.91 / unit | Total cost base = A$96.49 | SOLD
+2021-10-05 | PARCEL |  MSFT | 12.0000 unit @ A$95.91 / unit | Total cost base = A$1,157.84 |"
 Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_unit_brokerage_converted,0.576923 AUD
 Buy,Buy | MSFT | 2021-10-05 | 13.0000 | B171,calculated_unit_price_converted,95.910000 AUD
 Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_fiscal_year,FY2021/22
-Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_related_parcels,2022-01-27 | PARCEL |  MSFT | 9.0000 unit @ A$97.14 / unit | Total cost base = A$881.76 |
+Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_related_parcels,2022-01-27 | PARCEL |  MSFT | 9.0000 unit @ A$97.14 / unit | Total cost base = A$881.76 | SOLD
 Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_unit_brokerage_converted,0.833333 AUD
 Buy,Buy | MSFT | 2022-01-27 | 9.0000 | B182,calculated_unit_price_converted,97.140000 AUD
 Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_fiscal_year,FY2022/23
-Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_related_parcels,"2022-07-25 | PARCEL |  MSFT | 15.0000 unit @ A$99.04 / unit | Total cost base = A$1,493.18 |"
+Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_related_parcels,"2022-07-25 | PARCEL |  MSFT | 15.0000 unit @ A$99.04 / unit | Total cost base = A$1,493.18 | SOLD"
 Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | MSFT | 2022-07-25 | 15.0000 | B200,calculated_unit_price_converted,99.045000 AUD
 Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_fiscal_year,FY2022/23
-Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_related_parcels,"2022-10-25 | PARCEL |  MSFT | 10.0000 unit @ A$100.04 / unit | Total cost base = A$1,007.85 |"
+Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_related_parcels,"2022-10-25 | PARCEL |  MSFT | 10.0000 unit @ A$100.04 / unit | Total cost base = A$1,007.85 | SOLD"
 Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_unit_brokerage_converted,0.750000 AUD
 Buy,Buy | MSFT | 2022-10-25 | 10.0000 | B210,calculated_unit_price_converted,100.035000 AUD
 Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_fiscal_year,FY2022/23
-Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_related_parcels,2023-02-27 | PARCEL |  MSFT | 5.0000 unit @ A$101.37 / unit | Total cost base = A$514.35 |
+Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_related_parcels,2023-02-27 | PARCEL |  MSFT | 5.0000 unit @ A$101.37 / unit | Total cost base = A$514.35 | SOLD
 Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_unit_brokerage_converted,1.500000 AUD
 Buy,Buy | MSFT | 2023-02-27 | 5.0000 | B220,calculated_unit_price_converted,101.370000 AUD
 Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_fiscal_year,FY2022/23
-Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_related_parcels,"2023-03-27 | PARCEL |  MSFT | 12.0000 unit @ A$101.67 / unit | Total cost base = A$1,227.54 |"
+Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_related_parcels,"2023-03-27 | PARCEL |  MSFT | 12.0000 unit @ A$101.67 / unit | Total cost base = A$1,227.54 | SOLD"
 Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_unit_brokerage_converted,0.625000 AUD
 Buy,Buy | MSFT | 2023-03-27 | 12.0000 | B223,calculated_unit_price_converted,101.670000 AUD
 Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_fiscal_year,FY2023/24
-Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_related_parcels,2023-09-22 | PARCEL |  MSFT | 8.0000 unit @ A$103.60 / unit | Total cost base = A$836.34 |
+Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_related_parcels,2023-09-22 | PARCEL |  MSFT | 8.0000 unit @ A$103.60 / unit | Total cost base = A$836.34 | SOLD
 Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_unit_brokerage_converted,0.937500 AUD
 Buy,Buy | MSFT | 2023-09-22 | 8.0000 | B241,calculated_unit_price_converted,103.605000 AUD
 Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_fiscal_year,FY2023/24
-Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_related_parcels,2023-12-11 | PARCEL |  MSFT | 7.0000 unit @ A$104.44 / unit | Total cost base = A$738.62 |
+Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_related_parcels,2023-12-11 | PARCEL |  MSFT | 7.0000 unit @ A$104.44 / unit | Total cost base = A$738.62 | SOLD
 Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_unit_brokerage_converted,1.071429 AUD
 Buy,Buy | MSFT | 2023-12-11 | 7.0000 | B250,calculated_unit_price_converted,104.445000 AUD
 Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_fiscal_year,FY2024/25
-Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_related_parcels,"2024-11-04 | PARCEL |  MSFT | 12.0000 unit @ A$107.97 / unit | Total cost base = A$1,303.14 |"
+Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_related_parcels,"2024-11-04 | PARCEL |  MSFT | 12.0000 unit @ A$107.97 / unit | Total cost base = A$1,303.14 | SOLD"
 Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_total_brokerage_converted,7.5000 AUD
 Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_unit_brokerage_converted,0.625000 AUD
 Buy,Buy | MSFT | 2024-11-04 | 12.0000 | B278,calculated_unit_price_converted,107.970000 AUD
@@ -1024,642 +1036,644 @@ Buy,Buy | MSFT | 2026-09-07 | 13.0000 | B347,calculated_total_brokerage_converte
 Buy,Buy | MSFT | 2026-09-07 | 13.0000 | B347,calculated_unit_brokerage_converted,0.576923 AUD
 Buy,Buy | MSFT | 2026-09-07 | 13.0000 | B347,calculated_unit_price_converted,115.170000 AUD
 Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_fiscal_year,FY2016/17
-Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_related_parcels,2016-12-12 | PARCEL |  TLS | 18.0000 unit @ A$51.38 / unit | Total cost base = A$944.79 |
+Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_related_parcels,2016-12-12 | PARCEL |  TLS | 18.0000 unit @ A$51.38 / unit | Total cost base = A$944.79 | SOLD
 Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_unit_brokerage_converted,1.108333 AUD
 Buy,Buy | TLS | 2016-12-12 | 18.0000 | B007,calculated_unit_price_converted,51.380000 AUD
 Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_fiscal_year,FY2016/17
-Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_related_parcels,"2017-05-15 | PARCEL |  TLS | 25.0000 unit @ A$52.48 / unit | Total cost base = A$1,331.95 |"
+Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_related_parcels,"2017-05-15 | PARCEL |  TLS | 25.0000 unit @ A$52.48 / unit | Total cost base = A$1,331.95 | SOLD"
 Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_unit_brokerage_converted,0.798000 AUD
 Buy,Buy | TLS | 2017-05-15 | 25.0000 | B022,calculated_unit_price_converted,52.480000 AUD
 Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_fiscal_year,FY2017/18
-Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_related_parcels,"2018-02-08 | PARCEL |  TLS | 20.0000 unit @ A$54.41 / unit | Total cost base = A$1,108.15 |"
+Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_related_parcels,"2018-02-08 | PARCEL |  TLS | 20.0000 unit @ A$54.41 / unit | Total cost base = A$1,108.15 | SOLD"
 Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_unit_brokerage_converted,0.997500 AUD
 Buy,Buy | TLS | 2018-02-08 | 20.0000 | B048,calculated_unit_price_converted,54.410000 AUD
 Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_related_parcels,"2016-10-03 | PARCEL |  VAS | 20.0000 unit @ A$50.88 / unit | Total cost base = A$1,027.10 |"
+Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_related_parcels,"2016-10-03 | PARCEL |  VAS | 20.0000 unit @ A$50.88 / unit | Total cost base = A$1,027.38 | SOLD"
 Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VAS | 2016-10-03 | 20.0000 | B001,calculated_unit_price_converted,50.880000 AUD
 Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_related_parcels,"2016-11-02 | PARCEL |  VAS | 32.0000 unit @ A$51.10 / unit | Total cost base = A$1,644.70 |"
+Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_related_parcels,"2016-11-02 | PARCEL |  VAS | 32.0000 unit @ A$51.10 / unit | Total cost base = A$1,644.82 | SOLD"
 Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_unit_brokerage_converted,0.296875 AUD
 Buy,Buy | VAS | 2016-11-02 | 32.0000 | B003,calculated_unit_price_converted,51.100000 AUD
 Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_related_parcels,"2016-12-06 | PARCEL |  VAS | 24.0000 unit @ A$51.34 / unit | Total cost base = A$1,241.66 |"
+Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_related_parcels,"2016-12-06 | PARCEL |  VAS | 24.0000 unit @ A$51.34 / unit | Total cost base = A$1,241.46 | SOLD"
 Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VAS | 2016-12-06 | 24.0000 | B005,calculated_unit_price_converted,51.340000 AUD
 Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_related_parcels,"2017-01-06 | PARCEL |  VAS | 30.0000 unit @ A$51.57 / unit | Total cost base = A$1,556.60 |"
+Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_related_parcels,"2017-01-06 | PARCEL |  VAS | 30.0000 unit @ A$51.57 / unit | Total cost base = A$1,556.03 | SOLD"
 Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VAS | 2017-01-06 | 30.0000 | B008,calculated_unit_price_converted,51.570000 AUD
 Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_related_parcels,"2017-02-06 | PARCEL |  VAS | 27.0000 unit @ A$51.78 / unit | Total cost base = A$1,407.56 |"
+Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_related_parcels,"2017-02-06 | PARCEL |  VAS | 27.0000 unit @ A$51.78 / unit | Total cost base = A$1,406.75 | SOLD"
 Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VAS | 2017-02-06 | 27.0000 | B011,calculated_unit_price_converted,51.780000 AUD
 Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_related_parcels,2017-03-03 | PARCEL |  VAS | 12.0000 unit @ A$51.97 / unit | Total cost base = A$633.14 |
+Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_related_parcels,2017-03-03 | PARCEL |  VAS | 12.0000 unit @ A$51.97 / unit | Total cost base = A$632.68 | SOLD
 Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | VAS | 2017-03-03 | 12.0000 | B013,calculated_unit_price_converted,51.970000 AUD
 Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_related_parcels,"2017-04-04 | PARCEL |  VAS | 28.0000 unit @ A$52.19 / unit | Total cost base = A$1,470.82 |"
+Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_related_parcels,"2017-04-04 | PARCEL |  VAS | 28.0000 unit @ A$52.19 / unit | Total cost base = A$1,469.42 | SOLD"
 Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VAS | 2017-04-04 | 28.0000 | B017,calculated_unit_price_converted,52.190000 AUD
 Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_related_parcels,"2017-05-05 | PARCEL |  VAS | 24.0000 unit @ A$52.42 / unit | Total cost base = A$1,267.58 |"
+Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_related_parcels,"2017-05-05 | PARCEL |  VAS | 24.0000 unit @ A$52.42 / unit | Total cost base = A$1,266.12 | SOLD"
 Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VAS | 2017-05-05 | 24.0000 | B020,calculated_unit_price_converted,52.420000 AUD
 Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_fiscal_year,FY2016/17
-Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_related_parcels,"2017-06-05 | PARCEL |  VAS | 20.0000 unit @ A$52.63 / unit | Total cost base = A$1,062.10 |"
+Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_related_parcels,"2017-06-05 | PARCEL |  VAS | 20.0000 unit @ A$52.63 / unit | Total cost base = A$1,060.67 | SOLD"
 Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VAS | 2017-06-05 | 20.0000 | B024,calculated_unit_price_converted,52.630000 AUD
 Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_related_parcels,"2017-07-04 | PARCEL |  VAS | 29.0000 unit @ A$52.84 / unit | Total cost base = A$1,541.86 |"
+Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_related_parcels,"2017-07-04 | PARCEL |  VAS | 29.0000 unit @ A$52.84 / unit | Total cost base = A$1,539.57 | SOLD"
 Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_unit_brokerage_converted,0.327586 AUD
 Buy,Buy | VAS | 2017-07-04 | 29.0000 | B027,calculated_unit_price_converted,52.840000 AUD
 Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_related_parcels,"2017-08-07 | PARCEL |  VAS | 25.0000 unit @ A$53.08 / unit | Total cost base = A$1,336.50 |"
+Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_related_parcels,"2017-08-07 | PARCEL |  VAS | 25.0000 unit @ A$53.08 / unit | Total cost base = A$1,334.97 | SOLD"
 Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | VAS | 2017-08-07 | 25.0000 | B031,calculated_unit_price_converted,53.080000 AUD
 Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_related_parcels,"2017-09-04 | PARCEL |  VAS | 22.0000 unit @ A$53.28 / unit | Total cost base = A$1,181.66 |"
+Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_related_parcels,"Buy | VAS | 2017-09-04 | 22.0000 | B033 | 2017-09-04 | 2019-03-14 | 22.0000 |  | INACTIVE
+2017-09-04 | PARCEL |  VAS | 6.0000 unit @ A$53.28 / unit | Total cost base = A$321.99 | SOLD
+2017-09-04 | PARCEL |  VAS | 16.0000 unit @ A$53.28 / unit | Total cost base = A$859.40 | SOLD"
 Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VAS | 2017-09-04 | 22.0000 | B033,calculated_unit_price_converted,53.280000 AUD
 Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_related_parcels,2017-10-05 | PARCEL |  VAS | 15.0000 unit @ A$53.51 / unit | Total cost base = A$812.15 |
+Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_related_parcels,2017-10-05 | PARCEL |  VAS | 15.0000 unit @ A$53.51 / unit | Total cost base = A$812.40 | SOLD
 Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | VAS | 2017-10-05 | 15.0000 | B036,calculated_unit_price_converted,53.510000 AUD
 Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_related_parcels,"2017-11-06 | PARCEL |  VAS | 19.0000 unit @ A$53.73 / unit | Total cost base = A$1,030.37 |"
+Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_related_parcels,"2017-11-06 | PARCEL |  VAS | 19.0000 unit @ A$53.73 / unit | Total cost base = A$1,031.01 | SOLD"
 Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | VAS | 2017-11-06 | 19.0000 | B039,calculated_unit_price_converted,53.730000 AUD
 Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_related_parcels,"2017-12-04 | PARCEL |  VAS | 19.0000 unit @ A$53.93 / unit | Total cost base = A$1,034.17 |"
+Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_related_parcels,"2017-12-04 | PARCEL |  VAS | 19.0000 unit @ A$53.93 / unit | Total cost base = A$1,035.09 | SOLD"
 Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | VAS | 2017-12-04 | 19.0000 | B041,calculated_unit_price_converted,53.930000 AUD
 Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_related_parcels,"2018-01-05 | PARCEL |  VAS | 29.0000 unit @ A$54.17 / unit | Total cost base = A$1,580.43 |"
+Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_related_parcels,"2018-01-05 | PARCEL |  VAS | 29.0000 unit @ A$54.17 / unit | Total cost base = A$1,582.32 | SOLD"
 Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_unit_brokerage_converted,0.327586 AUD
 Buy,Buy | VAS | 2018-01-05 | 29.0000 | B043,calculated_unit_price_converted,54.170000 AUD
 Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_related_parcels,"2018-02-02 | PARCEL |  VAS | 21.0000 unit @ A$54.37 / unit | Total cost base = A$1,151.27 |"
+Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_related_parcels,"2018-02-02 | PARCEL |  VAS | 21.0000 unit @ A$54.37 / unit | Total cost base = A$1,152.95 | SOLD"
 Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | VAS | 2018-02-02 | 21.0000 | B046,calculated_unit_price_converted,54.370000 AUD
 Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_related_parcels,"2018-03-06 | PARCEL |  VAS | 28.0000 unit @ A$54.59 / unit | Total cost base = A$1,538.02 |"
+Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_related_parcels,"2018-03-06 | PARCEL |  VAS | 28.0000 unit @ A$54.59 / unit | Total cost base = A$1,540.73 | SOLD"
 Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VAS | 2018-03-06 | 28.0000 | B050,calculated_unit_price_converted,54.590000 AUD
 Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_related_parcels,2018-04-06 | PARCEL |  VAS | 16.0000 unit @ A$54.82 / unit | Total cost base = A$886.62 |
+Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_related_parcels,2018-04-06 | PARCEL |  VAS | 16.0000 unit @ A$54.82 / unit | Total cost base = A$888.43 | SOLD
 Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | VAS | 2018-04-06 | 16.0000 | B052,calculated_unit_price_converted,54.820000 AUD
 Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_fiscal_year,FY2017/18
-Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_related_parcels,"2018-05-07 | PARCEL |  VAS | 22.0000 unit @ A$55.03 / unit | Total cost base = A$1,220.16 |"
+Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_related_parcels,"2018-05-07 | PARCEL |  VAS | 22.0000 unit @ A$55.03 / unit | Total cost base = A$1,223.01 | SOLD"
 Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VAS | 2018-05-07 | 22.0000 | B054,calculated_unit_price_converted,55.030000 AUD
 Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_related_parcels,"2016-10-03 | PARCEL |  VGS | 25.0000 unit @ A$50.88 / unit | Total cost base = A$1,281.50 |"
+Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_related_parcels,"2016-10-03 | PARCEL |  VGS | 25.0000 unit @ A$50.88 / unit | Total cost base = A$1,289.64 |"
 Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | VGS | 2016-10-03 | 25.0000 | B002,calculated_unit_price_converted,50.880000 AUD
 Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_related_parcels,"2016-11-02 | PARCEL |  VGS | 39.0000 unit @ A$51.10 / unit | Total cost base = A$2,002.40 |"
+Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_related_parcels,"2016-11-02 | PARCEL |  VGS | 39.0000 unit @ A$51.10 / unit | Total cost base = A$2,014.88 |"
 Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_unit_brokerage_converted,0.243590 AUD
 Buy,Buy | VGS | 2016-11-02 | 39.0000 | B004,calculated_unit_price_converted,51.100000 AUD
 Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_related_parcels,"2016-12-06 | PARCEL |  VGS | 30.0000 unit @ A$51.34 / unit | Total cost base = A$1,549.70 |"
+Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_related_parcels,"2016-12-06 | PARCEL |  VGS | 30.0000 unit @ A$51.34 / unit | Total cost base = A$1,559.12 |"
 Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2016-12-06 | 30.0000 | B006,calculated_unit_price_converted,51.340000 AUD
 Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_related_parcels,"2017-01-06 | PARCEL |  VGS | 37.0000 unit @ A$51.57 / unit | Total cost base = A$1,917.59 |"
+Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_related_parcels,"2017-01-06 | PARCEL |  VGS | 37.0000 unit @ A$51.57 / unit | Total cost base = A$1,929.01 |"
 Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_unit_brokerage_converted,0.256757 AUD
 Buy,Buy | VGS | 2017-01-06 | 37.0000 | B009,calculated_unit_price_converted,51.570000 AUD
 Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_related_parcels,"2017-02-06 | PARCEL |  VGS | 34.0000 unit @ A$51.78 / unit | Total cost base = A$1,770.02 |"
+Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_related_parcels,"2017-02-06 | PARCEL |  VGS | 34.0000 unit @ A$51.78 / unit | Total cost base = A$1,780.32 |"
 Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_unit_brokerage_converted,0.279412 AUD
 Buy,Buy | VGS | 2017-02-06 | 34.0000 | B012,calculated_unit_price_converted,51.780000 AUD
 Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_related_parcels,2017-03-03 | PARCEL |  VGS | 14.0000 unit @ A$51.97 / unit | Total cost base = A$737.08 |
+Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_related_parcels,2017-03-03 | PARCEL |  VGS | 14.0000 unit @ A$51.97 / unit | Total cost base = A$741.26 |
 Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | VGS | 2017-03-03 | 14.0000 | B014,calculated_unit_price_converted,51.970000 AUD
 Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_related_parcels,"2017-04-04 | PARCEL |  VGS | 34.0000 unit @ A$52.19 / unit | Total cost base = A$1,783.96 |"
+Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_related_parcels,"2017-04-04 | PARCEL |  VGS | 34.0000 unit @ A$52.19 / unit | Total cost base = A$1,793.92 |"
 Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_unit_brokerage_converted,0.279412 AUD
 Buy,Buy | VGS | 2017-04-04 | 34.0000 | B018,calculated_unit_price_converted,52.190000 AUD
 Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_related_parcels,"2017-05-05 | PARCEL |  VGS | 30.0000 unit @ A$52.42 / unit | Total cost base = A$1,582.10 |"
+Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_related_parcels,"2017-05-05 | PARCEL |  VGS | 30.0000 unit @ A$52.42 / unit | Total cost base = A$1,590.72 |"
 Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2017-05-05 | 30.0000 | B021,calculated_unit_price_converted,52.420000 AUD
 Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_fiscal_year,FY2016/17
-Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_related_parcels,"2017-06-05 | PARCEL |  VGS | 25.0000 unit @ A$52.63 / unit | Total cost base = A$1,325.25 |"
+Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_related_parcels,"2017-06-05 | PARCEL |  VGS | 25.0000 unit @ A$52.63 / unit | Total cost base = A$1,332.30 |"
 Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | VGS | 2017-06-05 | 25.0000 | B025,calculated_unit_price_converted,52.630000 AUD
 Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_related_parcels,"2017-07-04 | PARCEL |  VGS | 36.0000 unit @ A$52.84 / unit | Total cost base = A$1,911.74 |"
+Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_related_parcels,"2017-07-04 | PARCEL |  VGS | 36.0000 unit @ A$52.84 / unit | Total cost base = A$1,921.74 |"
 Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_unit_brokerage_converted,0.263889 AUD
 Buy,Buy | VGS | 2017-07-04 | 36.0000 | B028,calculated_unit_price_converted,52.840000 AUD
 Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_related_parcels,"2017-08-07 | PARCEL |  VGS | 31.0000 unit @ A$53.08 / unit | Total cost base = A$1,654.98 |"
+Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_related_parcels,"2017-08-07 | PARCEL |  VGS | 31.0000 unit @ A$53.08 / unit | Total cost base = A$1,663.80 |"
 Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_unit_brokerage_converted,0.306452 AUD
 Buy,Buy | VGS | 2017-08-07 | 31.0000 | B032,calculated_unit_price_converted,53.080000 AUD
 Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_related_parcels,"2017-09-04 | PARCEL |  VGS | 27.0000 unit @ A$53.28 / unit | Total cost base = A$1,448.06 |"
+Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_related_parcels,"2017-09-04 | PARCEL |  VGS | 27.0000 unit @ A$53.28 / unit | Total cost base = A$1,455.89 |"
 Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2017-09-04 | 27.0000 | B034,calculated_unit_price_converted,53.280000 AUD
 Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_related_parcels,2017-10-05 | PARCEL |  VGS | 18.0000 unit @ A$53.51 / unit | Total cost base = A$972.68 |
+Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_related_parcels,2017-10-05 | PARCEL |  VGS | 18.0000 unit @ A$53.51 / unit | Total cost base = A$978.01 |
 Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2017-10-05 | 18.0000 | B037,calculated_unit_price_converted,53.510000 AUD
 Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_related_parcels,"2017-11-06 | PARCEL |  VGS | 23.0000 unit @ A$53.73 / unit | Total cost base = A$1,245.29 |"
+Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_related_parcels,"2017-11-06 | PARCEL |  VGS | 23.0000 unit @ A$53.73 / unit | Total cost base = A$1,252.25 |"
 Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | VGS | 2017-11-06 | 23.0000 | B040,calculated_unit_price_converted,53.730000 AUD
 Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_related_parcels,"2017-12-04 | PARCEL |  VGS | 23.0000 unit @ A$53.93 / unit | Total cost base = A$1,249.89 |"
+Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_related_parcels,"2017-12-04 | PARCEL |  VGS | 23.0000 unit @ A$53.93 / unit | Total cost base = A$1,256.97 |"
 Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | VGS | 2017-12-04 | 23.0000 | B042,calculated_unit_price_converted,53.930000 AUD
 Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_related_parcels,"2018-01-05 | PARCEL |  VGS | 35.0000 unit @ A$54.17 / unit | Total cost base = A$1,905.45 |"
+Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_related_parcels,"2018-01-05 | PARCEL |  VGS | 35.0000 unit @ A$54.17 / unit | Total cost base = A$1,916.45 |"
 Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_unit_brokerage_converted,0.271429 AUD
 Buy,Buy | VGS | 2018-01-05 | 35.0000 | B044,calculated_unit_price_converted,54.170000 AUD
 Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_related_parcels,"2018-02-02 | PARCEL |  VGS | 25.0000 unit @ A$54.37 / unit | Total cost base = A$1,368.75 |"
+Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_related_parcels,"2018-02-02 | PARCEL |  VGS | 25.0000 unit @ A$54.37 / unit | Total cost base = A$1,376.74 |"
 Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | VGS | 2018-02-02 | 25.0000 | B047,calculated_unit_price_converted,54.370000 AUD
 Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_related_parcels,"2018-03-06 | PARCEL |  VGS | 34.0000 unit @ A$54.59 / unit | Total cost base = A$1,865.56 |"
+Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_related_parcels,"2018-03-06 | PARCEL |  VGS | 34.0000 unit @ A$54.59 / unit | Total cost base = A$1,876.64 |"
 Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_unit_brokerage_converted,0.279412 AUD
 Buy,Buy | VGS | 2018-03-06 | 34.0000 | B051,calculated_unit_price_converted,54.590000 AUD
 Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_related_parcels,"2018-04-06 | PARCEL |  VGS | 20.0000 unit @ A$54.82 / unit | Total cost base = A$1,105.90 |"
+Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_related_parcels,"2018-04-06 | PARCEL |  VGS | 20.0000 unit @ A$54.82 / unit | Total cost base = A$1,112.54 |"
 Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2018-04-06 | 20.0000 | B053,calculated_unit_price_converted,54.820000 AUD
 Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_related_parcels,"2018-05-07 | PARCEL |  VGS | 27.0000 unit @ A$55.03 / unit | Total cost base = A$1,495.31 |"
+Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_related_parcels,"2018-05-07 | PARCEL |  VGS | 27.0000 unit @ A$55.03 / unit | Total cost base = A$1,504.44 |"
 Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2018-05-07 | 27.0000 | B055,calculated_unit_price_converted,55.030000 AUD
 Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_fiscal_year,FY2017/18
-Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_related_parcels,"2018-06-06 | PARCEL |  VGS | 18.0000 unit @ A$55.25 / unit | Total cost base = A$1,004.00 |"
+Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_related_parcels,"2018-06-06 | PARCEL |  VGS | 18.0000 unit @ A$55.25 / unit | Total cost base = A$1,010.19 |"
 Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2018-06-06 | 18.0000 | B057,calculated_unit_price_converted,55.250000 AUD
 Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_related_parcels,"2018-07-02 | PARCEL |  VGS | 36.0000 unit @ A$55.43 / unit | Total cost base = A$2,004.98 |"
+Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_related_parcels,"2018-07-02 | PARCEL |  VGS | 36.0000 unit @ A$55.43 / unit | Total cost base = A$2,017.53 |"
 Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_unit_brokerage_converted,0.263889 AUD
 Buy,Buy | VGS | 2018-07-02 | 36.0000 | B059,calculated_unit_price_converted,55.430000 AUD
 Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_related_parcels,"2018-08-02 | PARCEL |  VGS | 30.0000 unit @ A$55.66 / unit | Total cost base = A$1,679.30 |"
+Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_related_parcels,"2018-08-02 | PARCEL |  VGS | 30.0000 unit @ A$55.66 / unit | Total cost base = A$1,689.56 |"
 Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2018-08-02 | 30.0000 | B061,calculated_unit_price_converted,55.660000 AUD
 Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_related_parcels,"2018-09-03 | PARCEL |  VGS | 24.0000 unit @ A$55.88 / unit | Total cost base = A$1,350.62 |"
+Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_related_parcels,"2018-09-03 | PARCEL |  VGS | 24.0000 unit @ A$55.88 / unit | Total cost base = A$1,358.66 |"
 Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VGS | 2018-09-03 | 24.0000 | B064,calculated_unit_price_converted,55.880000 AUD
 Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_related_parcels,"2018-10-02 | PARCEL |  VGS | 28.0000 unit @ A$56.09 / unit | Total cost base = A$1,580.02 |"
+Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_related_parcels,"2018-10-02 | PARCEL |  VGS | 28.0000 unit @ A$56.09 / unit | Total cost base = A$1,589.23 |"
 Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VGS | 2018-10-02 | 28.0000 | B068,calculated_unit_price_converted,56.090000 AUD
 Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_related_parcels,"2018-11-05 | PARCEL |  VGS | 32.0000 unit @ A$56.33 / unit | Total cost base = A$1,812.06 |"
+Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_related_parcels,"2018-11-05 | PARCEL |  VGS | 32.0000 unit @ A$56.33 / unit | Total cost base = A$1,822.35 |"
 Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_unit_brokerage_converted,0.296875 AUD
 Buy,Buy | VGS | 2018-11-05 | 32.0000 | B072,calculated_unit_price_converted,56.330000 AUD
 Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_related_parcels,"2018-12-06 | PARCEL |  VGS | 19.0000 unit @ A$56.56 / unit | Total cost base = A$1,084.14 |"
+Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_related_parcels,"2018-12-06 | PARCEL |  VGS | 19.0000 unit @ A$56.56 / unit | Total cost base = A$1,090.12 |"
 Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | VGS | 2018-12-06 | 19.0000 | B076,calculated_unit_price_converted,56.560000 AUD
 Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_related_parcels,"2019-01-04 | PARCEL |  VGS | 26.0000 unit @ A$56.77 / unit | Total cost base = A$1,485.52 |"
+Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_related_parcels,"2019-01-04 | PARCEL |  VGS | 26.0000 unit @ A$56.77 / unit | Total cost base = A$1,493.55 |"
 Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | VGS | 2019-01-04 | 26.0000 | B079,calculated_unit_price_converted,56.770000 AUD
 Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_related_parcels,"2019-02-05 | PARCEL |  VGS | 31.0000 unit @ A$56.99 / unit | Total cost base = A$1,776.19 |"
+Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_related_parcels,"2019-02-05 | PARCEL |  VGS | 31.0000 unit @ A$56.99 / unit | Total cost base = A$1,785.55 |"
 Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_unit_brokerage_converted,0.306452 AUD
 Buy,Buy | VGS | 2019-02-05 | 31.0000 | B082,calculated_unit_price_converted,56.990000 AUD
 Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_related_parcels,"2019-03-04 | PARCEL |  VGS | 20.0000 unit @ A$57.18 / unit | Total cost base = A$1,153.10 |"
+Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_related_parcels,"2019-03-04 | PARCEL |  VGS | 20.0000 unit @ A$57.18 / unit | Total cost base = A$1,159.02 |"
 Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2019-03-04 | 20.0000 | B085,calculated_unit_price_converted,57.180000 AUD
 Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_related_parcels,"2019-04-02 | PARCEL |  VGS | 18.0000 unit @ A$57.39 / unit | Total cost base = A$1,042.52 |"
+Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_related_parcels,"2019-04-02 | PARCEL |  VGS | 18.0000 unit @ A$57.39 / unit | Total cost base = A$1,047.74 |"
 Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2019-04-02 | 18.0000 | B088,calculated_unit_price_converted,57.390000 AUD
 Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_related_parcels,"2019-05-06 | PARCEL |  VGS | 33.0000 unit @ A$57.63 / unit | Total cost base = A$1,911.29 |"
+Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_related_parcels,"2019-05-06 | PARCEL |  VGS | 33.0000 unit @ A$57.63 / unit | Total cost base = A$1,920.61 |"
 Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_unit_brokerage_converted,0.287879 AUD
 Buy,Buy | VGS | 2019-05-06 | 33.0000 | B090,calculated_unit_price_converted,57.630000 AUD
 Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_fiscal_year,FY2018/19
-Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_related_parcels,"2019-06-04 | PARCEL |  VGS | 32.0000 unit @ A$57.84 / unit | Total cost base = A$1,860.38 |"
+Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_related_parcels,"2019-06-04 | PARCEL |  VGS | 32.0000 unit @ A$57.84 / unit | Total cost base = A$1,869.22 |"
 Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_unit_brokerage_converted,0.296875 AUD
 Buy,Buy | VGS | 2019-06-04 | 32.0000 | B093,calculated_unit_price_converted,57.840000 AUD
 Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_related_parcels,"2019-07-05 | PARCEL |  VGS | 24.0000 unit @ A$58.07 / unit | Total cost base = A$1,403.18 |"
+Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_related_parcels,"2019-07-05 | PARCEL |  VGS | 24.0000 unit @ A$58.07 / unit | Total cost base = A$1,409.66 |"
 Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VGS | 2019-07-05 | 24.0000 | B097,calculated_unit_price_converted,58.070000 AUD
 Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_related_parcels,"2019-08-05 | PARCEL |  VGS | 31.0000 unit @ A$58.28 / unit | Total cost base = A$1,816.18 |"
+Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_related_parcels,"2019-08-05 | PARCEL |  VGS | 31.0000 unit @ A$58.28 / unit | Total cost base = A$1,824.45 |"
 Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_unit_brokerage_converted,0.306452 AUD
 Buy,Buy | VGS | 2019-08-05 | 31.0000 | B101,calculated_unit_price_converted,58.280000 AUD
 Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_related_parcels,"2019-09-02 | PARCEL |  VGS | 30.0000 unit @ A$58.48 / unit | Total cost base = A$1,763.90 |"
+Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_related_parcels,"2019-09-02 | PARCEL |  VGS | 30.0000 unit @ A$58.48 / unit | Total cost base = A$1,771.80 |"
 Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2019-09-02 | 30.0000 | B103,calculated_unit_price_converted,58.480000 AUD
 Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_related_parcels,"2019-10-02 | PARCEL |  VGS | 23.0000 unit @ A$58.70 / unit | Total cost base = A$1,359.60 |"
+Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_related_parcels,"2019-10-02 | PARCEL |  VGS | 23.0000 unit @ A$58.70 / unit | Total cost base = A$1,365.58 |"
 Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | VGS | 2019-10-02 | 23.0000 | B106,calculated_unit_price_converted,58.700000 AUD
 Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_related_parcels,"2019-11-06 | PARCEL |  VGS | 20.0000 unit @ A$58.95 / unit | Total cost base = A$1,188.50 |"
+Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_related_parcels,"2019-11-06 | PARCEL |  VGS | 20.0000 unit @ A$58.95 / unit | Total cost base = A$1,193.62 |"
 Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2019-11-06 | 20.0000 | B109,calculated_unit_price_converted,58.950000 AUD
 Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_related_parcels,"2019-12-03 | PARCEL |  VGS | 35.0000 unit @ A$59.14 / unit | Total cost base = A$2,079.40 |"
+Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_related_parcels,"2019-12-03 | PARCEL |  VGS | 35.0000 unit @ A$59.14 / unit | Total cost base = A$2,088.26 |"
 Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_unit_brokerage_converted,0.271429 AUD
 Buy,Buy | VGS | 2019-12-03 | 35.0000 | B111,calculated_unit_price_converted,59.140000 AUD
 Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_related_parcels,"2020-01-06 | PARCEL |  VGS | 33.0000 unit @ A$59.38 / unit | Total cost base = A$1,969.04 |"
+Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_related_parcels,"2020-01-06 | PARCEL |  VGS | 33.0000 unit @ A$59.38 / unit | Total cost base = A$1,977.27 |"
 Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_unit_brokerage_converted,0.287879 AUD
 Buy,Buy | VGS | 2020-01-06 | 33.0000 | B113,calculated_unit_price_converted,59.380000 AUD
 Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_related_parcels,"2020-02-05 | PARCEL |  VGS | 20.0000 unit @ A$59.60 / unit | Total cost base = A$1,201.50 |"
+Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_related_parcels,"2020-02-05 | PARCEL |  VGS | 20.0000 unit @ A$59.60 / unit | Total cost base = A$1,206.42 |"
 Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2020-02-05 | 20.0000 | B116,calculated_unit_price_converted,59.600000 AUD
 Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_related_parcels,"2020-03-05 | PARCEL |  VGS | 17.0000 unit @ A$59.81 / unit | Total cost base = A$1,026.27 |"
+Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_related_parcels,"2020-03-05 | PARCEL |  VGS | 17.0000 unit @ A$59.81 / unit | Total cost base = A$1,030.40 |"
 Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | VGS | 2020-03-05 | 17.0000 | B119,calculated_unit_price_converted,59.810000 AUD
 Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_related_parcels,2020-04-02 | PARCEL |  VGS | 13.0000 unit @ A$60.01 / unit | Total cost base = A$789.63 |
+Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_related_parcels,2020-04-02 | PARCEL |  VGS | 13.0000 unit @ A$60.01 / unit | Total cost base = A$792.75 |
 Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2020-04-02 | 13.0000 | B123,calculated_unit_price_converted,60.010000 AUD
 Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_related_parcels,"2020-05-04 | PARCEL |  VGS | 25.0000 unit @ A$60.23 / unit | Total cost base = A$1,515.25 |"
+Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_related_parcels,"2020-05-04 | PARCEL |  VGS | 25.0000 unit @ A$60.23 / unit | Total cost base = A$1,521.15 |"
 Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_unit_brokerage_converted,0.380000 AUD
 Buy,Buy | VGS | 2020-05-04 | 25.0000 | B126,calculated_unit_price_converted,60.230000 AUD
 Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_fiscal_year,FY2019/20
-Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_related_parcels,"2020-06-02 | PARCEL |  VGS | 27.0000 unit @ A$60.44 / unit | Total cost base = A$1,641.38 |"
+Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_related_parcels,"2020-06-02 | PARCEL |  VGS | 27.0000 unit @ A$60.44 / unit | Total cost base = A$1,647.67 |"
 Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2020-06-02 | 27.0000 | B128,calculated_unit_price_converted,60.440000 AUD
 Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_related_parcels,"2020-07-06 | PARCEL |  VGS | 27.0000 unit @ A$60.68 / unit | Total cost base = A$1,647.86 |"
+Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_related_parcels,"2020-07-06 | PARCEL |  VGS | 27.0000 unit @ A$60.68 / unit | Total cost base = A$1,654.06 |"
 Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2020-07-06 | 27.0000 | B132,calculated_unit_price_converted,60.680000 AUD
 Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_related_parcels,2020-08-03 | PARCEL |  VGS | 13.0000 unit @ A$60.88 / unit | Total cost base = A$800.94 |
+Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_related_parcels,2020-08-03 | PARCEL |  VGS | 13.0000 unit @ A$60.88 / unit | Total cost base = A$803.93 |
 Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2020-08-03 | 13.0000 | B137,calculated_unit_price_converted,60.880000 AUD
 Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_related_parcels,"2020-09-07 | PARCEL |  VGS | 30.0000 unit @ A$61.13 / unit | Total cost base = A$1,843.40 |"
+Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_related_parcels,"2020-09-07 | PARCEL |  VGS | 30.0000 unit @ A$61.13 / unit | Total cost base = A$1,850.29 |"
 Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2020-09-07 | 30.0000 | B139,calculated_unit_price_converted,61.130000 AUD
 Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_related_parcels,"2020-10-05 | PARCEL |  VGS | 28.0000 unit @ A$61.33 / unit | Total cost base = A$1,726.74 |"
+Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_related_parcels,"2020-10-05 | PARCEL |  VGS | 28.0000 unit @ A$61.33 / unit | Total cost base = A$1,733.17 |"
 Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VGS | 2020-10-05 | 28.0000 | B142,calculated_unit_price_converted,61.330000 AUD
 Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_related_parcels,"2020-11-06 | PARCEL |  VGS | 17.0000 unit @ A$61.57 / unit | Total cost base = A$1,056.19 |"
+Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_related_parcels,"2020-11-06 | PARCEL |  VGS | 17.0000 unit @ A$61.57 / unit | Total cost base = A$1,060.09 |"
 Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | VGS | 2020-11-06 | 17.0000 | B145,calculated_unit_price_converted,61.570000 AUD
 Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_related_parcels,"2020-12-07 | PARCEL |  VGS | 30.0000 unit @ A$61.78 / unit | Total cost base = A$1,862.90 |"
+Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_related_parcels,"2020-12-07 | PARCEL |  VGS | 30.0000 unit @ A$61.78 / unit | Total cost base = A$1,869.79 |"
 Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2020-12-07 | 30.0000 | B147,calculated_unit_price_converted,61.780000 AUD
 Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_related_parcels,"2021-01-04 | PARCEL |  VGS | 20.0000 unit @ A$61.98 / unit | Total cost base = A$1,249.10 |"
+Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_related_parcels,"2021-01-04 | PARCEL |  VGS | 20.0000 unit @ A$61.98 / unit | Total cost base = A$1,253.69 |"
 Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2021-01-04 | 20.0000 | B149,calculated_unit_price_converted,61.980000 AUD
 Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_related_parcels,"2021-02-03 | PARCEL |  VGS | 30.0000 unit @ A$62.20 / unit | Total cost base = A$1,875.50 |"
+Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_related_parcels,"2021-02-03 | PARCEL |  VGS | 30.0000 unit @ A$62.20 / unit | Total cost base = A$1,882.39 |"
 Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_unit_brokerage_converted,0.316667 AUD
 Buy,Buy | VGS | 2021-02-03 | 30.0000 | B151,calculated_unit_price_converted,62.200000 AUD
 Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_related_parcels,"2021-03-04 | PARCEL |  VGS | 22.0000 unit @ A$62.41 / unit | Total cost base = A$1,382.52 |"
+Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_related_parcels,"2021-03-04 | PARCEL |  VGS | 22.0000 unit @ A$62.41 / unit | Total cost base = A$1,387.57 |"
 Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2021-03-04 | 22.0000 | B154,calculated_unit_price_converted,62.410000 AUD
 Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_related_parcels,"2021-04-05 | PARCEL |  VGS | 22.0000 unit @ A$62.63 / unit | Total cost base = A$1,387.36 |"
+Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_related_parcels,"2021-04-05 | PARCEL |  VGS | 22.0000 unit @ A$62.63 / unit | Total cost base = A$1,392.41 |"
 Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2021-04-05 | 22.0000 | B156,calculated_unit_price_converted,62.630000 AUD
 Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_related_parcels,"2021-05-03 | PARCEL |  VGS | 31.0000 unit @ A$62.83 / unit | Total cost base = A$1,957.23 |"
+Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_related_parcels,"2021-05-03 | PARCEL |  VGS | 31.0000 unit @ A$62.83 / unit | Total cost base = A$1,964.35 |"
 Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_unit_brokerage_converted,0.306452 AUD
 Buy,Buy | VGS | 2021-05-03 | 31.0000 | B159,calculated_unit_price_converted,62.830000 AUD
 Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_fiscal_year,FY2020/21
-Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_related_parcels,2021-06-02 | PARCEL |  VGS | 13.0000 unit @ A$63.05 / unit | Total cost base = A$829.15 |
+Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_related_parcels,2021-06-02 | PARCEL |  VGS | 13.0000 unit @ A$63.05 / unit | Total cost base = A$832.14 |
 Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2021-06-02 | 13.0000 | B162,calculated_unit_price_converted,63.050000 AUD
 Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_related_parcels,"2021-07-05 | PARCEL |  VGS | 32.0000 unit @ A$63.28 / unit | Total cost base = A$2,034.46 |"
+Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_related_parcels,"2021-07-05 | PARCEL |  VGS | 32.0000 unit @ A$63.28 / unit | Total cost base = A$2,041.79 |"
 Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_unit_brokerage_converted,0.296875 AUD
 Buy,Buy | VGS | 2021-07-05 | 32.0000 | B164,calculated_unit_price_converted,63.280000 AUD
 Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_related_parcels,"2021-08-02 | PARCEL |  VGS | 22.0000 unit @ A$63.48 / unit | Total cost base = A$1,406.06 |"
+Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_related_parcels,"2021-08-02 | PARCEL |  VGS | 22.0000 unit @ A$63.48 / unit | Total cost base = A$1,411.01 |"
 Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2021-08-02 | 22.0000 | B167,calculated_unit_price_converted,63.480000 AUD
 Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_related_parcels,"2021-09-06 | PARCEL |  VGS | 22.0000 unit @ A$63.73 / unit | Total cost base = A$1,411.56 |"
+Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_related_parcels,"2021-09-06 | PARCEL |  VGS | 22.0000 unit @ A$63.73 / unit | Total cost base = A$1,416.40 |"
 Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2021-09-06 | 22.0000 | B169,calculated_unit_price_converted,63.730000 AUD
 Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_related_parcels,"2021-10-05 | PARCEL |  VGS | 31.0000 unit @ A$63.94 / unit | Total cost base = A$1,991.64 |"
+Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_related_parcels,"2021-10-05 | PARCEL |  VGS | 31.0000 unit @ A$63.94 / unit | Total cost base = A$1,998.32 |"
 Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_unit_brokerage_converted,0.306452 AUD
 Buy,Buy | VGS | 2021-10-05 | 31.0000 | B172,calculated_unit_price_converted,63.940000 AUD
 Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_related_parcels,2021-11-03 | PARCEL |  VGS | 15.0000 unit @ A$64.15 / unit | Total cost base = A$971.75 |
+Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_related_parcels,2021-11-03 | PARCEL |  VGS | 15.0000 unit @ A$64.15 / unit | Total cost base = A$974.92 |
 Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | VGS | 2021-11-03 | 15.0000 | B174,calculated_unit_price_converted,64.150000 AUD
 Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_related_parcels,"2021-12-06 | PARCEL |  VGS | 24.0000 unit @ A$64.38 / unit | Total cost base = A$1,554.62 |"
+Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_related_parcels,"2021-12-06 | PARCEL |  VGS | 24.0000 unit @ A$64.38 / unit | Total cost base = A$1,559.58 |"
 Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VGS | 2021-12-06 | 24.0000 | B177,calculated_unit_price_converted,64.380000 AUD
 Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_related_parcels,"2022-01-03 | PARCEL |  VGS | 24.0000 unit @ A$64.58 / unit | Total cost base = A$1,559.42 |"
+Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_related_parcels,"2022-01-03 | PARCEL |  VGS | 24.0000 unit @ A$64.58 / unit | Total cost base = A$1,564.28 |"
 Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VGS | 2022-01-03 | 24.0000 | B181,calculated_unit_price_converted,64.580000 AUD
 Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_related_parcels,2022-02-07 | PARCEL |  VGS | 13.0000 unit @ A$64.83 / unit | Total cost base = A$852.29 |
+Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_related_parcels,2022-02-07 | PARCEL |  VGS | 13.0000 unit @ A$64.83 / unit | Total cost base = A$854.85 |
 Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2022-02-07 | 13.0000 | B185,calculated_unit_price_converted,64.830000 AUD
 Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_related_parcels,2022-03-03 | PARCEL |  VGS | 13.0000 unit @ A$65.01 / unit | Total cost base = A$854.63 |
+Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_related_parcels,2022-03-03 | PARCEL |  VGS | 13.0000 unit @ A$65.01 / unit | Total cost base = A$857.15 |
 Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2022-03-03 | 13.0000 | B188,calculated_unit_price_converted,65.010000 AUD
 Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_related_parcels,"2022-04-04 | PARCEL |  VGS | 21.0000 unit @ A$65.23 / unit | Total cost base = A$1,379.33 |"
+Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_related_parcels,"2022-04-04 | PARCEL |  VGS | 21.0000 unit @ A$65.23 / unit | Total cost base = A$1,383.30 |"
 Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | VGS | 2022-04-04 | 21.0000 | B192,calculated_unit_price_converted,65.230000 AUD
 Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_related_parcels,"2022-05-03 | PARCEL |  VGS | 22.0000 unit @ A$65.44 / unit | Total cost base = A$1,449.18 |"
+Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_related_parcels,"2022-05-03 | PARCEL |  VGS | 22.0000 unit @ A$65.44 / unit | Total cost base = A$1,453.25 |"
 Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2022-05-03 | 22.0000 | B194,calculated_unit_price_converted,65.440000 AUD
 Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_fiscal_year,FY2021/22
-Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_related_parcels,2022-06-02 | PARCEL |  VGS | 14.0000 unit @ A$65.66 / unit | Total cost base = A$928.74 |
+Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_related_parcels,2022-06-02 | PARCEL |  VGS | 14.0000 unit @ A$65.66 / unit | Total cost base = A$931.27 |
 Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | VGS | 2022-06-02 | 14.0000 | B196,calculated_unit_price_converted,65.660000 AUD
 Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_related_parcels,"2022-07-06 | PARCEL |  VGS | 27.0000 unit @ A$65.90 / unit | Total cost base = A$1,788.80 |"
+Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_related_parcels,"2022-07-06 | PARCEL |  VGS | 27.0000 unit @ A$65.90 / unit | Total cost base = A$1,793.58 |"
 Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2022-07-06 | 27.0000 | B199,calculated_unit_price_converted,65.900000 AUD
 Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_related_parcels,"2022-08-03 | PARCEL |  VGS | 19.0000 unit @ A$66.10 / unit | Total cost base = A$1,265.40 |"
+Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_related_parcels,"2022-08-03 | PARCEL |  VGS | 19.0000 unit @ A$66.10 / unit | Total cost base = A$1,268.87 |"
 Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_unit_brokerage_converted,0.500000 AUD
 Buy,Buy | VGS | 2022-08-03 | 19.0000 | B203,calculated_unit_price_converted,66.100000 AUD
 Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_related_parcels,"2022-09-05 | PARCEL |  VGS | 28.0000 unit @ A$66.33 / unit | Total cost base = A$1,866.74 |"
+Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_related_parcels,"2022-09-05 | PARCEL |  VGS | 28.0000 unit @ A$66.33 / unit | Total cost base = A$1,872.03 |"
 Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VGS | 2022-09-05 | 28.0000 | B206,calculated_unit_price_converted,66.330000 AUD
 Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_related_parcels,"2022-10-03 | PARCEL |  VGS | 18.0000 unit @ A$66.53 / unit | Total cost base = A$1,207.04 |"
+Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_related_parcels,"2022-10-03 | PARCEL |  VGS | 18.0000 unit @ A$66.53 / unit | Total cost base = A$1,210.54 |"
 Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2022-10-03 | 18.0000 | B209,calculated_unit_price_converted,66.530000 AUD
 Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_related_parcels,"2022-11-07 | PARCEL |  VGS | 32.0000 unit @ A$66.78 / unit | Total cost base = A$2,146.46 |"
+Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_related_parcels,"2022-11-07 | PARCEL |  VGS | 32.0000 unit @ A$66.78 / unit | Total cost base = A$2,152.90 |"
 Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_unit_brokerage_converted,0.296875 AUD
 Buy,Buy | VGS | 2022-11-07 | 32.0000 | B212,calculated_unit_price_converted,66.780000 AUD
 Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_related_parcels,"2022-12-05 | PARCEL |  VGS | 20.0000 unit @ A$66.98 / unit | Total cost base = A$1,349.10 |"
+Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_related_parcels,"2022-12-05 | PARCEL |  VGS | 20.0000 unit @ A$66.98 / unit | Total cost base = A$1,353.23 |"
 Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2022-12-05 | 20.0000 | B214,calculated_unit_price_converted,66.980000 AUD
 Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_related_parcels,"2023-01-05 | PARCEL |  VGS | 20.0000 unit @ A$67.21 / unit | Total cost base = A$1,353.70 |"
+Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_related_parcels,"2023-01-05 | PARCEL |  VGS | 20.0000 unit @ A$67.21 / unit | Total cost base = A$1,357.96 |"
 Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_unit_brokerage_converted,0.475000 AUD
 Buy,Buy | VGS | 2023-01-05 | 20.0000 | B216,calculated_unit_price_converted,67.210000 AUD
 Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_related_parcels,"2023-02-06 | PARCEL |  VGS | 27.0000 unit @ A$67.43 / unit | Total cost base = A$1,830.11 |"
+Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_related_parcels,"2023-02-06 | PARCEL |  VGS | 27.0000 unit @ A$67.43 / unit | Total cost base = A$1,836.02 |"
 Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2023-02-06 | 27.0000 | B218,calculated_unit_price_converted,67.430000 AUD
 Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_related_parcels,"2023-03-03 | PARCEL |  VGS | 17.0000 unit @ A$67.62 / unit | Total cost base = A$1,159.04 |"
+Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_related_parcels,"2023-03-03 | PARCEL |  VGS | 17.0000 unit @ A$67.62 / unit | Total cost base = A$1,162.85 |"
 Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | VGS | 2023-03-03 | 17.0000 | B222,calculated_unit_price_converted,67.620000 AUD
 Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_related_parcels,"2023-04-05 | PARCEL |  VGS | 23.0000 unit @ A$67.85 / unit | Total cost base = A$1,570.05 |"
+Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_related_parcels,"2023-04-05 | PARCEL |  VGS | 23.0000 unit @ A$67.85 / unit | Total cost base = A$1,575.35 |"
 Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | VGS | 2023-04-05 | 23.0000 | B225,calculated_unit_price_converted,67.850000 AUD
 Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_related_parcels,"2023-05-03 | PARCEL |  VGS | 28.0000 unit @ A$68.05 / unit | Total cost base = A$1,914.90 |"
+Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_related_parcels,"2023-05-03 | PARCEL |  VGS | 28.0000 unit @ A$68.05 / unit | Total cost base = A$1,921.50 |"
 Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_unit_brokerage_converted,0.339286 AUD
 Buy,Buy | VGS | 2023-05-03 | 28.0000 | B227,calculated_unit_price_converted,68.050000 AUD
 Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_fiscal_year,FY2022/23
-Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_related_parcels,"2023-06-05 | PARCEL |  VGS | 18.0000 unit @ A$68.28 / unit | Total cost base = A$1,238.54 |"
+Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_related_parcels,"2023-06-05 | PARCEL |  VGS | 18.0000 unit @ A$68.28 / unit | Total cost base = A$1,242.90 |"
 Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2023-06-05 | 18.0000 | B230,calculated_unit_price_converted,68.280000 AUD
 Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_related_parcels,"2023-07-06 | PARCEL |  VGS | 16.0000 unit @ A$68.51 / unit | Total cost base = A$1,105.66 |"
+Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_related_parcels,"2023-07-06 | PARCEL |  VGS | 16.0000 unit @ A$68.51 / unit | Total cost base = A$1,109.56 |"
 Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | VGS | 2023-07-06 | 16.0000 | B233,calculated_unit_price_converted,68.510000 AUD
 Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_related_parcels,"2023-08-04 | PARCEL |  VGS | 21.0000 unit @ A$68.72 / unit | Total cost base = A$1,452.62 |"
+Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_related_parcels,"2023-08-04 | PARCEL |  VGS | 21.0000 unit @ A$68.72 / unit | Total cost base = A$1,457.35 |"
 Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | VGS | 2023-08-04 | 21.0000 | B235,calculated_unit_price_converted,68.720000 AUD
 Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_related_parcels,"2023-09-04 | PARCEL |  VGS | 22.0000 unit @ A$68.93 / unit | Total cost base = A$1,525.96 |"
+Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_related_parcels,"2023-09-04 | PARCEL |  VGS | 22.0000 unit @ A$68.93 / unit | Total cost base = A$1,530.48 |"
 Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_unit_brokerage_converted,0.431818 AUD
 Buy,Buy | VGS | 2023-09-04 | 22.0000 | B238,calculated_unit_price_converted,68.930000 AUD
 Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_related_parcels,2023-10-06 | PARCEL |  VGS | 14.0000 unit @ A$69.17 / unit | Total cost base = A$977.88 |
+Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_related_parcels,2023-10-06 | PARCEL |  VGS | 14.0000 unit @ A$69.17 / unit | Total cost base = A$980.47 |
 Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_unit_brokerage_converted,0.678571 AUD
 Buy,Buy | VGS | 2023-10-06 | 14.0000 | B243,calculated_unit_price_converted,69.170000 AUD
 Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_related_parcels,"2023-11-02 | PARCEL |  VGS | 27.0000 unit @ A$69.36 / unit | Total cost base = A$1,882.22 |"
+Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_related_parcels,"2023-11-02 | PARCEL |  VGS | 27.0000 unit @ A$69.36 / unit | Total cost base = A$1,886.74 |"
 Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_unit_brokerage_converted,0.351852 AUD
 Buy,Buy | VGS | 2023-11-02 | 27.0000 | B246,calculated_unit_price_converted,69.360000 AUD
 Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_related_parcels,"2023-12-04 | PARCEL |  VGS | 26.0000 unit @ A$69.58 / unit | Total cost base = A$1,818.58 |"
+Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_related_parcels,"2023-12-04 | PARCEL |  VGS | 26.0000 unit @ A$69.58 / unit | Total cost base = A$1,822.40 |"
 Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | VGS | 2023-12-04 | 26.0000 | B249,calculated_unit_price_converted,69.580000 AUD
 Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_related_parcels,"2024-01-03 | PARCEL |  VGS | 21.0000 unit @ A$69.80 / unit | Total cost base = A$1,475.30 |"
+Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_related_parcels,"2024-01-03 | PARCEL |  VGS | 21.0000 unit @ A$69.80 / unit | Total cost base = A$1,477.98 |"
 Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_unit_brokerage_converted,0.452381 AUD
 Buy,Buy | VGS | 2024-01-03 | 21.0000 | B252,calculated_unit_price_converted,69.800000 AUD
 Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_related_parcels,"2024-02-05 | PARCEL |  VGS | 17.0000 unit @ A$70.03 / unit | Total cost base = A$1,200.01 |"
+Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_related_parcels,"2024-02-05 | PARCEL |  VGS | 17.0000 unit @ A$70.03 / unit | Total cost base = A$1,201.82 |"
 Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | VGS | 2024-02-05 | 17.0000 | B256,calculated_unit_price_converted,70.030000 AUD
 Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_related_parcels,"2024-03-04 | PARCEL |  VGS | 26.0000 unit @ A$70.23 / unit | Total cost base = A$1,835.48 |"
+Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_related_parcels,"2024-03-04 | PARCEL |  VGS | 26.0000 unit @ A$70.23 / unit | Total cost base = A$1,837.77 |"
 Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | VGS | 2024-03-04 | 26.0000 | B258,calculated_unit_price_converted,70.230000 AUD
 Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_related_parcels,2024-04-04 | PARCEL |  VGS | 12.0000 unit @ A$70.46 / unit | Total cost base = A$855.02 |
+Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_related_parcels,2024-04-04 | PARCEL |  VGS | 12.0000 unit @ A$70.46 / unit | Total cost base = A$855.84 |
 Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | VGS | 2024-04-04 | 12.0000 | B260,calculated_unit_price_converted,70.460000 AUD
 Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_related_parcels,"2024-05-06 | PARCEL |  VGS | 17.0000 unit @ A$70.68 / unit | Total cost base = A$1,211.06 |"
+Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_related_parcels,"2024-05-06 | PARCEL |  VGS | 17.0000 unit @ A$70.68 / unit | Total cost base = A$1,211.87 |"
 Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_unit_brokerage_converted,0.558824 AUD
 Buy,Buy | VGS | 2024-05-06 | 17.0000 | B264,calculated_unit_price_converted,70.680000 AUD
 Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_fiscal_year,FY2023/24
-Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_related_parcels,"2024-06-03 | PARCEL |  VGS | 15.0000 unit @ A$70.88 / unit | Total cost base = A$1,072.70 |"
+Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_related_parcels,"2024-06-03 | PARCEL |  VGS | 15.0000 unit @ A$70.88 / unit | Total cost base = A$1,073.14 |"
 Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | VGS | 2024-06-03 | 15.0000 | B267,calculated_unit_price_converted,70.880000 AUD
 Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_related_parcels,"2024-07-02 | PARCEL |  VGS | 23.0000 unit @ A$71.09 / unit | Total cost base = A$1,644.57 |"
+Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_related_parcels,"2024-07-02 | PARCEL |  VGS | 23.0000 unit @ A$71.09 / unit | Total cost base = A$1,644.84 |"
 Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_unit_brokerage_converted,0.413043 AUD
 Buy,Buy | VGS | 2024-07-02 | 23.0000 | B270,calculated_unit_price_converted,71.090000 AUD
 Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_related_parcels,"2024-08-05 | PARCEL |  VGS | 16.0000 unit @ A$71.33 / unit | Total cost base = A$1,150.78 |"
+Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_related_parcels,"2024-08-05 | PARCEL |  VGS | 16.0000 unit @ A$71.33 / unit | Total cost base = A$1,150.95 |"
 Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | VGS | 2024-08-05 | 16.0000 | B272,calculated_unit_price_converted,71.330000 AUD
 Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_related_parcels,2024-09-06 | PARCEL |  VGS | 11.0000 unit @ A$71.57 / unit | Total cost base = A$796.77 |
+Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_related_parcels,2024-09-06 | PARCEL |  VGS | 11.0000 unit @ A$71.57 / unit | Total cost base = A$796.87 |
 Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_unit_brokerage_converted,0.863636 AUD
 Buy,Buy | VGS | 2024-09-06 | 11.0000 | B274,calculated_unit_price_converted,71.570000 AUD
 Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_related_parcels,"2024-10-07 | PARCEL |  VGS | 15.0000 unit @ A$71.78 / unit | Total cost base = A$1,086.20 |"
+Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_related_parcels,"2024-10-07 | PARCEL |  VGS | 15.0000 unit @ A$71.78 / unit | Total cost base = A$1,086.33 |"
 Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | VGS | 2024-10-07 | 15.0000 | B276,calculated_unit_price_converted,71.780000 AUD
 Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_related_parcels,"2024-11-04 | PARCEL |  VGS | 24.0000 unit @ A$71.98 / unit | Total cost base = A$1,737.02 |"
+Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_related_parcels,"2024-11-04 | PARCEL |  VGS | 24.0000 unit @ A$71.98 / unit | Total cost base = A$1,737.20 |"
 Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_unit_brokerage_converted,0.395833 AUD
 Buy,Buy | VGS | 2024-11-04 | 24.0000 | B279,calculated_unit_price_converted,71.980000 AUD
 Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_related_parcels,"2024-12-04 | PARCEL |  VGS | 18.0000 unit @ A$72.20 / unit | Total cost base = A$1,309.10 |"
+Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_related_parcels,"2024-12-04 | PARCEL |  VGS | 18.0000 unit @ A$72.20 / unit | Total cost base = A$1,309.22 |"
 Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_unit_brokerage_converted,0.527778 AUD
 Buy,Buy | VGS | 2024-12-04 | 18.0000 | B281,calculated_unit_price_converted,72.200000 AUD
 Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_related_parcels,2025-01-06 | PARCEL |  VGS | 12.0000 unit @ A$72.43 / unit | Total cost base = A$878.66 |
+Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_related_parcels,2025-01-06 | PARCEL |  VGS | 12.0000 unit @ A$72.43 / unit | Total cost base = A$878.73 |
 Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_unit_brokerage_converted,0.791667 AUD
 Buy,Buy | VGS | 2025-01-06 | 12.0000 | B285,calculated_unit_price_converted,72.430000 AUD
 Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_related_parcels,"2025-02-03 | PARCEL |  VGS | 15.0000 unit @ A$72.63 / unit | Total cost base = A$1,098.95 |"
+Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_related_parcels,"2025-02-03 | PARCEL |  VGS | 15.0000 unit @ A$72.63 / unit | Total cost base = A$1,099.02 |"
 Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_unit_brokerage_converted,0.633333 AUD
 Buy,Buy | VGS | 2025-02-03 | 15.0000 | B287,calculated_unit_price_converted,72.630000 AUD
 Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_related_parcels,"2025-03-03 | PARCEL |  VGS | 16.0000 unit @ A$72.83 / unit | Total cost base = A$1,174.78 |"
+Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_related_parcels,"2025-03-03 | PARCEL |  VGS | 16.0000 unit @ A$72.83 / unit | Total cost base = A$1,174.84 |"
 Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_unit_brokerage_converted,0.593750 AUD
 Buy,Buy | VGS | 2025-03-03 | 16.0000 | B290,calculated_unit_price_converted,72.830000 AUD
 Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_related_parcels,"2025-04-07 | PARCEL |  VGS | 26.0000 unit @ A$73.08 / unit | Total cost base = A$1,909.58 |"
+Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_related_parcels,"2025-04-07 | PARCEL |  VGS | 26.0000 unit @ A$73.08 / unit | Total cost base = A$1,909.65 |"
 Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | VGS | 2025-04-07 | 26.0000 | B292,calculated_unit_price_converted,73.080000 AUD
 Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_related_parcels,2025-05-05 | PARCEL |  VGS | 13.0000 unit @ A$73.28 / unit | Total cost base = A$962.14 |
+Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_related_parcels,2025-05-05 | PARCEL |  VGS | 13.0000 unit @ A$73.28 / unit | Total cost base = A$962.16 |
 Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2025-05-05 | 13.0000 | B295,calculated_unit_price_converted,73.280000 AUD
 Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_fiscal_year,FY2024/25
-Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_related_parcels,2025-06-02 | PARCEL |  VGS | 13.0000 unit @ A$73.48 / unit | Total cost base = A$964.74 |
+Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_related_parcels,2025-06-02 | PARCEL |  VGS | 13.0000 unit @ A$73.48 / unit | Total cost base = A$964.75 |
 Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_total_brokerage_converted,9.5000 AUD
 Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_unit_brokerage_converted,0.730769 AUD
 Buy,Buy | VGS | 2025-06-02 | 13.0000 | B298,calculated_unit_price_converted,73.480000 AUD
@@ -1739,17 +1753,17 @@ Buy,Buy | VGS | 2026-09-02 | 26.0000 | B346,calculated_total_brokerage_converted
 Buy,Buy | VGS | 2026-09-02 | 26.0000 | B346,calculated_unit_brokerage_converted,0.365385 AUD
 Buy,Buy | VGS | 2026-09-02 | 26.0000 | B346,calculated_unit_price_converted,76.750000 AUD
 Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_fiscal_year,FY2018/19
-Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_related_parcels,2018-11-12 | PARCEL |  WES | 8.0000 unit @ A$56.38 / unit | Total cost base = A$470.99 |
+Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_related_parcels,2018-11-12 | PARCEL |  WES | 8.0000 unit @ A$56.38 / unit | Total cost base = A$470.99 | SOLD
 Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_unit_brokerage_converted,2.493750 AUD
 Buy,Buy | WES | 2018-11-12 | 8.0000 | B073,calculated_unit_price_converted,56.380000 AUD
 Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_fiscal_year,FY2018/19
-Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_related_parcels,2019-05-20 | PARCEL |  WES | 14.0000 unit @ A$57.73 / unit | Total cost base = A$828.17 |
+Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_related_parcels,2019-05-20 | PARCEL |  WES | 14.0000 unit @ A$57.73 / unit | Total cost base = A$828.17 | SOLD
 Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_unit_brokerage_converted,1.425000 AUD
 Buy,Buy | WES | 2019-05-20 | 14.0000 | B091,calculated_unit_price_converted,57.730000 AUD
 Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_fiscal_year,FY2019/20
-Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_related_parcels,2020-03-20 | PARCEL |  WES | 15.0000 unit @ A$59.92 / unit | Total cost base = A$918.75 |
+Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_related_parcels,2020-03-20 | PARCEL |  WES | 15.0000 unit @ A$59.92 / unit | Total cost base = A$918.75 | SOLD
 Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_total_brokerage_converted,19.9500 AUD
 Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_unit_brokerage_converted,1.330000 AUD
 Buy,Buy | WES | 2020-03-20 | 15.0000 | B120,calculated_unit_price_converted,59.920000 AUD
@@ -4864,15 +4878,15 @@ SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_fiscal_year,FY2021/22
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_sale_date,2022-03-22
 SellAllocation,Sell | WES | 2022-03-22 | 37.0000 | S004 | Buy | WES | 2020-03-20 | 15.0000 | B120 | 2020-03-20 |  | 15.0000 | 2022-03-22 | 15.0000,calculated_total_capital_gain,54.498649 AUD
-ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_affected_parcels,"2017-03-06 | PARCEL |  AAPL | 8.0000 unit @ A$77.97 / unit | Total cost base = A$631.26 |
-2017-05-22 | PARCEL |  AAPL | 16.0000 unit @ A$78.80 / unit | Total cost base = A$1,268.22 |
-2017-06-22 | PARCEL |  AAPL | 12.0000 unit @ A$79.14 / unit | Total cost base = A$957.18 |
-2018-10-11 | PARCEL |  AAPL | 8.0000 unit @ A$84.24 / unit | Total cost base = A$681.42 |
-2018-11-21 | PARCEL |  AAPL | 8.0000 unit @ A$84.68 / unit | Total cost base = A$684.90 |
-2019-03-11 | PARCEL |  AAPL | 8.0000 unit @ A$85.84 / unit | Total cost base = A$694.26 |
-2019-10-21 | PARCEL |  AAPL | 12.0000 unit @ A$88.24 / unit | Total cost base = A$1,066.44 |
-2020-01-16 | PARCEL |  AAPL | 12.0000 unit @ A$89.19 / unit | Total cost base = A$1,077.78 |
+ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_affected_parcels,"2020-07-28 | PARCEL |  AAPL | 8.0000 unit @ A$91.26 / unit | Total cost base = A$737.58 |
 2020-07-27 | PARCEL |  AAPL | 12.0000 unit @ A$91.24 / unit | Total cost base = A$1,102.44 |
-2020-07-28 | PARCEL |  AAPL | 8.0000 unit @ A$91.26 / unit | Total cost base = A$737.58 |
+2020-01-16 | PARCEL |  AAPL | 12.0000 unit @ A$89.19 / unit | Total cost base = A$1,077.78 |
+2019-10-21 | PARCEL |  AAPL | 12.0000 unit @ A$88.24 / unit | Total cost base = A$1,066.44 |
+2019-03-11 | PARCEL |  AAPL | 8.0000 unit @ A$85.84 / unit | Total cost base = A$694.26 |
+2018-11-21 | PARCEL |  AAPL | 8.0000 unit @ A$84.68 / unit | Total cost base = A$684.90 |
+2018-10-11 | PARCEL |  AAPL | 8.0000 unit @ A$84.24 / unit | Total cost base = A$681.42 |
+2017-06-22 | PARCEL |  AAPL | 12.0000 unit @ A$79.14 / unit | Total cost base = A$957.18 |
+2017-05-22 | PARCEL |  AAPL | 16.0000 unit @ A$78.80 / unit | Total cost base = A$1,268.22 |
+2017-03-06 | PARCEL |  AAPL | 8.0000 unit @ A$77.97 / unit | Total cost base = A$631.26 |
 "
 ShareSplit,ShareSplit | AAPL | 2020-08-31,calculated_split_multiplier,4.000000

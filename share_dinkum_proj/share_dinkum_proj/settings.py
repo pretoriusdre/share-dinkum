@@ -188,6 +188,10 @@ TEST_RUNNER = 'share_dinkum_proj.test_runner.TempMediaRunner'
 # See share_dinkum_app/holdings/shadow.py. The test runner uses 'assert'.
 HOLDINGS_SHADOW = config('HOLDINGS_SHADOW', default='off')
 
+# What writes the holdings: 'replay', a rebuild of the instrument on every change, or 'signals',
+# the creation signals as before 0.5.0. See share_dinkum_app/holdings/live.py.
+HOLDINGS_WRITER = config('HOLDINGS_WRITER', default='replay')
+
 
 # Django's default is 1000, which a change page here passes without trying. The admin
 # builds an inline for every related model, so an instrument held for a decade arrives with

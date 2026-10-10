@@ -27,6 +27,7 @@ from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.holdings import live
 from share_dinkum_app.choices import (
     AllocationMethod,
     AttributionComponent as AttributionComponentType,
@@ -429,11 +430,16 @@ class BaseModel(models.Model):
                         f'more than zero, not {value}.')
         return None
 
+    def structural_fields(self) -> tuple[str, ...]:
+        """The STRUCTURAL_FIELDS in force. A buy's are fewer when the replay writes holdings."""
+        return self.STRUCTURAL_FIELDS
+
     def structural_changes(self) -> list[str]:
         """Names of the structural fields this unsaved state would change; [] if none."""
-        if not self.STRUCTURAL_FIELDS or self._state.adding or self.pk is None:
+        structural = self.structural_fields()
+        if not structural or self._state.adding or self.pk is None:
             return []
-        fields: list[Any] = [self._meta.get_field(name) for name in self.STRUCTURAL_FIELDS]
+        fields: list[Any] = [self._meta.get_field(name) for name in structural]
         stored = type(self)._default_manager.filter(pk=self.pk).values(
             '_creation_handled', *[field.attname for field in fields]).first()
         if stored is None or not stored['_creation_handled']:
@@ -477,7 +483,7 @@ class BaseModel(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         user = kwargs.pop('user', None)
         update_fields = kwargs.get('update_fields')
-        if update_fields is None or set(update_fields) & set(self.STRUCTURAL_FIELDS):
+        if update_fields is None or set(update_fields) & set(self.structural_fields()):
             changed = self.structural_changes()
             if changed:
                 raise ValueError(self._structural_change_message(changed))
@@ -489,7 +495,10 @@ class BaseModel(models.Model):
             problem = self.chronology_problem()
             if problem:
                 raise ValueError(problem)
-        super().save(*args, **kwargs)
+        # With what its signals do, as one unit: a holding rebuilt after the save that refuses
+        # the change has to take the saved row back with it.
+        with transaction.atomic():
+            super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f'{self.description}'
@@ -1351,8 +1360,15 @@ class Buy(Trade):
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
 
+    def structural_fields(self) -> tuple[str, ...]:
+        # Rebuilt from its trades, a holding takes a buy's corrected date, quantity or
+        # instrument; a rebuild refuses one that a sale already made cannot follow.
+        if live.active():
+            return ('unit_price_currency', 'total_brokerage_currency')
+        return self.STRUCTURAL_FIELDS
+
     def chronology_problem(self) -> str | None:
-        if not self.instrument_id or not self.date:
+        if not self.instrument_id or not self.date or live.active():
             return None
         # A split is dated on its ex-date and reaches buys before it. A buy on the ex-date is
         # already in post-split units, as a sale that day is, so only a later split matters.
@@ -1439,7 +1455,7 @@ class Sell(Trade):
         )
 
     def chronology_problem(self) -> str | None:
-        if not self.instrument_id or not self.date:
+        if not self.instrument_id or not self.date or live.active():
             return None
         # A sale on a split's own date is in post-split units, so only a later split matters.
         split = ShareSplit.objects.filter(

@@ -202,26 +202,40 @@ def write(account: 'Account', plan: Plan) -> None:
 
     from share_dinkum_app import recalculate
     from share_dinkum_app.models import (
-        CostBaseAdjustmentAllocation, Instrument, Parcel, Sell, SellAllocation, ShareSplit,
+        Buy, CostBaseAdjustmentAllocation, Instrument, Parcel, Sell, SellAllocation, ShareSplit,
     )
+
+    from share_dinkum_app.holdings import live
 
     if plan.empty:
         return
     currency = str(account.currency)
     refs = dict(plan.parcel_refs)
+    # What the writes touch, so only their stored figures are worked out again: a rebuild runs
+    # on every change, and refreshing a whole instrument each time made an import quadratic.
+    parcels: set[Any] = set()
+    sells: set[Any] = set()
     buys: set[Any] = set()
 
-    with transaction.atomic():
+    def allocation_rows(ids: list[Any]) -> list[tuple[Any, Any, Any]]:
+        return list(SellAllocation.objects.filter(pk__in=ids).values_list('parcel_id', 'sell_id', 'buy_id'))
+
+    # The writer's own saves must not start another rebuild of a half-written holding.
+    with live.writing(), transaction.atomic():
         # Deleting an allocation clears its parcel's sale date if nothing else sells it. Where
         # the replay keeps that parcel sold, the date is set again below.
-        unsold = set(SellAllocation.objects.filter(pk__in=plan.delete_sales).values_list('parcel_id', flat=True))
+        removed = allocation_rows(plan.delete_sales)
         SellAllocation.objects.filter(pk__in=plan.delete_sales).delete()
-        CostBaseAdjustmentAllocation.objects.filter(pk__in=plan.delete_parts).delete()
+        removed_parts = CostBaseAdjustmentAllocation.objects.filter(pk__in=plan.delete_parts)
+        parcels.update(removed_parts.values_list('parcel_id', flat=True))
+        removed_parts.delete()
         lineage_of = {ref: lineage for lineage, ref in plan.parcel_refs.items()}
-        for ref in unsold:
-            wanted = plan.wanted_parcels.get(lineage_of.get(ref, ()))
-            if wanted is not None and ref not in plan.update_parcels:
-                Parcel.objects.filter(pk=ref).update(sale_date=wanted['sale_date'])
+        for parcel_id, sell_id, _ in removed:
+            parcels.add(parcel_id)
+            sells.add(sell_id)
+            wanted = plan.wanted_parcels.get(lineage_of.get(parcel_id, ()))
+            if wanted is not None and parcel_id not in plan.update_parcels:
+                Parcel.objects.filter(pk=parcel_id).update(sale_date=wanted['sale_date'])
 
         for lineage, fields in plan.create_parcels.items():
             parcel = Parcel(
@@ -231,7 +245,7 @@ def write(account: 'Account', plan: Plan) -> None:
                 sale_date=fields['sale_date'])
             parcel.save()
             refs[lineage] = parcel.pk
-            buys.add(lineage[0])
+            parcels.add(parcel.pk)
 
         attributes = {'activation': 'activation_date', 'deactivation': 'deactivation_date',
                       'quantity': 'parcel_quantity', 'multiplier': 'cumulative_split_multiplier',
@@ -244,13 +258,17 @@ def write(account: 'Account', plan: Plan) -> None:
                 else:
                     setattr(parcel, attributes[name], value)
             parcel.save()
-            buys.add(parcel.buy_id)
+            parcels.add(ref)
 
         for sale_id, lineage, quantity in plan.create_sales:
             SellAllocation(account=account, sell_id=sale_id, parcel_id=refs[lineage], quantity=quantity,
                            _creation_handled=True).save()
-            buys.add(lineage[0])
+            parcels.add(refs[lineage])
+            sells.add(sale_id)
+        before = {row[0]: row[1:] for row in SellAllocation.objects.filter(
+            pk__in=list(plan.update_sales)).values_list('id', 'parcel_id', 'sell_id')}
         for ref, changes in plan.update_sales.items():
+            old_parcel, sell_id = before[ref]
             # Parcel and quantity are structural, so a save refuses them; the rebuild is what
             # works them out now.
             columns: dict[str, Any] = {}
@@ -259,14 +277,14 @@ def write(account: 'Account', plan: Plan) -> None:
             if 'quantity' in changes:
                 columns['quantity'] = changes['quantity']
             SellAllocation.objects.filter(pk=ref).update(**columns)
-            SellAllocation.objects.get(pk=ref).save()
-            buys.add(SellAllocation.objects.filter(pk=ref).values_list('buy_id', flat=True).first())
+            parcels.update({old_parcel, columns.get('parcel_id', old_parcel)})
+            sells.add(sell_id)
 
         for part in plan.create_parts:
             CostBaseAdjustmentAllocation(
                 account=account, cost_base_adjustment_id=part.adjustment_id, parcel_id=refs[part.lineage],
                 cost_base_increase=Money(part.amount, currency), activation_date=part.activation).save()
-            buys.add(part.lineage[0])
+            parcels.add(refs[part.lineage])
         for ref, changes in plan.update_parts.items():
             allocation = CostBaseAdjustmentAllocation.objects.get(pk=ref)
             if 'amount' in changes:
@@ -274,6 +292,7 @@ def write(account: 'Account', plan: Plan) -> None:
             if 'deactivation' in changes:
                 allocation.deactivation_date = changes['deactivation']
             allocation.save()
+            parcels.add(allocation.parcel_id)
 
         if plan.delete_parcels:
             gone = Parcel.objects.filter(pk__in=plan.delete_parcels)
@@ -281,18 +300,24 @@ def write(account: 'Account', plan: Plan) -> None:
             # Their own history goes with them: parts long since moved on, which block the delete.
             CostBaseAdjustmentAllocation.objects.filter(parcel__in=gone).delete()
             gone.delete()
+            parcels.difference_update(plan.delete_parcels)
 
-        instruments = Instrument.objects.filter(buy__in=buys).distinct()
+        touched = Parcel.objects.filter(pk__in=parcels)
+        buys.update(touched.values_list('buy_id', flat=True))
+        sells.update(SellAllocation.objects.filter(parcel__in=touched, is_active=True).values_list('sell_id', flat=True))
+        instruments = list(Instrument.objects.filter(buy__in=buys).distinct())
         for split in ShareSplit.objects.filter(account=account, instrument__in=instruments):
             made = split.parcels_created()
             if set(split.affected_parcels.all()) != set(made):
                 split.affected_parcels.set(made)
                 split.save()
-        recalculate.parcels(Parcel.objects.filter(buy__instrument__in=instruments, deactivation_date__isnull=True))
-        for sell in Sell.objects.filter(instrument__in=instruments):
+        recalculate.parcels(touched)
+        for sell in Sell.objects.filter(pk__in=sells):
             sell.save()
+        for buy in Buy.objects.filter(pk__in=buys):
+            buy.save()
         for instrument in instruments:
-            instrument.save()
+            Instrument.objects.get(pk=instrument.pk).save()
 
 
 def rebuild(account: 'Account', instrument: 'Instrument | None' = None) -> Plan:

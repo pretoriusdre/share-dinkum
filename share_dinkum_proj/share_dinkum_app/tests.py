@@ -19,7 +19,7 @@ import pandas as pd
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
@@ -1070,6 +1070,8 @@ class RepairPortfolioDataTests(TransactionTestCase):
         self.assertTrue(Parcel.objects.get(sale_date__isnull=False).calculated_is_sold)
         self.assertIsNone(self._warning(account))
 
+    # Repairs damage the creation signals left; the replay does not leave it.
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_an_adjustment_left_behind_by_a_split_is_carried_forward(self, mock_get_rate):
         """As the bug left it: on the replaced parcel, and on none of its descendants."""
         account, instrument, buy = self._portfolio(currency='AUD')
@@ -1448,10 +1450,14 @@ class StructuralEditTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buys_quantity_cannot_be_changed(self):
         self._refused(self.buy, quantity=Decimal('200'))
         self.assertEqual(Parcel.objects.get(buy=self.buy).parcel_quantity, Decimal('100'))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buys_date_cannot_be_changed(self):
         self._refused(self.buy, date=date(2024, 2, 5))
 
@@ -1531,6 +1537,8 @@ class OutOfOrderEntryTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'split'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_sale_dated_before_an_applied_split_is_refused(self):
         self._split()
         self._refused(Sell(
@@ -1538,6 +1546,8 @@ class OutOfOrderEntryTests(TransactionTestCase):
             quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
             total_brokerage=Money(0, 'AUD'), strategy='FIFO'))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_dated_before_an_applied_split_is_refused(self):
         self._split()
         self._refused(Buy(
@@ -1603,12 +1613,16 @@ class AdjustmentOutOfOrderTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'cost base adjustment'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_dated_before_an_applied_adjustments_year_end_is_refused(self):
         """It would get none of the adjustment, though held in its year."""
         self._adjustment()
         self._refused(self._buy(date(2022, 7, 1)))
         self._refused(self._buy(date(2024, 6, 30)))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_is_refused_even_where_the_adjustment_reached_no_parcel(self):
         self._adjustment(year_end=date(2022, 6, 30))
         self._refused(self._buy(date(2021, 7, 1)))
@@ -1617,6 +1631,8 @@ class AdjustmentOutOfOrderTests(TransactionTestCase):
         self._adjustment()
         self._buy(date(2024, 7, 1)).save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_sale_dated_before_an_applied_adjustments_year_end_is_refused(self):
         """The units sold would keep a share weighted as if held all year."""
         self._adjustment()
@@ -3639,6 +3655,17 @@ class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
         self.assertEqual(Sell.objects.filter(account=account).count(), len(tables['Sell']))
 
 
+#: A buy's parcels as text, written whenever the buy is saved: a rebuild that saves the buy
+#: rewrites it, as a restore does. Display only; no figure reads it.
+DISPLAY_TEXT = {('Buy', 'calculated_related_parcels')}
+
+
+def without_display_text(tables):
+    calculated = tables['calculated']
+    kept = [row for row in calculated[1:] if (row[0], row[2]) not in DISPLAY_TEXT]
+    return {**tables, 'calculated': [calculated[0], *kept]}
+
+
 TEST_FIXTURES = Path(__file__).resolve().parent / 'test_fixtures'
 GOLDEN_FIGURES = TEST_FIXTURES / 'golden_figures'
 
@@ -3833,6 +3860,9 @@ class HoldingStrategyTests(TestCase):
         self.assertEqual(strategies.spread(Decimal('100'), [('a', Decimal('0'))], lambda v: v), [])
 
 
+# The holdings these check were built by the creation signals, as every portfolio before 0.5.0
+# was: these are the checks and rebuilds that upgrade them.
+@override_settings(HOLDINGS_WRITER='signals')
 class HoldingsReplayTests(TransactionTestCase):
     """The holdings worked out again from the trades, set against what is stored."""
 
@@ -3947,7 +3977,7 @@ class HoldingsReplayTests(TransactionTestCase):
         counts = {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)}
         self.assertTrue(self.rebuild().empty)
         self.assertEqual(counts, {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)})
-        self.assertEqual(before, figures_dump.dump(self.account))
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
 
     def test_a_rebuild_repairs_a_wrong_quantity_in_place(self):
         before = figures_dump.dump(self.account)
@@ -3959,7 +3989,7 @@ class HoldingsReplayTests(TransactionTestCase):
         parcel.refresh_from_db()
         self.assertEqual(parcel.parcel_quantity, Decimal('200'), 'the same parcel, put right')
         self.assertTrue(self.rebuild_plan().empty)
-        self.assertEqual(before, figures_dump.dump(self.account))
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
 
     def test_a_rebuild_puts_moved_adjustment_back(self):
         before = figures_dump.dump(self.account)
@@ -3976,7 +4006,7 @@ class HoldingsReplayTests(TransactionTestCase):
 
         self.assertEqual(CostBaseAdjustmentAllocation.objects.get(pk=first.pk).cost_base_increase,
                          first.cost_base_increase)
-        self.assertEqual(before, figures_dump.dump(self.account))
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
 
     def test_a_rebuild_writes_the_sale_entered_before_its_buy(self):
         account = create_account(owner=self.account.owner, description='Rebuilt',
@@ -4070,6 +4100,158 @@ class HoldingsReplayTests(TransactionTestCase):
         out = io.StringIO()
         call_command('check_holdings', account=self.account.description, stdout=out)
         self.assertIn('Units held', out.getvalue())
+
+
+class LiveHoldingsTests(TransactionTestCase):
+    """The replay as the writer: holdings follow the trades whatever order they are entered in."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='LIV')
+
+    def buy(self, day, quantity, price='10'):
+        return Buy.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                  quantity=Decimal(quantity), unit_price=Money(Decimal(price), 'AUD'),
+                                  total_brokerage=Money(Decimal('0'), 'AUD'))
+
+    def sell(self, day, quantity, strategy='FIFO'):
+        return Sell.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                   quantity=Decimal(quantity), unit_price=Money(Decimal('12'), 'AUD'),
+                                   total_brokerage=Money(Decimal('0'), 'AUD'), strategy=strategy)
+
+    def split(self, day, before='1', after='2'):
+        return ShareSplit.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                         quantity_before=Decimal(before), quantity_after=Decimal(after))
+
+    def held(self):
+        return Instrument.objects.get(pk=self.instrument.pk).quantity_held
+
+    def test_a_buy_dated_before_an_applied_split_is_split_with_the_rest(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.split(date(2023, 6, 1))
+        late = self.buy(date(2023, 3, 1), '50')
+
+        parcel = Parcel.objects.get(buy=late, deactivation_date__isnull=True)
+        self.assertEqual(parcel.parcel_quantity, Decimal('100'))
+        self.assertEqual(self.held(), Decimal('300'))
+
+    def test_a_sale_dated_before_an_applied_split_is_in_pre_split_units(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.split(date(2023, 6, 1))
+        self.sell(date(2023, 3, 1), '40')
+
+        self.assertEqual(self.held(), Decimal('120'), '(100 - 40) units, split two for one')
+
+    def test_a_split_dated_before_an_allocated_sale_is_still_refused(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40')
+        with self.assertRaises(ValueError):
+            self.split(date(2023, 6, 1))
+
+    def test_a_buys_quantity_can_be_corrected(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40')
+        parcel_ids = set(Parcel.objects.filter(buy=buy).values_list('id', flat=True))
+
+        buy.quantity = Decimal('120')
+        buy.save()
+
+        self.assertEqual(self.held(), Decimal('80'))
+        self.assertEqual(set(Parcel.objects.filter(buy=buy).values_list('id', flat=True)), parcel_ids,
+                         'the same parcels, corrected in place')
+
+    def test_a_correction_below_the_units_already_sold_is_refused(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40', strategy='FIFO')
+        buy.quantity = Decimal('30')
+        with self.assertRaises(ValueError):
+            buy.save()
+        self.assertEqual(Buy.objects.get(pk=buy.pk).quantity, Decimal('100'))
+
+    def test_a_buys_date_can_be_corrected(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        buy.date = date(2023, 2, 10)
+        buy.save()
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.activation_date, date(2023, 2, 10))
+
+    def test_a_buy_inside_a_spread_adjustments_year_keeps_the_spread(self):
+        self.buy(date(2022, 8, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        spread = list(CostBaseAdjustmentAllocation.objects.filter(
+            cost_base_adjustment=adjustment).values_list('id', 'cost_base_increase'))
+
+        self.buy(date(2023, 1, 10), '100')
+
+        self.assertEqual(list(CostBaseAdjustmentAllocation.objects.filter(
+            cost_base_adjustment=adjustment).values_list('id', 'cost_base_increase')), spread)
+
+    def test_deleting_an_automatic_sales_allocation_makes_it_manual(self):
+        self.buy(date(2023, 1, 10), '100')
+        sale = self.sell(date(2023, 9, 1), '40')
+        SellAllocation.objects.get(sell=sale).delete()
+
+        sale.refresh_from_db()
+        self.assertEqual(sale.strategy, 'MANUAL')
+        self.assertFalse(SellAllocation.objects.filter(sell=sale).exists(), 'not allocated again')
+        self.assertEqual(self.held(), Decimal('100'))
+
+    def test_deleting_a_split_rebuilds_the_holding_without_it(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        split = self.split(date(2023, 6, 1))
+        self.assertEqual(self.held(), Decimal('200'))
+        split.delete()
+        self.assertEqual(self.held(), Decimal('100'))
+        self.assertEqual(Parcel.objects.filter(buy=buy).count(), 1)
+
+    def test_check_holdings_rebuild_accepts_the_differences(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        Parcel.objects.filter(buy=buy).update(parcel_quantity=Decimal('90'))
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=True)
+
+        out = io.StringIO()
+        call_command('check_holdings', account=self.account.description, rebuild=True, stdout=out)
+
+        self.assertIn('LIV: rebuilt', out.getvalue())
+        self.assertEqual(Parcel.objects.get(buy=buy).parcel_quantity, Decimal('100'))
+        self.assertIs(Instrument.objects.get(pk=self.instrument.pk).holdings_differ, False)
+        self.sell(date(2023, 9, 1), '10')  # Accepted again.
+
+    def test_the_admin_says_when_a_trade_leaves_a_spread_as_it_was(self):
+        from django.contrib.messages import get_messages
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from share_dinkum_app.admin import GenericModelAdmin
+
+        self.buy(date(2022, 8, 1), '100')
+        CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        late = self.buy(date(2023, 1, 10), '100')
+
+        request = RequestFactory().post('/')
+        request.session = {}
+        request._messages = FallbackStorage(request)
+        GenericModelAdmin.mention_kept_spreads(request, late)
+
+        self.assertIn('2023-06-30', ' '.join(str(m) for m in get_messages(request)))
+
+    @holdings_may_differ
+    def test_an_instrument_whose_stored_figures_differ_refuses_changes(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        Parcel.objects.filter(buy=buy).update(parcel_quantity=Decimal('90'))
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=None)
+        self.instrument.refresh_from_db()
+
+        with self.assertRaisesMessage(ValueError, 'check_holdings'):
+            self.sell(date(2023, 9, 1), '10')
+        # The refusal takes back everything in the save, the flag it found included, so the
+        # instrument is checked again on its next change.
+        self.assertFalse(Sell.objects.filter(account=self.account).exists())
+        from share_dinkum_app.holdings import compare
+        self.assertTrue(compare.verify(self.instrument))
 
 
 class FiguresDumpKeyTests(TestCase):
@@ -6044,6 +6226,8 @@ class ExportRoundTripTests(TransactionTestCase):
             Parcel.objects.filter(buy__isnull=False).count(), parcels_before,
             'every parcel should be one the file supplied, not one a signal invented')
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_split_keeps_the_parcels_it_was_applied_to(self):
         """A restored split still knows its parcels, so it still guards the history.
 
@@ -7087,6 +7271,8 @@ class ImportIntegrityTests(TransactionTestCase):
             self._load(Buy=[import_buy('B1', date(2020, 1, 10)),
                             import_buy('B1', date(2021, 1, 10))])
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_changed_quantity_on_a_second_load_is_refused(self):
         self._load(Buy=[import_buy('B1', date(2020, 1, 10))])
         with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):

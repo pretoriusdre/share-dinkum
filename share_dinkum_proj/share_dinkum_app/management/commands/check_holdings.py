@@ -11,7 +11,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app.holdings import compare
-from share_dinkum_app.models import Account
+from share_dinkum_app.models import Account, Instrument
 
 
 class Command(BaseCommand):
@@ -21,6 +21,9 @@ class Command(BaseCommand):
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument('--respread', action='store_true',
                             help='Also list adjustments a fresh spread would divide differently between buys.')
+        parser.add_argument('--rebuild', action='store_true',
+                            help='Rewrite each differing holding as worked out from its trades, accepting the '
+                                 'differences listed. Decisions already made are kept.')
 
     def handle(self, *args: Any, **options: Any) -> None:
         accounts = Account.objects.all()
@@ -52,3 +55,19 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f'  {report.count} difference(s).'))
             else:
                 self.stdout.write(self.style.SUCCESS('  The stored holding agrees with the replay.'))
+            if options['rebuild']:
+                self._rebuild(account)
+
+    def _rebuild(self, account: Account) -> None:
+        from django.db import transaction
+
+        from share_dinkum_app.holdings import apply, live
+
+        for instrument in Instrument.objects.filter(account=account).order_by('name'):
+            with transaction.atomic():
+                result = apply.rebuild(account, instrument)
+                Instrument.objects.filter(pk=instrument.pk).update(holdings_differ=False)
+            if not result.empty:
+                self.stdout.write(self.style.SUCCESS(f'  {instrument.name}: rebuilt ({result.summary()}).'))
+        if not live.active():
+            self.stdout.write('  The creation signals still write holdings (HOLDINGS_WRITER=signals).')
