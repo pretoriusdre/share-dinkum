@@ -3731,8 +3731,16 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
         account = self._fake_portfolio()
         self.assertSameFigures(figures_dump.dump(account), figures_dump.dump(account))
 
+    def test_the_fake_portfolio_agrees_with_its_replay(self):
+        from share_dinkum_app.holdings import compare
+        report = compare.check(self._fake_portfolio())
+        self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+        self.assertEqual(report.respread, [], 'a spread made by the app differs from a fresh one')
+
     def test_every_export_ever_taken_still_loads(self):
-        """Exports taken by earlier releases, from fake data, restore into an empty database."""
+        """Exports taken by earlier releases, from fake data, restore into an empty database,
+        and their holdings agree with a replay."""
+        from share_dinkum_app.holdings import compare
         for path in sorted(TEST_FIXTURES.glob('export_*.xlsx')):
             with self.subTest(path.name):
                 call_command('flush', interactive=False, verbosity=0)
@@ -3741,6 +3749,8 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
                 self.assertGreater(Parcel.objects.filter(account=account).count(), 0)
                 figures = figures_dump.dump(account)
                 self.assertGreater(len(figures['cgt_events']), 1, 'the restored portfolio has no sales')
+                report = compare.check(account)
+                self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
         self.assertEqual(len(list(TEST_FIXTURES.glob('export_*.xlsx'))), 2)
 
     def test_the_command_writes_a_csv_per_table(self):
@@ -3775,6 +3785,107 @@ class CalculatedSourceTests(TestCase):
             missing += [f'{model.__name__}.{field.name}' for field in figures_dump.calculated_fields(model)
                         if field.name not in sourced]
         self.assertEqual(missing, [])
+
+
+class HoldingStrategyTests(TestCase):
+    """The pure rules the signals and the replay share."""
+
+    def test_fifo_and_lifo_break_ties_in_the_order_made(self):
+        from share_dinkum_app.holdings import strategies
+        candidates = [('b', date(2024, 1, 2)), ('a', date(2024, 1, 2)), ('c', date(2024, 1, 1))]
+        order = lambda strategy: [name for name, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: c[1], tie=lambda c: c[0])]
+        self.assertEqual(order('FIFO'), ['c', 'a', 'b'])
+        self.assertEqual(order('LIFO'), ['a', 'b', 'c'])
+
+    def test_take_reports_what_is_left_over(self):
+        from share_dinkum_app.holdings import strategies
+        taken, left = strategies.take(Decimal('25'), [('a', Decimal('10')), ('b', Decimal('5'))])
+        self.assertEqual(taken, [('a', Decimal('10')), ('b', Decimal('5'))])
+        self.assertEqual(left, Decimal('10'))
+
+    def test_a_spread_sums_to_the_whole(self):
+        from share_dinkum_app.holdings import strategies
+        parts = strategies.spread(Decimal('100'), [('a', Decimal('1')), ('b', Decimal('1')), ('c', Decimal('1'))],
+                                  lambda value: value.quantize(Decimal('0.0001')))
+        self.assertEqual(sum(amount for _, amount, _ in parts), Decimal('100'))
+        self.assertEqual(strategies.spread(Decimal('100'), [('a', Decimal('0'))], lambda v: v), [])
+
+
+class HoldingsReplayTests(TransactionTestCase):
+    """The holdings worked out again from the trades, set against what is stored."""
+
+    def setUp(self):
+        from share_dinkum_app.holdings import compare
+        self.compare = compare
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+
+    def check(self):
+        return self.compare.check(self.account)
+
+    def test_a_portfolio_entered_in_date_order_agrees(self):
+        report = self.check()
+        self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+        self.assertEqual(report.shape_differences, 0)
+        self.assertEqual(report.parcels_stored, report.parcels_replayed)
+
+    def test_the_check_writes_nothing(self):
+        models = list(apps.get_app_config('share_dinkum_app').get_models())
+        before = {model.__name__: model.objects.count() for model in models}
+        self.check()
+        self.assertEqual(before, {model.__name__: model.objects.count() for model in models})
+
+    def test_adjustment_moved_between_the_parts_of_a_buy_is_found(self):
+        """Per buy the total is pinned, but how it lies between units sold and held is worked out."""
+        sold = CostBaseAdjustmentAllocation.objects.filter(
+            account=self.account, deactivation_date__isnull=True,
+            parcel__buy=self.data['buy_one'], parcel__sale_allocation__isnull=False).order_by('id')
+        first, second = sold[0], sold[1]
+        CostBaseAdjustmentAllocation.objects.filter(pk=first.pk).update(
+            cost_base_increase=first.cost_base_increase.amount + 1)
+        CostBaseAdjustmentAllocation.objects.filter(pk=second.pk).update(
+            cost_base_increase=second.cost_base_increase.amount - 1)
+
+        kinds = {difference.kind for difference in self.check().differences}
+        self.assertIn('Adjustment on units sold', kinds)
+
+    def test_a_held_parcel_with_the_wrong_quantity_is_found(self):
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        differences = self.check().differences
+        self.assertEqual([d.kind for d in differences], ['Units held'])
+        self.assertIn('210', differences[0].stored)
+
+    def test_a_sale_of_more_than_the_buy_held_is_a_problem(self):
+        allocation = SellAllocation.objects.filter(sell=self.data['sell_loss'], is_active=True).order_by('id').first()
+        SellAllocation.objects.filter(pk=allocation.pk).update(quantity=allocation.quantity + 5000)
+        self.assertTrue(self.check().problems)
+
+    def test_a_sale_entered_before_its_buy_is_found(self):
+        """A sale entered before the buy it draws on was left unallocated; replayed, it is not."""
+        account = create_account(owner=self.account.owner, description='Out of order',
+                                 fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='OOO')
+        Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                            quantity=Decimal('10'), unit_price=Money(Decimal('5'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                           quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+
+        kinds = {difference.kind for difference in self.compare.check(account).differences}
+        self.assertEqual(kinds, {'Units sold', 'Units held', 'Units allocated to no parcel'})
+
+    def test_the_dashboard_check_and_the_command_report_it(self):
+        self.assertNotIn('holdings_differ', {f.key for f in data_checks.run(self.account)})
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        self.assertIn('holdings_differ', {f.key for f in data_checks.run(self.account)})
+
+        out = io.StringIO()
+        call_command('check_holdings', account=self.account.description, stdout=out)
+        self.assertIn('Units held', out.getvalue())
 
 
 class FiguresDumpKeyTests(TestCase):

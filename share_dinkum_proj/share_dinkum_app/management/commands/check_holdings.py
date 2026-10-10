@@ -1,0 +1,54 @@
+"""Work each portfolio's holding out again from its trades, and show where it differs from what is stored.
+
+Parcels, sale allocations and adjustment spreads are stored as they were worked out when each
+record was entered. This works them out again in date order, keeping every decision already made
+(which parcels a sale used, how an adjustment was divided between buys), and lists any figure that
+differs. It writes nothing.
+"""
+
+from typing import Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
+
+from share_dinkum_app.holdings import compare
+from share_dinkum_app.models import Account
+
+
+class Command(BaseCommand):
+    help = 'Show where the stored holdings differ from the holdings worked out again from the trades.'
+
+    def add_arguments(self, parser: CommandParser) -> None:
+        parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
+        parser.add_argument('--respread', action='store_true',
+                            help='Also list adjustments a fresh spread would divide differently between buys.')
+
+    def handle(self, *args: Any, **options: Any) -> None:
+        accounts = Account.objects.all()
+        if options['account']:
+            accounts = accounts.filter(description=options['account'])
+            if not accounts.exists():
+                raise CommandError(f'No portfolio named "{options["account"]}".')
+
+        for account in accounts:
+            self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
+            report = compare.check(account)
+            self.stdout.write(
+                f'  {report.parcels_stored} parcels stored, {report.parcels_replayed} replayed. '
+                f'{report.shape_differences} differ only in shape, {report.rounding} adjustment(s) '
+                f'by under a cent.')
+            for problem in report.problems:
+                self.stdout.write(self.style.ERROR(f'  {problem}'))
+            for difference in report.differences:
+                self.stdout.write(self.style.WARNING(f'  {difference}'))
+            if report.respread:
+                if options['respread']:
+                    for line in report.respread:
+                        self.stdout.write(self.style.NOTICE(f'  {line}'))
+                else:
+                    self.stdout.write(
+                        f'  {len(report.respread)} adjustment part(s) would be divided differently if spread '
+                        f'again. They are kept as entered; --respread lists them.')
+            if report.count:
+                self.stdout.write(self.style.WARNING(f'  {report.count} difference(s).'))
+            else:
+                self.stdout.write(self.style.SUCCESS('  The stored holding agrees with the replay.'))

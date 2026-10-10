@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 import threading
 from typing import Any, cast
@@ -17,6 +17,7 @@ from djmoney.money import Money
 
 from share_dinkum_app import portfolio_export
 from share_dinkum_app import cgt
+from share_dinkum_app.holdings import strategies
 from share_dinkum_app.choices import (
     AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
 )
@@ -110,21 +111,18 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
         instance.save(update_fields=["_creation_handled"])
         return
 
-    available_parcels: Any = Parcel.objects.filter(  # a queryset, then a sorted list
+    candidates = list(Parcel.objects.filter(
         account=instance.account,
         deactivation_date__isnull=True,
         buy__instrument=instance.instrument,
         buy__date__lte=instance.date,
-    )
+    ).select_related('buy'))
 
-    if instance.strategy == SellStrategy.FIFO:
-        available_parcels = available_parcels.order_by('buy__date')
-    elif instance.strategy == SellStrategy.LIFO:
-        available_parcels = available_parcels.order_by('-buy__date')
-    elif instance.strategy == SellStrategy.MIN_CGT:
+    net_gain_per_unit = None
+    if instance.strategy == SellStrategy.MIN_CGT:
         unit_proceeds = instance.unit_proceeds
 
-        def get_unit_net_capital_gain(parcel: Parcel) -> Any:
+        def net_gain_per_unit(parcel: Parcel) -> Any:
             """Per-unit gain after discount, using the same rule as the reports."""
             capital_gain = unit_proceeds - parcel.unit_cost_base
             return cgt.apply_discount(
@@ -134,27 +132,20 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
                 account=instance.account,
             )
 
+    ordered = strategies.order_for_sale(
+        instance.strategy, candidates, buy_date=lambda parcel: parcel.buy.date,
+        tie=lambda parcel: str(parcel.pk), net_gain_per_unit=net_gain_per_unit)
 
-        available_parcels = sorted(available_parcels, key=get_unit_net_capital_gain)
-
-    available_parcels = [
-        parcel for parcel in available_parcels
-        if (parcel.remaining_quantity and parcel.remaining_quantity > 0)
-    ]
-
-    quantity_to_allocate = instance.quantity
-    for parcel in available_parcels:
-        parcel_quantity = parcel.parcel_quantity
-        qty_for_parcel = min(parcel_quantity, quantity_to_allocate)
+    taken, quantity_to_allocate = strategies.take(instance.quantity, (
+        (parcel, parcel.parcel_quantity) for parcel in ordered
+        if parcel.remaining_quantity and parcel.remaining_quantity > 0))
+    for parcel, quantity in taken:
         SellAllocation.objects.create(
             account=instance.account,
             parcel=parcel,
             sell=instance,
-            quantity=qty_for_parcel
+            quantity=quantity
         )
-        quantity_to_allocate -= qty_for_parcel
-        if quantity_to_allocate <= 0:
-            break
 
     if quantity_to_allocate > 0:
         # Not an error, since the sale may be recorded before the purchase it draws on, but
@@ -219,15 +210,8 @@ def _fiscal_year_start(adjustment: CostBaseAdjustment, end: date) -> date:
     """
     fiscal_year_type = getattr(adjustment.account, 'fiscal_year_type', None)
     if fiscal_year_type is not None:
-        start_this_year = date(end.year, fiscal_year_type.start_month, fiscal_year_type.start_day)
-        if end >= start_this_year:
-            return start_this_year
-        return date(end.year - 1, fiscal_year_type.start_month, fiscal_year_type.start_day)
-
-    try:
-        return date(end.year - 1, end.month, end.day) + timedelta(days=1)
-    except ValueError:
-        return date(end.year - 1, end.month, 28) + timedelta(days=1)
+        return strategies.fiscal_year_start(end, fiscal_year_type.start_month, fiscal_year_type.start_day)
+    return strategies.fiscal_year_start(end)
 
 
 @receiver(post_save, sender=CostBaseAdjustment)
@@ -260,32 +244,13 @@ def allocate_cost_base_adjustment_now(instance: CostBaseAdjustment) -> None:
     end = instance.financial_year_end_date
     cutoff_date = _fiscal_year_start(instance, end)
 
-    splits = list(ShareSplit.objects.filter(
-        account=instance.account, instrument=instance.instrument, is_active=True))
-
-    def days_held_in_year(parcel: Parcel) -> int:
-        """Days the parcel was held within the adjustment's year, inclusive."""
-        start = max(cutoff_date, parcel.buy.date)
-        finish = min(end, parcel.sale_date) if parcel.sale_date else end
-        return max((finish - start).days + 1, 0)
-
-    def units_at_year_end(parcel: Parcel) -> Decimal:
-        """The parcel's quantity counted in units as they stood at the end of the year.
-
-        Parcels are split when a split happens, so one sold before it is still in the old
-        units and one entered after a later split is in the new ones. Weighted by their own
-        quantities, a unit sold before a 2-for-1 split counted for half as much as a unit
-        still held. So each is taken back to the units it was bought in, then forward by the
-        splits up to the year end.
-        """
-        bought_units = parcel.parcel_quantity / parcel.cumulative_split_multiplier
-        for split in splits:
-            if parcel.buy.date < split.date <= end:
-                bought_units *= split.ratio
-        return bought_units
+    splits = [(split.date, split.ratio) for split in ShareSplit.objects.filter(
+        account=instance.account, instrument=instance.instrument, is_active=True)]
 
     def weight(parcel: Parcel) -> Decimal:
-        return units_at_year_end(parcel) * days_held_in_year(parcel)
+        return strategies.holding_weight(
+            parcel.parcel_quantity, parcel.cumulative_split_multiplier, parcel.buy.date,
+            parcel.sale_date, cutoff_date, end, splits)
 
     with transaction.atomic():
         affected_parcels = list(Parcel.objects.filter(
@@ -297,49 +262,23 @@ def allocate_cost_base_adjustment_now(instance: CostBaseAdjustment) -> None:
             Q(sale_date__isnull=True) | Q(sale_date__gte=cutoff_date)
         ).select_related('buy'))
 
-        total_weighted_sum: Decimal | int = 0
-        parcel_set_to_save: set[Parcel] = set()
+        total_adjustment = instance.cost_base_increase_converted
+        amount_field = CostBaseAdjustmentAllocation._meta.get_field('cost_base_increase')
+        parts = strategies.spread(
+            total_adjustment.amount, ((parcel, weight(parcel)) for parcel in affected_parcels),
+            quantize=lambda amount: cast(Decimal, convert_to_decimal_field(amount, amount_field)))
 
-        for parcel in affected_parcels:
-            total_weighted_sum += weight(parcel)
-
-        if not total_weighted_sum:
+        if not parts:
             # Nothing was held during the year, so there is nothing to allocate against.
             instance._creation_handled = True
             instance.save(update_fields=["_creation_handled"])
             return
 
-        # Largest weight last, so it can absorb the rounding residual where the fractions
-        # do not divide exactly. Without this the allocations sum to slightly less than the
-        # adjustment -- a few hundredths of a cent each time, but it is cost base going
-        # quietly missing, and it accumulates over every adjustment a holding receives.
-        weighted = sorted(
-            ((parcel, weight(parcel)) for parcel in affected_parcels),
-            key=lambda pair: pair[1],
-        )
-
-        total_adjustment = instance.cost_base_increase_converted
-        amount_field = CostBaseAdjustmentAllocation._meta.get_field('cost_base_increase')
-        allocated = Money(Decimal('0'), total_adjustment.currency)
-
-        for index, (parcel, parcel_weight) in enumerate(weighted):
-            is_last = index == len(weighted) - 1
-            if is_last:
-                # The residual, so the parts sum to the whole exactly.
-                amount = total_adjustment - allocated
-                adjustment_fraction = None
-            else:
-                adjustment_fraction = parcel_weight / total_weighted_sum
-                amount = Money(
-                    convert_to_decimal_field(
-                        total_adjustment.amount * adjustment_fraction, amount_field),
-                    total_adjustment.currency,
-                )
-                allocated += amount
-
+        parcel_set_to_save: set[Parcel] = set()
+        for parcel, amount, adjustment_fraction in parts:
             allocation = CostBaseAdjustmentAllocation.objects.create(
                 account=instance.account,
-                cost_base_increase=amount,
+                cost_base_increase=Money(amount, total_adjustment.currency),
                 parcel=parcel,
                 cost_base_adjustment=instance,
                 activation_date=cutoff_date

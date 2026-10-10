@@ -14,6 +14,11 @@ No behaviour changes other than the fixes below.
 - `uv run dev dump_figures --account NAME --out DIR` writes every figure for a portfolio (parcels,
   allocations, stored calculated values, CGT events and schedules, income) to sorted CSVs, so two
   dumps taken before and after a change can be compared. It changes nothing in the database.
+- `uv run dev check_holdings` works each portfolio's parcels, sale allocations and cost base
+  adjustments out again from the trades, in date order, and lists any figure that differs from what
+  is stored. Decisions already made are kept: which parcels a sale used, and how an adjustment was
+  divided between buys. `--respread` also lists adjustments that today's spread, weighted by days
+  held, would divide differently. The dashboard warns when there is a difference. It changes nothing.
 
 ### Changed
 
