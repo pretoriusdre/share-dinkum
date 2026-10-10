@@ -43,6 +43,9 @@ accept a rebuild.
   refused until `uv run dev check_holdings --rebuild` accepts the difference. `check_holdings` lists
   it first.
 - Each sale allocation records the buy it took units from, and exports carry it.
+- Offline, a price or exchange rate that could not be fetched is not tried again for five minutes.
+  The dashboard and each foreign trade had asked for the same current rate several times over,
+  waiting for each to fail. Refresh prices always tries again.
 - `HOLDINGS_WRITER=signals` in `.env` goes back to building holdings as records are entered.
 - Saving a record works out its stored figures once, rather than evaluating every property twice.
 - Loading an import template takes longer (about 28 s for the 10-year sample, from 18 s), since each

@@ -4271,6 +4271,55 @@ class LiveHoldingsTests(TransactionTestCase):
         self.assertTrue(compare.verify(self.instrument))
 
 
+class FetchFailureMemoryTests(TestCase):
+    """A fetch that failed is not tried again for a few minutes; one that worked always is."""
+
+    def setUp(self):
+        yfinanceinterface.forget_failures()
+        self.addCleanup(yfinanceinterface.forget_failures)
+        offline = MagicMock()
+        offline.history.side_effect = OSError('no network')
+        self.offline = offline
+
+    def test_a_failed_fetch_is_not_tried_again_at_once(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            self.assertIsNone(yfinanceinterface.get_exchange_rate('USD', 'AUD'))
+            self.assertIsNone(yfinanceinterface.get_exchange_rate('USD', 'AUD'))
+        self.assertEqual(self.offline.history.call_count, 1)
+
+    def test_another_fetch_is_still_tried(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            yfinanceinterface.get_exchange_rate('EUR', 'AUD')
+        self.assertEqual(self.offline.history.call_count, 2)
+
+    def test_it_is_tried_again_once_the_memory_lapses_or_is_cleared(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            yfinanceinterface.forget_failures()
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            with patch.object(yfinanceinterface, 'FAILURE_MEMORY', timedelta(0)):
+                yfinanceinterface.get_exchange_rate('USD', 'AUD')
+        self.assertEqual(self.offline.history.call_count, 3)
+
+    def test_a_fetch_that_worked_is_never_held_back(self):
+        history = pd.DataFrame({'Close': [0.65]}, index=[pd.Timestamp('2024-01-02')])
+        ticker = MagicMock()
+        ticker.history.return_value = history
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=ticker) as make:
+            self.assertIsNotNone(yfinanceinterface.get_exchange_rate('USD', 'AUD', date(2024, 1, 2)))
+            self.assertIsNotNone(yfinanceinterface.get_exchange_rate('USD', 'AUD', date(2024, 1, 2)))
+        self.assertEqual(make.call_count, 2)
+
+    def test_refreshing_prices_tries_again(self):
+        account = create_account()
+        with patch.object(yfinanceinterface, 'forget_failures') as forget, \
+             patch.object(Account, 'update_all_exchange_rate_history'), \
+             patch.object(Account, 'update_all_price_history'):
+            account.refresh_market_data()
+        forget.assert_called_once()
+
+
 class FiguresDumpKeyTests(TestCase):
 
     def test_every_model_with_stored_figures_has_a_natural_key(self):

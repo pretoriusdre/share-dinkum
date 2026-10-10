@@ -46,6 +46,8 @@ class TempMediaRunner(DiscoverRunner):
         self._do_cleanups = TransactionTestCase.doCleanups
 
         def do_cleanups(test: TransactionTestCase) -> Any:
+            from share_dinkum_app import yfinanceinterface
+            yfinanceinterface.forget_failures()  # A fetch one test failed is not held back from the next.
             if not getattr(test, '_holdings_checked', False):
                 test._holdings_checked = True  # type: ignore[attr-defined]
                 test.addCleanup(_check_holdings, test)

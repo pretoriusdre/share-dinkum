@@ -334,6 +334,7 @@ class Account(models.Model):
         the rate second leaves every holding valued at the previous rate.
         """
         # Ideally run this as a background task (Celery, Django-Q, etc.)
+        yfinanceinterface.forget_failures()  # Asked for, so try even what failed a moment ago.
         self.update_all_exchange_rate_history()
         self.update_all_price_history()
         self.update_price_history = False

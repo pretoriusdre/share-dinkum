@@ -30,8 +30,6 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
   every categorised gain (`cgt/events.py`, `_attribution_events`).
 - **Trust attribution events use the instrument's currency**, and component currencies are not
   checked, so a statement in another currency would mix currencies in the schedule.
-- **A zero cost base is returned in AUD whatever the account currency** (`add_currencies`), so a
-  zero-cost parcel in a non-AUD account fails on a currency mismatch.
 
 #### Reports
 
@@ -74,16 +72,19 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Cleanup
 
-- `ShareSplit.calculated_affected_parcels` never fills: the property is `affected_parcel_list`.
 - `utils/signal_helpers.disconnect_app_signals` is broken on Django 6 and unused.
 - `excelinterface.ExcelGen.add_table` discards its NaN clean-up (harmless: openpyxl writes NaN as
   a blank), and its default `template_info` names an unrelated Azure DevOps repository.
 
 #### Performance
 
-- `persist_safe_properties` evaluates every attribute in `dir()`, not just safe properties, and
-  runs `model_to_dict` for its debug log on every save.
 - Creating a buy saves its instrument about six times.
+- Loading an import template rebuilds each trade's instrument as it loads (about 28 s for the
+  10-year sample). Rebuilding once per instrument at the end needs allocations that do not name a
+  parcel as they load.
+- Phase 3 step 6 of the holdings refactor: delete the creation signals, `_creation_handled` logic,
+  `STRUCTURAL_FIELDS` for buys, most of `chronology_problem`, the repair helpers and `_save_lock`,
+  once the replay writer has been in use for a while. `HOLDINGS_WRITER=signals` goes with them.
 - The price refresh makes its network calls inside the admin's transaction.
 - `repair_portfolio_data` and a restore recalculate every record in the portfolio; fine at a
   few thousand records.
