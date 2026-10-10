@@ -17,19 +17,17 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Tax figures
 
-- **An asset bought after 1 July 2027 keeps the old 50% when indexation is unavailable** to a
-  resident individual or trust. Under s115-100(aa) and (f) it should get no discount. It only
-  happens when residency is undeclared for part of the time (indexation needs every day), and
-  the history's gaps are now reported, but the figure stays wrong until they are filled
-  (`cgt/events.py`, `_single_post_cutover_event`).
+- **A post-2027 acquisition with undeclared residency days keeps the pre-2027 treatment** (an
+  apportioned discount, no indexation), flagged as a draft (`PENDING_UNDECLARED_INDEXATION`). The
+  right figure depends on what the missing days were: resident gives indexation and no discount;
+  foreign or temporary follows the s115-105 question above. Filling the history settles it.
 - **Not implemented, and not flagged on the schedule:** CGT event I1 on departure without an
   s104-165(2) election, the s855-45 market value cost base on becoming a resident, and the
   pre-CGT exemption. Valuations for the first two can be recorded, but nothing reads them, so
   someone who returns to Australia gets no warning.
-- **Trust gains have no loss-order category from 1 July 2027**, so they absorb losses after
+- **Trust gains have no loss-order category from 1 July 2027** (waiting on which s102-6 category
+  the Bill gives an attributed trust gain), so they absorb losses after
   every categorised gain (`cgt/events.py`, `_attribution_events`).
-- **Trust attribution events use the instrument's currency**, and component currencies are not
-  checked, so a statement in another currency would mix currencies in the schedule.
 
 #### Reports
 

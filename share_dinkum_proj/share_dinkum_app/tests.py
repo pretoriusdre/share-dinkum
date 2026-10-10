@@ -5570,6 +5570,94 @@ class CutoverAdjustmentSliceTests(TransactionTestCase):
         self.assertEqual(post.capital_gain, Money(Decimal('3490.050'), 'AUD'))
 
 
+class PostCutoverUndeclaredGapTests(TransactionTestCase):
+    """An asset bought from 1 July 2027, with residency undeclared for some days held: the
+    figure turns on what those days were, so it is left as it was and marked as not final."""
+
+    def setUp(self):
+        load_test_cpi()
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        enable_2027_regime(self)
+        self.instrument = create_instrument(account=self.account, name='GAP')
+
+    def event_for(self, bought):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=bought,
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=date(2029, 1, 15),
+                            quantity=Decimal('100'), unit_price=Money(Decimal('15'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        return cgt.disposal_events(self.account)[0]
+
+    def test_an_undeclared_gap_is_flagged_and_the_figure_left_as_it_was(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'RESIDENT', date(2028, 4, 1))
+
+        event = self.event_for(date(2027, 9, 1))
+
+        self.assertEqual(event.discount_percentage,
+                         cgt.discount_percentage(date(2027, 9, 1), date(2029, 1, 15), self.account))
+        self.assertGreater(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, cgt.events.METHOD_DISCOUNT)
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.pending_reason, cgt.events.PENDING_UNDECLARED_INDEXATION)
+        self.assertTrue(cgt.build_schedule(self.account, 'FY2028/29').is_draft)
+
+    def test_a_foreign_stay_is_left_for_the_advice_on_s115_105(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'FOREIGN', date(2028, 3, 1), date(2028, 3, 31))
+        declare(self.account, 'RESIDENT', date(2028, 4, 1))
+
+        event = self.event_for(date(2027, 9, 1))
+
+        self.assertNotEqual(event.pending_reason, cgt.events.PENDING_UNDECLARED_INDEXATION)
+        self.assertGreater(event.discount_percentage, Decimal('0'))
+
+    def test_resident_every_day_is_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertIsNotNone(event.indexation_factor)
+        self.assertIsNone(event.pending_reason)
+
+
+class StatementCurrencyTests(TransactionTestCase):
+    """A trust statement not in the portfolio's currency is left out of the gains, and flagged."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='ETF')
+
+    def statement(self, *lines):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2024, 6, 30))
+        for component, amount, currency in lines:
+            AttributionComponent.objects.create(account=self.account, statement=statement, component=component,
+                                                amount=Money(Decimal(amount), currency))
+        return statement
+
+    def test_a_statement_in_the_portfolio_currency_counts(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'AUD'))
+        events = cgt.attribution_events(self.account)
+        self.assertEqual([e.capital_gain for e in events], [Money(Decimal('100'), 'AUD')])
+
+    def test_a_statement_in_another_currency_is_left_out_and_flagged(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'USD'))
+
+        self.assertEqual(cgt.attribution_events(self.account), [])
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        self.assertTrue(schedule.is_draft)
+        self.assertTrue(any('its lines are in USD, not AUD' in w for w in schedule.warnings), schedule.warnings)
+
+    def test_a_statement_in_two_currencies_is_left_out_and_flagged(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'AUD'), ('OTHER_NTAP', '10', 'USD'))
+
+        self.assertEqual(cgt.attribution_events(self.account), [])
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        self.assertTrue(any('its lines are in AUD, USD' in w for w in schedule.warnings), schedule.warnings)
+
+
 class ReturnedExpatIndexationTests(TransactionTestCase):
     """A returned expatriate gets no deemed sale and no discount, only indexation from 2027.
 

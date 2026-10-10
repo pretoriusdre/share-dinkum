@@ -330,6 +330,21 @@ def _statements_disagreeing_on_cost_base(account: 'Account', year_name: str | No
     return disagreeing
 
 
+def _statements_in_another_currency(account: 'Account', year_name: str | None) -> list[tuple['AttributionStatement', str]]:
+    """Statements in the year whose gains are left out because they are not in the portfolio's
+    currency, with why."""
+    from share_dinkum_app.models import AttributionStatement
+
+    found: list[tuple[AttributionStatement, str]] = []
+    for statement in AttributionStatement.objects.filter(account=account, is_active=True).select_related('instrument'):
+        if year_name is not None and getattr(statement.fiscal_year, 'name', None) != year_name:
+            continue
+        problem = events_module.statement_currency_problem(statement, account)
+        if problem is not None:
+            found.append((statement, problem))
+    return found
+
+
 def _unrecorded_losses(account: 'Account', every_year: list[events_module.CGTEvent],
                        year_name: str | None) -> list[tuple[str, Decimal]]:
     """Earlier years that ended in a net capital loss with no carry-forward recorded for them.
@@ -456,6 +471,16 @@ def _warnings(account: 'Account', live_events: list[events_module.CGTEvent],
             'when Australian residency ceased, so s104-165(3) would otherwise deem them '
             'taxable Australian property. Clear the setting to have it worked out per '
             f'parcel instead: {", ".join(overridden)}.')
+
+    foreign_statements = _statements_in_another_currency(account, year_name)
+    if foreign_statements:
+        detail = '; '.join(
+            f'{s.instrument.name} for the year ending {s.financial_year_end_date}: {problem}'
+            for s, problem in sorted(foreign_statements, key=lambda pair: pair[0].instrument.name))
+        warnings.append(
+            f'These annual statements are not in {account.currency}, so their capital gains are '
+            f'left out of this schedule rather than converted at a guessed rate: {detail}. Enter '
+            f'their lines in {account.currency}, as the trust states them.')
 
     disagreeing = _statements_disagreeing_on_cost_base(account, year_name)
     if disagreeing:

@@ -23,6 +23,7 @@ from share_dinkum_app.cgt import (
     tap as tap_module,
 )
 from share_dinkum_app import constants
+from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.constants import (
     CGT_CUTOVER_DATE,
     CGT_GAIN_DEFERRED_NON_RESIDENTIAL,
@@ -317,7 +318,7 @@ def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Acco
     if not applies:
         return [_single_post_cutover_event(
             whole, buy, sell, indexation_eligible, reason,
-            adjustments_by_year(parcel, quantity))]
+            adjustments_by_year(parcel, quantity), account=account, declared=declared)]
 
     market_value, _source = parcel.market_value_at(
         cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
@@ -382,7 +383,9 @@ def _outcome(proceeds: Money, indexed_cost_base: Money, plain_cost_base: Money) 
 
 def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexation_eligible: bool,
                                reason: str | None,
-                               adjustments: list[indexation_module.Adjustment]) -> CGTEvent:
+                               adjustments: list[indexation_module.Adjustment],
+                               account: 'Account | None' = None,
+                               declared: residency_module.Periods | None = None) -> CGTEvent:
     """A post-cutover disposal that s112-155 does not split.
 
     If indexation is available it is mandatory (s110-36(1A)) and removes the discount
@@ -394,6 +397,10 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
     """
     category = _gain_category(sell.instrument)
     if not indexation_eligible:
+        if _undeclared_days_alone_deny_indexation(account, buy, sell, declared):
+            # Undeclared days are missing data, not a residency status, and the figure differs
+            # with what they were. It is left as it was, and marked as not final.
+            return replace(whole, gain_category=category, pending_reason=PENDING_UNDECLARED_INDEXATION)
         return replace(whole, gain_category=category, pending_reason=reason)
 
     net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
@@ -423,6 +430,39 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
         gain_category=category,
         pending_reason=reason,
     )
+
+
+#: Why a post-cutover acquisition's figure is not final while residency has a gap.
+PENDING_UNDECLARED_INDEXATION = (
+    'Bought from 1 July 2027, and residency is not declared for every day held, so this figure '
+    'is not final. Resident on the missing days, the cost base is indexed and there is no '
+    'discount (s114-25, s115-100(aa)); foreign or temporary on them, it follows the treatment of '
+    "a foreign resident's discount after 2027, which is still to be confirmed. Until then it is "
+    'worked out as before. Fill the gap in the residency history to settle it.'
+)
+
+
+def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy', sell: 'Sell',
+                                           declared: residency_module.Periods | None) -> bool:
+    """Whether an individual or trust's post-cutover acquisition misses indexation only for days
+    whose residency is not declared, with none foreign or temporary.
+
+    Then the figure turns on what those days were, which the history does not say. A known
+    foreign or temporary day is the separate question of whether an apportioned discount
+    survives 2027, still waiting on advice.
+    """
+    if buy.date < CGT_CUTOVER_DATE:
+        return False
+    if discount_module.taxpayer_type_of(account) not in (TaxpayerType.INDIVIDUAL, TaxpayerType.TRUST):
+        return False
+    if declared is None:
+        declared = residency_module.periods(account)
+    if not declared:
+        return False
+    counts = residency_module.days_by_status(account, buy.date, sell.date, declared=declared)
+    return (counts.get(None, 0) > 0
+            and counts.get(residency_module.FOREIGN, 0) == 0
+            and counts.get(residency_module.TEMPORARY, 0) == 0)
 
 
 def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money,
@@ -534,10 +574,14 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
     member applies their own discount after losses.
     """
     events: list[CGTEvent] = []
+    if statement_currency_problem(statement, account) is not None:
+        return events  # Left out, and the schedule says why: no rate is guessed.
     event_date = statement.financial_year_end_date
     instrument = statement.instrument
     fiscal_year = statement.fiscal_year
-    zero = Money(Decimal('0'), instrument.currency)
+    # The statement's own currency, which is the portfolio's: checked above.
+    currency = str((account or statement.account).currency)
+    zero = Money(Decimal('0'), currency)
 
     common: dict[str, Any] = dict(
         source=SOURCE_ATTRIBUTION,
@@ -596,7 +640,7 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
         discounted = statement.component_total(component)
         if discounted:
             attributed(
-                _money(Money(discounted * 2, instrument.currency)), status, METHOD_DISCOUNT,
+                _money(Money(discounted * 2, currency)), status, METHOD_DISCOUNT,
                 # The member applies their own discount percentage, not the trust's. For a
                 # foreign resident member that is an apportioned one, and the trust has no
                 # way of knowing it -- which is exactly why the statement's figure is grossed
@@ -607,10 +651,26 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
         other = statement.component_total(component)
         if other:
             attributed(
-                _money(Money(other, instrument.currency)), status, METHOD_OTHER,
+                _money(Money(other, currency)), status, METHOD_OTHER,
                 Decimal('0'))
 
     return events
+
+
+def statement_currency_problem(statement: 'AttributionStatement', account: 'Account | None' = None) -> str | None:
+    """Why a statement's gains cannot be counted in the portfolio's currency, or None.
+
+    Australian trusts state amounts in AUD. A statement entered in another currency, or in
+    several, is left out of the gains rather than converted at a rate the law does not fix.
+    """
+    wanted = str((account or statement.account).currency)
+    currencies = sorted({str(code) for code in statement.components.filter(is_active=True).values_list(
+        'amount_currency', flat=True)})
+    if len(currencies) > 1:
+        return f'its lines are in {", ".join(currencies)}'
+    if currencies and currencies[0] != wanted:
+        return f'its lines are in {currencies[0]}, not {wanted}'
+    return None
 
 
 def _attributed_discount_percentage(account: 'Account | None', declared: residency_module.Periods | None) -> Decimal:

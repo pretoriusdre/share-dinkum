@@ -60,6 +60,14 @@ accept a rebuild.
   dated before the split was accepted, and the split could be deleted without being reversed.
   Figures were not affected. For a portfolio already restored, `uv run dev repair_portfolio_data`
   restores the links, and the dashboard says when it is needed.
+- With the 2027 changes modelled, a sale of an asset bought from 1 July 2027, with residency
+  undeclared for some of the days it was held, was reported as final. Its figure turns on what
+  those days were (resident: indexed, no discount; foreign or temporary: still to be confirmed), so
+  the schedule now marks it as a draft and says so. The figure is unchanged.
+- A managed fund's annual statement with lines in another currency than the portfolio's, or in
+  several, was counted as if in the instrument's currency, and a USD one stopped the capital gains
+  schedule. Its gains are now left out, and the schedule names the statement, as the income report
+  already did.
 - In a portfolio whose currency is not AUD, a parcel with a zero cost base stored it as AUD. A
   foreign dividend of zero could not be converted. Neither affects an AUD portfolio.
 
