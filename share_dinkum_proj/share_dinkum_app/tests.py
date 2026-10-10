@@ -3799,6 +3799,23 @@ class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
                 self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
                 plan = apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
                 self.assertTrue(plan.empty, plan.summary())
+
+                # Each instrument is checked as the restore finishes, and the restored portfolio
+                # takes new trades, back-dated ones included, under the replay writer.
+                instruments = Instrument.objects.filter(account=account, buy__isnull=False).distinct()
+                self.assertFalse(instruments.filter(holdings_differ__isnull=True).exists())
+                held = max(instruments, key=lambda instrument: instrument.quantity_held)
+                first = Buy.objects.filter(instrument=held).order_by('date').first()
+                with figures_dump.offline(), patch.object(
+                        yfinanceinterface, 'get_exchange_rate', return_value=Decimal('1.5')):
+                    Buy.objects.create(account=account, instrument=held, date=first.date,
+                                       quantity=Decimal('3'), unit_price=first.unit_price,
+                                       total_brokerage=Money(Decimal('0'), first.unit_price.currency))
+                    Sell.objects.create(account=account, instrument=held, date=date.fromisoformat(self.AS_OF),
+                                        quantity=Decimal('2'), unit_price=first.unit_price,
+                                        total_brokerage=Money(Decimal('0'), first.unit_price.currency),
+                                        strategy='FIFO')
+                self.assertEqual(compare.check(account).count, 0)
         self.assertEqual(len(list(TEST_FIXTURES.glob('export_*.xlsx'))), 2)
 
     def test_the_command_writes_a_csv_per_table(self):
