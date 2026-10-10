@@ -961,6 +961,11 @@ class Instrument(BaseModel):
 
         super().save(*args, **kwargs)
 
+    holdings_differ = models.BooleanField(null=True, blank=True, default=None, editable=False,
+        help_text='Whether the parcels stored for this instrument give different figures from '
+                  'those worked out again from its trades. Blank until checked. Set by the app; '
+                  'do not edit.')
+
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False,
         help_text='Units currently held, across all unsold parcels. Set by the app; do not '
                   'edit.')
@@ -1755,6 +1760,11 @@ class SellAllocation(BaseModel):
         help_text='The sale the units are allocated to.')
     quantity = models.DecimalField(max_digits=16, decimal_places=4,
         help_text='Units taken from the parcel by the sale.')
+    #: The decision itself, kept apart from the parcel: a rebuild can reshape the parcel tree,
+    #: but the sale still took these units from this buy.
+    buy = models.ForeignKey(Buy, related_name='sold_by', on_delete=models.PROTECT, null=True, blank=True,
+        editable=False,
+        help_text='The buy the units were taken from. Set by the app from the parcel; do not edit.')
 
     STRUCTURAL_FIELDS: tuple[str, ...] = ('parcel', 'sell', 'quantity')
 
@@ -1852,6 +1862,11 @@ class SellAllocation(BaseModel):
             self.description = f'{self.sell.date} {self.sell.instrument.name} | {self.quantity}'
         else:
             self.description = 'INACTIVE'
+        if self.parcel_id is not None and (self.buy_id is None or self._state.adding):
+            self.buy_id = self.parcel.buy_id
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'buy' not in update_fields:
+                kwargs['update_fields'] = [*update_fields, 'buy']
         super().save(*args, **kwargs)
 
 

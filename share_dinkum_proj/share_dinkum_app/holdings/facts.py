@@ -20,7 +20,7 @@ from share_dinkum_app.holdings import state, strategies
 from share_dinkum_app.holdings.state import Lineage
 
 if TYPE_CHECKING:
-    from share_dinkum_app.models import Account
+    from share_dinkum_app.models import Account, Instrument
 
 
 @dataclass(frozen=True)
@@ -113,37 +113,41 @@ def _amount(money: Money | None) -> Decimal | None:
     return None if money is None else money.amount
 
 
-def load(account: 'Account') -> Facts:
-    """Every fact for `account`."""
+def load(account: 'Account', instrument: 'Instrument | None' = None) -> Facts:
+    """Every fact for `account`, or for one of its instruments."""
     from share_dinkum_app import cgt
     from share_dinkum_app.models import (
         Buy, CostBaseAdjustment, Sell, SellAllocation, ShareSplit,
     )
 
+    def of(queryset: Any, path: str = 'instrument') -> Any:
+        queryset = queryset.filter(account=account)
+        return queryset if instrument is None else queryset.filter(**{path: instrument})
+
     currency = str(account.currency)
     fiscal_year_type = account.fiscal_year_type
 
     facts = Facts(currency=currency)
-    for buy in Buy.objects.filter(account=account).select_related('instrument', 'exchange_rate'):
+    for buy in of(Buy.objects).select_related('instrument', 'exchange_rate'):
         facts.buys.append(BuyFact(
             id=buy.pk, instrument=buy.instrument.name, date=buy.date, quantity=buy.quantity,
             legacy_id=buy.legacy_id, unit_price=_amount(buy.unit_price_converted),
             unit_brokerage=_amount(buy.unit_brokerage_converted)))
-    for sell in Sell.objects.filter(account=account).select_related('instrument', 'exchange_rate'):
+    for sell in of(Sell.objects).select_related('instrument', 'exchange_rate'):
         facts.sales.append(SaleFact(
             id=sell.pk, instrument=sell.instrument.name, date=sell.date, quantity=sell.quantity,
             strategy=sell.strategy, legacy_id=sell.legacy_id, unit_proceeds=_amount(sell.unit_proceeds)))
-    for allocation in SellAllocation.objects.filter(account=account, is_active=True).values(
-            'id', 'sell_id', 'parcel__buy_id', 'quantity'):
+    for allocation in of(SellAllocation.objects, 'sell__instrument').filter(is_active=True).values(
+            'id', 'sell_id', 'buy_id', 'parcel__buy_id', 'quantity'):
         facts.pinned_sales.append(PinnedSale(
-            sale_id=allocation['sell_id'], buy_id=allocation['parcel__buy_id'],
+            sale_id=allocation['sell_id'], buy_id=allocation['buy_id'] or allocation['parcel__buy_id'],
             quantity=allocation['quantity'], order=str(allocation['id'])))
     # In id order, as the signals read them, so ratios multiply in the same order.
-    for split in ShareSplit.objects.filter(account=account).select_related('instrument').order_by('id'):
+    for split in of(ShareSplit.objects).select_related('instrument').order_by('id'):
         facts.splits.append(SplitFact(
             id=split.pk, instrument=split.instrument.name, date=split.date, ratio=split.ratio,
             is_active=split.is_active))
-    for adjustment in CostBaseAdjustment.objects.filter(account=account).select_related('instrument', 'exchange_rate'):
+    for adjustment in of(CostBaseAdjustment.objects).select_related('instrument', 'exchange_rate'):
         end = adjustment.financial_year_end_date
         facts.adjustments.append(AdjustmentFact(
             id=adjustment.pk, instrument=adjustment.instrument.name,
@@ -153,7 +157,7 @@ def load(account: 'Account') -> Facts:
             spread_at_entry=adjustment._creation_handled))
     # Summed here rather than in SQL, which rounds a sum to the column's places, so the per-buy
     # totals agree exactly with the per-parcel amounts they are made of.
-    holding = state.stored(account)
+    holding = state.stored(account, instrument)
     lineages = holding.lineages()
     for part in holding.adjustments:
         if part.active:

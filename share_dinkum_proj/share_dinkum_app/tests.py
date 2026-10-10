@@ -4002,6 +4002,64 @@ class HoldingsReplayTests(TransactionTestCase):
         self.assertEqual(sale.calculated_unallocated_quantity, Decimal('0'))
         self.assertEqual(self.compare.check(account).count, 0)
 
+    def test_each_allocation_records_the_buy_it_took_from(self):
+        for allocation in SellAllocation.objects.filter(account=self.account):
+            self.assertEqual(allocation.buy_id, allocation.parcel.buy_id)
+        self.assertTrue(SellAllocation.objects.filter(account=self.account).exists())
+
+    def test_the_migration_records_the_buy_of_existing_allocations(self):
+        import importlib
+        migration = importlib.import_module('share_dinkum_app.migrations.0023_sell_allocation_buy_and_holdings_differ')
+        SellAllocation.objects.update(buy=None)
+
+        migration.record_the_buy_each_sale_used(apps, None)
+
+        for allocation in SellAllocation.objects.all():
+            self.assertEqual(allocation.buy_id, allocation.parcel.buy_id)
+
+    def test_a_rebuild_that_reshapes_parcels_keeps_every_allocation_id(self):
+        """A sale entered before an earlier-dated one was split from parcels made after it.
+        A rebuild orders them by date, re-pointing the allocations rather than replacing them,
+        so a snapshot taken before still matches its rows."""
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.account.fiscal_year_type.classify_date(date(2024, 6, 30))[0])
+        Sell.objects.create(
+            account=self.account, instrument=self.data['instrument'], date=date(2024, 6, 30),
+            quantity=Decimal('100'), unit_price=Money(Decimal('9.00'), 'AUD'),
+            total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO')
+        ids = set(SellAllocation.objects.filter(account=self.account).values_list('id', flat=True))
+        before = figures_dump.dump(self.account)
+        self.assertFalse(self.rebuild_plan().empty, 'the scenario should need reshaping')
+
+        self.rebuild()
+
+        self.assertEqual(set(SellAllocation.objects.filter(account=self.account).values_list('id', flat=True)), ids)
+        self.assertTrue(self.rebuild_plan().empty)
+        self.assertEqual(self.compare.check(self.account).count, 0)
+        # The adjustment is divided again in date order, so the last place of a cost base can
+        # round the other way; nothing moves by as much as a cent.
+        after = figures_dump.dump(self.account)
+        for table in ('cgt_events', 'cgt_schedule', 'income_figures'):
+            self.assertEqual(len(before[table]), len(after[table]), table)
+            for old_row, new_row in zip(before[table], after[table]):
+                for old, new in zip(old_row, new_row):
+                    if old != new:
+                        self.assertLess(abs(Decimal(old.split()[0]) - Decimal(new.split()[0])), Decimal('0.01'),
+                                        f'{table}: {old} -> {new}')
+        self.assertTrue(all(row.sell_allocation_id in ids for row in snapshot.captured_rows.all()))
+
+    def test_verify_records_whether_an_instrument_differs(self):
+        instrument = self.data['instrument']
+        self.assertIsNone(instrument.holdings_differ, 'unchecked until verified')
+        self.assertFalse(self.compare.verify(instrument))
+        self.assertIs(Instrument.objects.get(pk=instrument.pk).holdings_differ, False)
+
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        self.assertTrue(self.compare.verify(instrument))
+        self.assertIs(Instrument.objects.get(pk=instrument.pk).holdings_differ, True)
+        self.assertEqual(self.compare.check(self.account, instrument).count, 1)
+    test_verify_records_whether_an_instrument_differs.HOLDINGS_MAY_DIFFER = True
+
     @holdings_may_differ
     def test_the_dashboard_check_and_the_command_report_it(self):
         self.assertNotIn('holdings_differ', {f.key for f in data_checks.run(self.account)})

@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from share_dinkum_app.models import Account
+    from share_dinkum_app.models import Account, Instrument
 
 #: (buy id, (date made, place), (date made, place), ...)
 Lineage = tuple[Any, ...]
@@ -91,23 +91,27 @@ class Holding:
         return result
 
 
-def stored(account: 'Account') -> Holding:
-    """The holding as stored."""
+def stored(account: 'Account', instrument: 'Instrument | None' = None) -> Holding:
+    """The holding as stored, for the account or one of its instruments."""
     from share_dinkum_app.models import CostBaseAdjustmentAllocation, Parcel, SellAllocation
 
+    def of(queryset: Any, path: str) -> Any:
+        queryset = queryset.filter(account=account)
+        return queryset if instrument is None else queryset.filter(**{path: instrument})
+
     holding = Holding()
-    for row in Parcel.objects.filter(account=account).values(
+    for row in of(Parcel.objects, 'buy__instrument').values(
             'id', 'buy_id', 'parent_parcel_id', 'activation_date', 'deactivation_date', 'parcel_quantity',
             'cumulative_split_multiplier', 'sale_date'):
         holding.parcels[row['id']] = ParcelRow(
             row['id'], row['buy_id'], row['parent_parcel_id'], row['activation_date'], row['deactivation_date'],
             row['parcel_quantity'], row['cumulative_split_multiplier'], row['sale_date'])
     holding.sales = [SaleRow(row['sell_id'], row['parcel_id'], row['quantity'], ref=row['id'])
-                     for row in SellAllocation.objects.filter(account=account, is_active=True).values(
+                     for row in of(SellAllocation.objects, 'sell__instrument').filter(is_active=True).values(
                          'id', 'sell_id', 'parcel_id', 'quantity')]
     holding.adjustments = [
         AdjustmentRow(row['cost_base_adjustment_id'], row['parcel_id'], row['cost_base_increase'],
                       row['deactivation_date'] is None, row['activation_date'], row['deactivation_date'], row['id'])
-        for row in CostBaseAdjustmentAllocation.objects.filter(account=account).values(
+        for row in of(CostBaseAdjustmentAllocation.objects, 'cost_base_adjustment__instrument').values(
             'id', 'cost_base_adjustment_id', 'parcel_id', 'cost_base_increase', 'deactivation_date', 'activation_date')]
     return holding

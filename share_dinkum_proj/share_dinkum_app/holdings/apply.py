@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from share_dinkum_app.holdings.state import AdjustmentRow, Holding, Lineage, SaleRow
 
 if TYPE_CHECKING:
-    from share_dinkum_app.models import Account
+    from share_dinkum_app.models import Account, Instrument
 
 #: The parcel fields a rebuild sets.
 PARCEL_FIELDS = ('parent', 'activation', 'deactivation', 'quantity', 'multiplier', 'sale_date')
@@ -47,8 +47,8 @@ class Plan:
     delete_parcels: list[Any] = field(default_factory=list)
     #: (sale id, parcel lineage, quantity) to add.
     create_sales: list[tuple[Any, Lineage, Decimal]] = field(default_factory=list)
-    #: stored ref -> new quantity.
-    update_sales: dict[Any, Decimal] = field(default_factory=dict)
+    #: stored ref -> the fields that change: 'parcel' (a lineage) and 'quantity'.
+    update_sales: dict[Any, dict[str, Any]] = field(default_factory=dict)
     delete_sales: list[Any] = field(default_factory=list)
     create_parts: list[NewPart] = field(default_factory=list)
     #: stored ref -> the fields that change ('amount', 'deactivation').
@@ -106,22 +106,33 @@ def _plan_parcels(result: Plan, stored: Holding, replayed: Holding,
 
 def _plan_sales(result: Plan, stored: Holding, replayed: Holding,
                 stored_lineages: dict[Any, Lineage], replayed_lineages: dict[Any, Lineage]) -> None:
-    have: dict[tuple[Any, Lineage], list[SaleRow]] = defaultdict(list)
-    for row in stored.sales:
-        have[(row.sale_id, stored_lineages[row.parcel_ref])].append(row)
-    want: dict[tuple[Any, Lineage], Decimal] = defaultdict(Decimal)
+    """Allocations are matched on (sale, buy), not on the parcel: that is the decision, and a
+    rebuild that reshapes the parcel tree re-points an allocation rather than replacing it, so
+    its id survives. Lodged snapshots match their rows on that id."""
+    have: dict[tuple[Any, Any], list[SaleRow]] = defaultdict(list)
+    for row in sorted(stored.sales, key=lambda row: row.ref):
+        have[(row.sale_id, stored.parcels[row.parcel_ref].buy_id)].append(row)
+    want: dict[tuple[Any, Any], list[tuple[Lineage, Decimal]]] = defaultdict(list)
     for row in replayed.sales:
-        want[(row.sale_id, replayed_lineages[row.parcel_ref])] += row.quantity
+        want[(row.sale_id, replayed.parcels[row.parcel_ref].buy_id)].append(
+            (replayed_lineages[row.parcel_ref], row.quantity))
 
-    for key, quantity in want.items():
+    for key, wanted in want.items():
         rows = have.pop(key, [])
-        if not rows:
-            result.create_sales.append((key[0], key[1], quantity))
-            continue
-        others = sum((row.quantity for row in rows[1:]), Decimal('0'))
-        if rows[0].quantity + others != quantity:
-            result.update_sales[rows[0].ref] = quantity - others
-    result.delete_sales = [row.ref for rows in have.values() for row in rows]
+        for index, (lineage, quantity) in enumerate(wanted):
+            if index >= len(rows):
+                result.create_sales.append((key[0], lineage, quantity))
+                continue
+            row = rows[index]
+            changes: dict[str, Any] = {}
+            if stored_lineages[row.parcel_ref] != lineage:
+                changes['parcel'] = lineage
+            if row.quantity != quantity:
+                changes['quantity'] = quantity
+            if changes:
+                result.update_sales[row.ref] = changes
+        result.delete_sales += [row.ref for row in rows[len(wanted):]]
+    result.delete_sales += [row.ref for rows in have.values() for row in rows]
 
 
 def _plan_parts(result: Plan, stored: Holding, replayed: Holding,
@@ -239,10 +250,17 @@ def write(account: 'Account', plan: Plan) -> None:
             SellAllocation(account=account, sell_id=sale_id, parcel_id=refs[lineage], quantity=quantity,
                            _creation_handled=True).save()
             buys.add(lineage[0])
-        for ref, quantity in plan.update_sales.items():
-            # Quantity is structural, so a save refuses it; the rebuild is what works it out.
-            SellAllocation.objects.filter(pk=ref).update(quantity=quantity)
+        for ref, changes in plan.update_sales.items():
+            # Parcel and quantity are structural, so a save refuses them; the rebuild is what
+            # works them out now.
+            columns: dict[str, Any] = {}
+            if 'parcel' in changes:
+                columns['parcel_id'] = refs[changes['parcel']]
+            if 'quantity' in changes:
+                columns['quantity'] = changes['quantity']
+            SellAllocation.objects.filter(pk=ref).update(**columns)
             SellAllocation.objects.get(pk=ref).save()
+            buys.add(SellAllocation.objects.filter(pk=ref).values_list('buy_id', flat=True).first())
 
         for part in plan.create_parts:
             CostBaseAdjustmentAllocation(
@@ -277,10 +295,11 @@ def write(account: 'Account', plan: Plan) -> None:
             instrument.save()
 
 
-def rebuild(account: 'Account') -> Plan:
-    """Work `account`'s holding out again and write it. Returns what was changed."""
+def rebuild(account: 'Account', instrument: 'Instrument | None' = None) -> Plan:
+    """Work `account`'s holding, or one instrument's, out again and write it. Returns what was
+    changed."""
     from share_dinkum_app.holdings import facts, replay, state
 
-    result = plan(state.stored(account), replay.replay(facts.load(account)).holding)
+    result = plan(state.stored(account, instrument), replay.replay(facts.load(account, instrument)).holding)
     write(account, result)
     return result

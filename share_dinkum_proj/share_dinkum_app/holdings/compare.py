@@ -19,7 +19,7 @@ from share_dinkum_app.holdings.replay import Replayed, replay
 from share_dinkum_app.holdings.state import TOLERANCE, Holding, stored
 
 if TYPE_CHECKING:
-    from share_dinkum_app.models import Account
+    from share_dinkum_app.models import Account, Instrument
 
 
 
@@ -164,7 +164,20 @@ def _show(value: Any) -> str:
     return str(value)
 
 
-def check(account: 'Account') -> Report:
-    """Replay `account`'s holding and set it against what is stored. Writes nothing."""
-    facts = facts_module.load(account)
-    return compare(facts, stored(account), replay(facts))
+def check(account: 'Account', instrument: 'Instrument | None' = None) -> Report:
+    """Replay `account`'s holding, or one instrument's, and set it against what is stored.
+
+    Writes nothing.
+    """
+    facts = facts_module.load(account, instrument)
+    return compare(facts, stored(account, instrument), replay(facts))
+
+
+def verify(instrument: 'Instrument') -> bool:
+    """Check one instrument and record on it whether any figure differs. Returns that."""
+    from share_dinkum_app.models import Instrument
+
+    differ = check(instrument.account, instrument).count > 0
+    Instrument.objects.filter(pk=instrument.pk).update(holdings_differ=differ)
+    instrument.holdings_differ = differ
+    return differ
