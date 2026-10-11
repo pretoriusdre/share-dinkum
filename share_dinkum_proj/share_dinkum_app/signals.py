@@ -411,17 +411,6 @@ def update_instrument_position(sender: type[Model], instance: Buy | Sell, **kwar
     logger.debug('...done')
 
 
-@receiver(post_save, sender=Account)
-def update_account_price_history(sender: type[Model], instance: Account, created: bool, **kwargs: Any) -> None:
-
-    assert isinstance(instance, Account)
-
-    # Deprecated: the dashboard calls `refresh_market_data` directly. Kept for anyone who
-    # ticks the box in the admin.
-    if instance.update_price_history:
-        instance.refresh_market_data()
-
-
 @receiver(post_save, sender=DataExport)
 def generate_export_file(sender: type[Model], instance: DataExport, created: bool, **kwargs: Any) -> None:
     """Write the file for a new export: the admin's add button, and scheduled exports."""

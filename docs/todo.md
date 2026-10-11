@@ -1,7 +1,6 @@
 ### TODO
 
-Left over from the September 2026 review of the signal and processing logic and the October 2026
-bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what they did not.
+Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 
 #### Waiting on advice
 
@@ -49,7 +48,6 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 - Losses on unclassified instruments have no row in the return layout (`reports.py`).
 - The all-years schedule (`build(account, None)`) counts a recorded carry-forward twice: as a
   prior-year loss, and again through its own year's events. Nothing calls it with `None` yet.
-- Rounding: cost base components are rounded separately and can miss the cost base by 0.0001.
 
 #### Robustness
 
@@ -70,9 +68,9 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Cleanup
 
-- `utils/signal_helpers.disconnect_app_signals` is broken on Django 6 and unused.
-- `excelinterface.ExcelGen.add_table` discards its NaN clean-up (harmless: openpyxl writes NaN as
-  a blank), and its default `template_info` names an unrelated Azure DevOps repository.
+- Phase 3 step 6 of the holdings refactor: delete the creation signals, `_creation_handled` logic,
+  `STRUCTURAL_FIELDS` for buys, most of `chronology_problem`, the repair helpers and `_save_lock`,
+  once the replay writer has been in use for a while. `HOLDINGS_WRITER=signals` goes with them.
 
 #### Performance
 
@@ -80,9 +78,5 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 - Loading an import template rebuilds each trade's instrument as it loads (about 28 s for the
   10-year sample). Rebuilding once per instrument at the end needs allocations that do not name a
   parcel as they load.
-- Phase 3 step 6 of the holdings refactor: delete the creation signals, `_creation_handled` logic,
-  `STRUCTURAL_FIELDS` for buys, most of `chronology_problem`, the repair helpers and `_save_lock`,
-  once the replay writer has been in use for a while. `HOLDINGS_WRITER=signals` goes with them.
-- The price refresh makes its network calls inside the admin's transaction.
 - `repair_portfolio_data` and a restore recalculate every record in the portfolio; fine at a
   few thousand records.

@@ -211,9 +211,6 @@ class Account(models.Model):
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT,
         help_text='The fiscal year pattern reports use. The Australian Tax Year runs July '
                   'to June.')
-    update_price_history = models.BooleanField(default=False,
-        help_text='Whether the app downloads price and exchange rate history for this '
-                  'portfolio.')
 
 
     #: Sets the CGT discount: half for an individual or trust, a third for a complying super
@@ -337,8 +334,7 @@ class Account(models.Model):
         yfinanceinterface.forget_failures()  # Asked for, so try even what failed a moment ago.
         self.update_all_exchange_rate_history()
         self.update_all_price_history()
-        self.update_price_history = False
-        self.save(update_fields=['update_price_history'])  # save() adds the portfolio value
+        self.save(update_fields=self.CALCULATED_FIELDS)
 
     CALCULATED_FIELDS = frozenset({
         'calculated_portfolio_value_converted',
@@ -350,8 +346,7 @@ class Account(models.Model):
         self.calculated_portfolio_value_converted_currency = self.currency
 
         # Every save recomputes the portfolio value, so a partial save has to write it too.
-        # Without this, a caller narrowing update_fields to its own field (as the price refresh
-        # signal does) silently discards the freshly calculated total and leaves the stored
+        # Without this, a caller narrowing update_fields to its own field silently discards the freshly calculated total and leaves the stored
         # figure behind whatever the instruments now say.
         update_fields = kwargs.get('update_fields')
         if update_fields is not None:

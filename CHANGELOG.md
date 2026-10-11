@@ -6,70 +6,51 @@ To upgrade, stop the server and run `uv run update`.
 
 ## Unreleased
 
-Holdings are now worked out from your trades in date order, rather than built up as each record
-is entered, so trades can be entered and corrected in any order. Decisions already made, such as
-which parcels a sale used, are kept. Your figures do not change: on upgrade, each instrument is
-checked against its trades before it is next changed, and one that differs is left alone until you
-accept a rebuild.
+Release 0.5.0 changes the way that parcels are built from trades. Previously, each 'buy' trade
+created a parcel at the moment of entry. Things which act on or attach to those parcels, like
+sells, splits, and cost base allocations, used those existing parcels, so needed to be added
+afterwards. But what if you made a mistake in one of your old buy entries? That could affect all
+of the subsequent calculations in a way which is difficult to fix. This release solves that type
+of scenario. Every time you add, delete or update a trade, everything which is derived from it is
+recalculated, and the difference is applied. Upgrading does not change your existing figures.
 
 ### Added
 
-- `uv run dev dump_figures --account NAME --out DIR` writes every figure for a portfolio (parcels,
-  allocations, stored calculated values, CGT events and schedules, income) to sorted CSVs, so two
-  dumps taken before and after a change can be compared. It changes nothing in the database.
-- `uv run dev check_holdings` works each portfolio's parcels, sale allocations and cost base
-  adjustments out again from the trades, in date order, and lists any figure that differs from what
-  is stored. Decisions already made are kept: which parcels a sale used, and how an adjustment was
-  divided between buys. `--respread` also lists adjustments that today's spread, weighted by days
-  held, would divide differently. The dashboard warns when there is a difference. It changes nothing.
+- `uv run dev check_holdings` works each portfolio's parcels and allocations out again from its
+  trades and lists any figure that differs from what is stored. `--rebuild` accepts the difference
+  and rewrites them. `--respread` lists older cost base adjustments that today's spread would divide
+  differently. The dashboard warns when there is a difference.
 
 ### Changed
 
-- **Holdings follow the trades.** Saving or deleting a buy, sale, share split, cost base adjustment or
-  allocation works the instrument's parcels out again from its trades, in date order, in the same
-  save. So these are now accepted:
+- **Parcels are recalculated from trades.** Saving or deleting a buy, sale, share split, cost base
+  adjustment or allocation works the instrument's parcels out again from its trades, in date order,
+  in the same save. So these are now accepted:
   - a buy or sale dated before a share split already entered;
-  - a buy or sale dated inside a year whose cost base adjustment was already spread. The spread is
-    kept as it was, and the admin says so; delete the adjustment and enter it again to spread it
-    over the holding as it now stands;
+  - a buy or sale dated before a cost base adjustment already spread. The spread is kept as it was,
+    and the admin says so; delete the adjustment and enter it again to spread it over the holding
+    as it now stands;
   - a corrected date, quantity or instrument on a buy. A correction a sale already made cannot
     follow (fewer units than were sold, say) is refused.
 
-  A share split dated before a sale already allocated is still refused. Parcels keep their ids,
-  and sale allocations keep theirs, so lodged snapshots still match.
+  A share split dated before a sale already allocated is still refused. Lodged CGT snapshots still
+  match.
 - Deleting an allocation of a FIFO, LIFO or minimum-CGT sale makes the sale MANUAL, so it is not
   allocated again straight away.
 - If an instrument's stored parcels give different figures from its trades, changes to it are
-  refused until `uv run dev check_holdings --rebuild` accepts the difference. `check_holdings` lists
-  it first.
+  refused until `uv run dev check_holdings --rebuild` accepts the difference.
 - Each sale allocation records the buy it took units from, and exports carry it.
 - Offline, a price or exchange rate that could not be fetched is not tried again for five minutes.
-  The dashboard and each foreign trade had asked for the same current rate several times over,
-  waiting for each to fail. Refresh prices always tries again.
-- `HOLDINGS_WRITER=signals` in `.env` goes back to building holdings as records are entered.
-- Saving a record works out its stored figures once, rather than evaluating every property twice.
-- Loading an import template takes longer (about 28 s for the 10-year sample, from 18 s), since each
-  trade rebuilds its instrument.
-- A share split's `calculated_affected_parcels` column, which was always blank, now lists the parcels
-  the split created, and a buy's `calculated_related_parcels` includes their cost base adjustments.
+  Refresh prices always tries again.
+- The portfolio's "Update price history" tick-box is removed. Use Refresh prices on the dashboard.
 - `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
 
 ### Fixed
 
-- A share split restored from an export keeps its link to the parcels it created. Without it, a sale
-  dated before the split was accepted, and the split could be deleted without being reversed.
-  Figures were not affected. For a portfolio already restored, `uv run dev repair_portfolio_data`
-  restores the links, and the dashboard says when it is needed.
-- With the 2027 changes modelled, a sale of an asset bought from 1 July 2027, with residency
-  undeclared for some of the days it was held, was reported as final. Its figure turns on what
-  those days were (resident: indexed, no discount; foreign or temporary: still to be confirmed), so
-  the schedule now marks it as a draft and says so. The figure is unchanged.
-- A managed fund's annual statement with lines in another currency than the portfolio's, or in
-  several, was counted as if in the instrument's currency, and a USD one stopped the capital gains
-  schedule. Its gains are now left out, and the schedule names the statement, as the income report
-  already did.
-- In a portfolio whose currency is not AUD, a parcel with a zero cost base stored it as AUD. A
-  foreign dividend of zero could not be converted. Neither affects an AUD portfolio.
+- A managed fund's annual statement entered in a currency other than the portfolio's is now left
+  out of the capital gains schedule and named, rather than counted wrongly.
+- In a portfolio whose currency is not AUD, a zero amount (a parcel bought for nothing, or a
+  dividend of nothing) was stored as AUD and could not be converted.
 
 ## 0.4.0 - 2026-10-04
 

@@ -6729,7 +6729,17 @@ class RefreshPricesButtonTests(TransactionTestCase):
         # A state changing action has to be a form, not a link.
         self.assertIn('csrfmiddlewaretoken', body)
 
-    def test_it_triggers_the_same_refresh_the_account_field_did(self):
+    def test_the_refresh_stores_the_portfolio_value(self):
+        Account.objects.filter(pk=self.account.pk).update(calculated_portfolio_value_converted=-1)
+        with patch.object(Account, 'update_all_price_history'), \
+             patch.object(Account, 'update_all_exchange_rate_history'):
+            self.client.post(self.url)
+
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.calculated_portfolio_value_converted.amount,
+                         self.account.portfolio_value_converted)
+
+    def test_it_triggers_the_refresh(self):
         with patch.object(
                 Account, 'update_all_price_history') as prices, patch.object(
                 Account, 'update_all_exchange_rate_history') as rates:
@@ -6750,27 +6760,6 @@ class RefreshPricesButtonTests(TransactionTestCase):
             self.client.post(self.url)
 
         self.assertEqual(calls, ['rates', 'prices'])
-
-    def test_the_flag_is_left_clear_afterwards(self):
-        """update_price_history is cleared after the refresh."""
-        with patch.object(Account, 'update_all_price_history'), \
-             patch.object(Account, 'update_all_exchange_rate_history'):
-            self.client.post(self.url)
-
-        self.account.refresh_from_db()
-        self.assertFalse(self.account.update_price_history)
-
-    def test_ticking_the_old_field_still_refreshes(self):
-        """`update_price_history` is deprecated, but saving it ticked still refreshes, once."""
-        with patch.object(Account, 'update_all_price_history') as prices, \
-             patch.object(Account, 'update_all_exchange_rate_history') as rates:
-            self.account.update_price_history = True
-            self.account.save()
-
-        prices.assert_called_once()
-        rates.assert_called_once()
-        self.account.refresh_from_db()
-        self.assertFalse(self.account.update_price_history)
 
     def test_a_get_does_not_refresh_anything(self):
         """A GET does not refresh anything."""
