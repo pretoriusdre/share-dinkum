@@ -51,6 +51,12 @@ recalculated, and the difference is applied. Upgrading does not change your exis
   out of the capital gains schedule and named, rather than counted wrongly.
 - In a portfolio whose currency is not AUD, a zero amount (a parcel bought for nothing, or a
   dividend of nothing) was stored as AUD and could not be converted.
+- With the 2027 changes modelled, the part of a sale after 1 July 2027 that is not indexed showed
+  an indexation factor of 1.000, it is now blank. Where it is not indexed only because some
+  residency days are undeclared, it is marked as not final with a warning.
+- The CGT report's return layout had no line for a loss on an unclassified instrument, so
+  the loss lines fell short of the total. Added the line.
+- A portfolio name with a double quote in it broke the CGT and income report download's filename.
 
 ## 0.4.0 - 2026-10-04
 

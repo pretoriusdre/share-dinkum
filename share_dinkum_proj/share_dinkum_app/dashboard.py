@@ -27,6 +27,7 @@ from django.urls import reverse
 # status line is built here it has to localise them itself, or a date that read
 # "Aug. 28, 2026" on the page would silently become an ISO string.
 from django.utils.formats import localize
+from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_POST
 
 from djmoney.money import Money
@@ -792,7 +793,8 @@ def _workbook_download(request: HttpRequest, build: Callable[[Account, str], Any
     response = HttpResponse(
         payload,
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    # Built by Django, which escapes a quote in the portfolio name and encodes non-ASCII.
+    response['Content-Disposition'] = content_disposition_header(True, filename)
     return response
 
 

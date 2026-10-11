@@ -454,11 +454,14 @@ CGT_RETURN_LAYOUT: list[tuple[str, str, str | None]] = [
         ('row', '    Capital loss', f'loss::{category.value}'),
     )],
     ('row', 'Capital gains from trusts (including managed funds)', 'trust_gains'),
-    # Not a box on the form, and here for exactly that reason. An unclassified gain belongs
-    # to none of the eight, so without a line of its own it would drop out of this sheet
-    # while still counting towards the total below -- a schedule that does not foot, with
-    # nothing on it saying why. It reads zero once everything is classified.
-    ('flag', 'Unclassified (not reportable until the holding is classified)', 'unclassified'),
+    # Not boxes on the form, and here for exactly that reason. An unclassified gain or loss
+    # belongs to none of the eight, so without a line of its own it would drop out of this
+    # sheet while still counting towards the totals below -- a schedule that does not foot,
+    # with nothing on it saying why. They read zero once everything is classified.
+    ('flag', 'Unclassified capital gain (not reportable until the holding is classified)',
+     'unclassified'),
+    ('flag', 'Unclassified capital loss (not reportable until the holding is classified)',
+     'unclassified_loss'),
     ('total', 'Total current year capital gains', 'total_gains'),
     ('total', 'Total current year capital losses', 'total_losses'),
 
@@ -538,6 +541,8 @@ def _cgt_return_figures(account: Account, fiscal_year: str,
     reportable = {c.value for c in CGTAssetCategory.reportable()}
     figures['unclassified'] = float(
         sum(amount for key, amount in gains.items() if key not in reportable))
+    figures['unclassified_loss'] = float(
+        sum(amount for key, amount in losses.items() if key not in reportable))
     return figures, schedule.is_draft
 
 

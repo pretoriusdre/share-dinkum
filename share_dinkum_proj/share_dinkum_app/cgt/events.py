@@ -333,8 +333,13 @@ def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Acco
 
     market_value = _money(market_value * share_of_parcel(parcel, quantity))
     later_adjustments = adjustments_by_year(parcel, quantity, since=CGT_CUTOVER_DATE)
-    return _split_events(
+    deferred, post = _split_events(
         whole, buy, sell, market_value, indexation_eligible, later_adjustments)
+    if not indexation_eligible and post.pending_reason is None:
+        # The split applies, so the taxpayer can be indexed and no day after the cutover is
+        # foreign or temporary: only an undeclared day can have denied it.
+        post = replace(post, pending_reason=PENDING_UNDECLARED_SPLIT_INDEXATION)
+    return [deferred, post]
 
 
 def adjustments_by_year(parcel: 'Parcel', quantity: Decimal,
@@ -441,6 +446,14 @@ PENDING_UNDECLARED_INDEXATION = (
     'worked out as before. Fill the gap in the residency history to settle it.'
 )
 
+#: The same gap, for the part of a straddling disposal after the cutover.
+PENDING_UNDECLARED_SPLIT_INDEXATION = (
+    'Residency is not declared for every day held from 1 July 2027, so this figure is not '
+    'final. Resident on the missing days, this part is indexed (s114-25); foreign or temporary '
+    'on them, the sale is not split at 1 July 2027 (s115-105). Until then it is not indexed. '
+    'Fill the gap in the residency history to settle it.'
+)
+
 
 def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy', sell: 'Sell',
                                            declared: residency_module.Periods | None) -> bool:
@@ -490,7 +503,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
     deferred_gain = _money(market_value - deferred_cost_base)
 
     reacquisition_cost = market_value + later_adjustments
-    factor: Decimal | None = Decimal('1.000')
+    factor: Decimal | None = NO_INDEXATION
     pending: str | None = None
     indexed_reacquisition_cost = reacquisition_cost
     if indexation_eligible:

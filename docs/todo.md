@@ -19,7 +19,9 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 - **A post-2027 acquisition with undeclared residency days keeps the pre-2027 treatment** (an
   apportioned discount, no indexation), flagged as a draft (`PENDING_UNDECLARED_INDEXATION`). The
   right figure depends on what the missing days were: resident gives indexation and no discount;
-  foreign or temporary follows the s115-105 question above. Filling the history settles it.
+  foreign or temporary follows the s115-105 question above. Filling the history settles it. The
+  post-2027 part of a sale split at 1 July 2027 is not indexed while such a gap exists, and is
+  flagged the same way (`PENDING_UNDECLARED_SPLIT_INDEXATION`).
 - **Not implemented, and not flagged on the schedule:** CGT event I1 on departure without an
   s104-165(2) election, the s855-45 market value cost base on becoming a resident, and the
   pre-CGT exemption. Valuations for the first two can be recorded, but nothing reads them, so
@@ -43,9 +45,6 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
   (`reports.py`, `CGTBasisChangeReport`).
 - Snapshot totals include disregarded gains, since the realised gains report has no
   disregarded flag.
-- The post-cutover slice reports an indexation factor of 1.000 even when not indexed, where
-  `NO_INDEXATION` was meant (`cgt/events.py`, `_split_events`).
-- Losses on unclassified instruments have no row in the return layout (`reports.py`).
 - The all-years schedule (`build(account, None)`) counts a recorded carry-forward twice: as a
   prior-year loss, and again through its own year's events. Nothing calls it with `None` yet.
 
@@ -57,8 +56,6 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 - Deleting a FiscalYear leaves `calculated_fiscal_year` null on the rows that pointed at it.
 - `refetch_price_history` names only the holdings the provider returned nothing for. One it has
   only part of the history for keeps its older prices adjusted, and is not named.
-- The CGT schedule download builds `Content-Disposition` by hand, so a portfolio name with a
-  quote in it breaks the filename (`dashboard.export_cgt_schedule_view`).
 
 #### Tests
 

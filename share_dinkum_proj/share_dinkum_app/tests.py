@@ -5412,6 +5412,21 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(
             deferred.gain_category, constants.CGT_GAIN_DEFERRED_NON_RESIDENTIAL)
 
+    def test_a_post_cutover_gain_not_indexed_has_no_factor(self):
+        """Not 1.000, which would read as indexed with no inflation."""
+        # A week with no residency declared denies indexation without stopping the split.
+        ResidencyPeriod.objects.filter(account=self.account).delete()
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'RESIDENT', date(2028, 3, 8))
+        events = self._events()
+        self.assertEqual(len(events), 2)
+        post = events[1]
+        self.assertEqual(post.slice, cgt.events.SLICE_POST_CUTOVER)
+        self.assertIsNone(post.indexation_factor)
+        # Not indexed only because of the gap, so the figure is not final.
+        self.assertEqual(post.pending_reason, cgt.events.PENDING_UNDECLARED_SPLIT_INDEXATION)
+        self.assertIsNone(events[0].pending_reason)
+
     def test_the_post_cutover_gain_is_indexed_and_undiscounted(self):
         """The post-cutover slice is indexed and gets no discount (s110-36(1A), s115-20)."""
         post = self._events()[1]
@@ -7954,12 +7969,36 @@ class CGTScheduleExportTests(TransactionTestCase):
         gains = indexed[indexed.index == 'Capital gain']['FY2023/24'].fillna(0).sum()
         trust = indexed.loc['Capital gains from trusts (including managed funds)', 'FY2023/24']
         unclassified = indexed.loc[
-            'Unclassified (not reportable until the holding is classified)', 'FY2023/24']
+            'Unclassified capital gain (not reportable until the holding is classified)', 'FY2023/24']
         total = indexed.loc['Total current year capital gains', 'FY2023/24']
 
         self.assertGreater(total, 0, 'this fixture should have gains to check')
         self.assertAlmostEqual(
             gains + (trust or 0) + (unclassified or 0), total, places=4)
+
+    def test_a_loss_on_an_unclassified_holding_has_its_own_line(self):
+        """Otherwise the loss lines fall short of the stated total, with nothing saying why."""
+        instrument = create_instrument(
+            account=self.account, name='UNCL', market=Market.objects.filter(account=self.account).first())
+        Instrument.objects.filter(pk=instrument.pk).update(cgt_asset_category_override='NOT_A_CATEGORY')
+        Buy.objects.create(
+            account=self.account, instrument=instrument, date=date(2023, 8, 1),
+            quantity=Decimal('100'), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(
+            account=self.account, instrument=instrument, date=date(2024, 3, 1),
+            quantity=Decimal('100'), unit_price=Money(Decimal('5.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+
+        frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
+        indexed = frame.set_index(frame['line'].str.strip())
+        losses = indexed[indexed.index == 'Capital loss']['FY2023/24'].fillna(0).sum()
+        unclassified = indexed.loc[
+            'Unclassified capital loss (not reportable until the holding is classified)', 'FY2023/24']
+        total = indexed.loc['Total current year capital losses', 'FY2023/24']
+
+        self.assertAlmostEqual(unclassified, 500, places=4)
+        self.assertAlmostEqual(losses + unclassified, total, places=4)
 
     def test_a_draft_year_is_marked_in_its_own_column(self):
         """Draft years are marked in their own row."""
@@ -7980,6 +8019,12 @@ class CGTScheduleExportTests(TransactionTestCase):
         self.assertIn('attachment;', response['Content-Disposition'])
         self.assertIn('CGT_Schedule', response['Content-Disposition'])
         self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
+
+    def test_a_quote_in_the_portfolio_name_keeps_the_filename_whole(self):
+        self.account.description = 'The "Main" Portfolio'
+        self.account.save()
+        response = self.client.post(self.url)
+        self.assertIn(r'The \"Main\" Portfolio', response['Content-Disposition'])
 
     def test_the_button_is_on_the_dashboard_under_tax(self):
         body = self.client.get(reverse('admin:dashboard')).content.decode()
