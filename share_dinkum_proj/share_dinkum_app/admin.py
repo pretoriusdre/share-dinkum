@@ -1,6 +1,7 @@
 from typing import Any
 
 from django.contrib import admin, messages
+from django.contrib.admin import helpers
 from django import forms
 
 from django.apps import apps
@@ -11,8 +12,11 @@ from django.contrib.admin.exceptions import AlreadyRegistered, NotRegistered
 from django.contrib.admin.options import InlineModelAdmin
 from django.contrib.auth.forms import UserChangeForm
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
 from django.db.models import Model, ForeignKey, ManyToManyRel, QuerySet
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponseRedirect
+from django.template.response import TemplateResponse
+from django.utils.text import capfirst
 
 import share_dinkum_app
 import share_dinkum_app.models
@@ -21,6 +25,7 @@ from share_dinkum_app.choices import LegalForm, LegalFormSource
 from share_dinkum_app.models import (
     AppUser,
     Account,
+    CostBaseAdjustment,
     ExchangeRate,
     Parcel,
     Instrument,
@@ -64,6 +69,71 @@ class GenericModelAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
         self.mention_kept_spreads(request, obj)
 
+    # A change the holding cannot follow is refused as it saves, after the form has validated,
+    # and the save has been rolled back. Say why on the same page rather than failing.
+    def _refusal_shown(self, request: HttpRequest, view: Any, *args: Any, **kwargs: Any) -> Any:
+        from share_dinkum_app.holdings import live
+
+        try:
+            return view(request, *args, **kwargs)
+        except live.HoldingsRefused as refusal:
+            messages.error(request, str(refusal))
+            return HttpResponseRedirect(request.get_full_path())
+
+    def changeform_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+        return self._refusal_shown(request, super().changeform_view, *args, **kwargs)
+
+    def delete_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+        return self._refusal_shown(request, super().delete_view, *args, **kwargs)
+
+    def changelist_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+        return self._refusal_shown(request, super().changelist_view, *args, **kwargs)
+
+    def get_deleted_objects(self, objs: Any, request: HttpRequest) -> Any:
+        """Let a buy's delete take its parcels, which cannot be deleted on their own, and its
+        share of adjustments, which `Buy.delete` reallocates."""
+        from share_dinkum_app.holdings import live
+        from share_dinkum_app.models import Buy, CostBaseAdjustmentAllocation
+
+        from share_dinkum_app.choices import AllocationMethod
+
+        deleted, counts, perms_needed, protected = super().get_deleted_objects(objs, request)
+        if self.model is Buy and live.active() and not CostBaseAdjustmentAllocation.objects.filter(
+                parcel__buy__in=[obj.pk for obj in objs]).exclude(
+                cost_base_adjustment__allocation_method=AllocationMethod.QTY_HELD).exists():
+            # A manually allocated share has no rule to go by, so it still blocks the delete.
+            share = f'{capfirst(CostBaseAdjustmentAllocation._meta.verbose_name)}: '
+            protected = [entry for entry in protected if not str(entry).startswith(share)]
+        return deleted, counts, perms_needed - DELETED_WITH_THEIR_SOURCE, protected
+
+    def delete_model(self, request: HttpRequest, obj: Any) -> None:
+        super().delete_model(request, obj)
+        self.mention_reallocated(request, obj)
+
+    def delete_queryset(self, request: HttpRequest, queryset: QuerySet[Any]) -> None:
+        """One at a time, so each buy's own delete reallocates its share of adjustments."""
+        from share_dinkum_app.models import Buy
+
+        if self.model is not Buy:
+            super().delete_queryset(request, queryset)
+            return
+        for obj in queryset:
+            obj.delete()
+            self.mention_reallocated(request, obj)
+
+    @staticmethod
+    def mention_reallocated(request: HttpRequest, obj: Any) -> None:
+        from share_dinkum_app.models import CostBaseAdjustment
+
+        ids = getattr(obj, '_reallocate', None)
+        if ids:
+            years = ', '.join(str(year) for year in CostBaseAdjustment.objects.filter(
+                pk__in=ids).order_by('financial_year_end_date').values_list('financial_year_end_date', flat=True))
+            messages.info(
+                request,
+                f'Its share of the cost base adjustments for the years ending {years} was '
+                f'reallocated over the rest of the holding.')
+
     @staticmethod
     def mention_kept_spreads(request: HttpRequest, obj: Any) -> None:
         """A trade dated in a year whose adjustment was already spread leaves that spread as it is."""
@@ -82,8 +152,8 @@ class GenericModelAdmin(admin.ModelAdmin):
             messages.info(
                 request,
                 f'Cost base adjustments for the years ending {years} were spread before this was '
-                f'entered, and are kept as they were. Delete one and enter it again to spread it '
-                f'over the holding as it now stands.')
+                f'entered, and are kept as they were. To spread them over the holding as it now '
+                f'stands, select them under Cost base adjustments and choose "Reallocate".')
 
     # Set on the instance rather than the class, since they are worked out from the model.
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -235,6 +305,10 @@ class GenericModelAdminWithoutAdd(GenericModelAdmin):
         return False
 
 
+#: Derived records a delete may take with the record they came from, though not on their own.
+DELETED_WITH_THEIR_SOURCE = {str(Parcel._meta.verbose_name)}
+
+
 class HiddenModelAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
     def has_module_permission(self, request: HttpRequest) -> bool:
@@ -374,11 +448,58 @@ class InstrumentAdmin(GenericModelAdmin):
             )
 
 
+class CostBaseAdjustmentAdmin(GenericModelAdmin):
+    """Cost base adjustments, plus a way to spread one again over the holding as it now stands."""
+
+    actions = ['reallocate_action']
+
+    @admin.action(description='Reallocate over the holding as it now stands')
+    def reallocate_action(self, request: HttpRequest, queryset: QuerySet[Any]) -> TemplateResponse | None:
+        """Show what reallocating would change, then reallocate once confirmed."""
+        from share_dinkum_app.choices import AllocationMethod
+        from share_dinkum_app.holdings import live
+
+        spread = [a for a in queryset.select_related('instrument')
+                  if a.allocation_method == AllocationMethod.QTY_HELD]
+        by_instrument: dict[Any, list[Any]] = {}
+        for adjustment in spread:
+            by_instrument.setdefault(adjustment.instrument, []).append(adjustment.pk)
+
+        if request.POST.get('confirm') != 'yes':
+            reallocations = [
+                reallocation
+                for instrument, ids in by_instrument.items()
+                for reallocation in live.preview_reallocation(instrument, ids)]
+            return TemplateResponse(request, 'admin/reallocate_confirmation.html', {
+                **self.admin_site.each_context(request),
+                'opts': self.model._meta,
+                'title': 'Reallocate cost base adjustments',
+                'reallocations': reallocations,
+                'skipped': [str(a) for a in queryset if a.allocation_method != AllocationMethod.QTY_HELD],
+                'selected': [str(pk) for pk in queryset.values_list('pk', flat=True)],
+                'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+            })
+
+        for instrument, ids in by_instrument.items():
+            try:
+                with transaction.atomic():
+                    result = live.reallocate(instrument, ids)
+            except live.HoldingsRefused as refusal:
+                messages.error(request, str(refusal))
+                continue
+            if result.empty:
+                messages.info(request, f'{instrument.name}: already divided as the holding stands.')
+            else:
+                messages.success(request, f'{instrument.name}: reallocated {len(ids)} adjustment(s).')
+        return None
+
+
 # Map specific models to custom admin if required, or hide them.
 
 model_admin_map: "dict[type[Model], type[admin.ModelAdmin[Any]]]" = {
 
     Account : AccountAdmin,
+    CostBaseAdjustment : CostBaseAdjustmentAdmin,
     ExchangeRate : ExchangeRateAdmin,
     Instrument : InstrumentAdmin,
     AppUser : AppUserAdmin,

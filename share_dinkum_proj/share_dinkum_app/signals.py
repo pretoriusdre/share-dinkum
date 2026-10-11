@@ -640,8 +640,9 @@ def rebuild_holdings(sender: type[Model], instance: Model, created: bool = False
     if not instruments:
         return
     instance._holdings_instruments = None  # type: ignore[attr-defined]
+    reallocate = getattr(instance, '_reallocate', ())  # A deleted buy's share of adjustments.
     for instrument in instruments:
-        live.rebuild(instrument)
+        live.rebuild(instrument, reallocate=reallocate)
     if created and getattr(instance, '_creation_handled', True) is False:
         sender._default_manager.filter(pk=instance.pk).update(_creation_handled=True)
         instance._creation_handled = True  # type: ignore[attr-defined]

@@ -43,8 +43,9 @@ Each purchase is a **[Buy]**: date, quantity, unit price and brokerage, plus an 
 notes. A buy in a currency other than the base currency gets an **[ExchangeRate]** for its date; a
 day with no quote (a weekend or holiday) takes the last rate before it.
 
-Each **[Buy]** creates a **[Parcel]**: a holding of shares with the same purchase date and cost base
-per share.
+Each **[Buy]** gives a **[Parcel]**: a holding of shares with the same purchase date and cost base
+per share. Parcels are worked out from the trades, so whenever a trade is added, changed or deleted,
+its instrument's parcels are worked out again in date order. Trades can be entered in any order.
 
 Income is entered as **[Dividend]** and **[Distribution]** objects, and classified into a
 **[FiscalYear]** according to the account's **[FiscalYearType]**.
@@ -66,8 +67,10 @@ A **[ShareSplit]**, dated on its ex-date, takes the units held before and after.
 affected parcels with new ones at the adjusted quantity and cost base, and moves their cost base
 adjustment allocations across.
 
-Records that others were derived from cannot have their key fields changed once entered (delete and
-re-enter instead), and a trade or split dated before one already applied is refused.
+Decisions already made are kept when parcels are worked out again: which parcels each sale used,
+and how each adjustment was divided (see [Cost base adjustments](#cost-base-adjustments)). A change
+those decisions cannot follow, such as reducing a buy below what was sold from it, or a share split
+dated before a sale already allocated, is refused.
 
 Prices are stored as traded on the day in **[InstrumentPriceHistory]**. Use **Refresh prices** on
 the dashboard to fetch new prices and exchange rates. If the dashboard reports a data problem, run
@@ -162,6 +165,18 @@ The Australian income report sets out each year's dividends and trust income by 
 11 (dividends), 13 (trusts, from each fund's annual statement) and 20 (foreign income). Only income
 received as an Australian resident counts. Payments while a foreign resident are listed separately,
 with what was withheld.
+
+![Income report](docs/images/income_report.png)
+
+### Cost base adjustments
+
+Each AMIT cost base adjustment is spread over the parcels held in its year, weighted by units and
+days held. A trade entered later, dated before an adjustment already spread, leaves that spread as
+it was, and the admin says so. Select the adjustments and choose **Reallocate** to spread them over
+the holding as it now stands; a confirmation page shows each buy's share before and after, and the
+sales whose gain would change.
+
+![Reallocate cost base adjustments](docs/images/reallocate_cost_base_allocation.png)
 
 ### Data management
 Buy Screen:

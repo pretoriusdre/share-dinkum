@@ -4255,6 +4255,156 @@ class LiveHoldingsTests(TransactionTestCase):
 
         self.assertIn('2023-06-30', ' '.join(str(m) for m in get_messages(request)))
 
+    def share_of(self, buy):
+        return sum((a.cost_base_increase.amount for a in CostBaseAdjustmentAllocation.objects.filter(
+            parcel__buy=buy, deactivation_date__isnull=True)), Decimal('0'))
+
+    def a_late_buy_after_a_spread(self):
+        first = self.buy(date(2022, 8, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        late = self.buy(date(2023, 1, 10), '100')
+        return first, late, adjustment
+
+    def test_reallocating_spreads_an_adjustment_over_a_late_buy(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        self.assertEqual(self.share_of(late), 0)
+
+        live.reallocate(self.instrument, [adjustment.pk])
+
+        self.assertGreater(self.share_of(late), 0)
+        self.assertEqual(self.share_of(first) + self.share_of(late), Decimal('50'))
+        # Now the division is pinned again: a rebuild leaves it as reallocated.
+        self.assertTrue(live.rebuild(Instrument.objects.get(pk=self.instrument.pk)).empty)
+
+    def test_the_reallocation_preview_names_the_sales_whose_gain_changes(self):
+        from share_dinkum_app.holdings import live
+
+        _, _, adjustment = self.a_late_buy_after_a_spread()
+        self.sell(date(2023, 9, 1), '50')
+
+        [preview] = live.preview_reallocation(self.instrument, [adjustment.pk])
+
+        self.assertEqual(len(preview.changes), 2)
+        self.assertEqual(len(preview.sales), 1)
+        self.assertIn('2023-09-01', preview.sales[0])
+
+    def test_a_buy_can_be_deleted_in_the_admin_with_its_parcels(self):
+        """A parcel cannot be deleted on its own, but goes with its buy."""
+        first, late, _ = self.a_late_buy_after_a_spread()
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+
+        parcel = Parcel.objects.get(buy=late)
+        page = self.client.get(reverse('admin:share_dinkum_app_parcel_delete', args=[parcel.pk]))
+        self.assertEqual(page.status_code, 403)
+
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+        self.assertNotContains(self.client.get(url), "doesn't have permission")
+        response = self.client.post(url, {'post': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Buy.objects.filter(pk=late.pk).exists())
+        self.assertFalse(Parcel.objects.filter(buy_id=late.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('50'))
+
+    def test_deleting_a_buy_reallocates_its_share_of_adjustments(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        live.reallocate(self.instrument, [adjustment.pk])
+        self.assertGreater(self.share_of(late), 0)
+
+        late.delete()
+
+        self.assertEqual(self.share_of(first), Decimal('50'))
+        self.assertEqual(CostBaseAdjustmentAllocation.objects.filter(parcel__buy_id=late.pk).count(), 0)
+
+    def test_the_admin_deletes_a_buy_holding_a_share_and_says_so(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        live.reallocate(self.instrument, [adjustment.pk])
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+
+        self.assertNotContains(self.client.get(url), 'protected related objects')
+        response = self.client.post(url, {'post': 'yes'}, follow=True)
+
+        self.assertFalse(Buy.objects.filter(pk=late.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('50'))
+        self.assertContains(response, 'reallocated over the rest of the holding')
+
+    def test_a_buy_with_a_manually_allocated_share_is_refused_and_keeps_it(self):
+        """No rule says where a manual share should go, so it is not thrown away."""
+        from share_dinkum_app.holdings import live
+
+        first = self.buy(date(2022, 8, 1), '100')
+        second = self.buy(date(2022, 9, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'), allocation_method='MANUAL')
+        for buy in (first, second):
+            CostBaseAdjustmentAllocation.objects.create(
+                account=self.account, cost_base_adjustment=adjustment,
+                parcel=Parcel.objects.get(buy=buy), cost_base_increase=Money(Decimal('25'), 'AUD'))
+
+        with self.assertRaises(live.HoldingsRefused):
+            second.delete()
+
+        self.assertTrue(Buy.objects.filter(pk=second.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('25'))
+        self.assertEqual(self.share_of(second), Decimal('25'))
+
+    def test_the_admin_shows_a_refusal_rather_than_failing(self):
+        late = self.buy(date(2023, 1, 10), '100')
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=True)
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+
+        response = self.client.post(url, {'post': 'yes'}, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'give different figures from its trades')
+        self.assertTrue(Buy.objects.filter(pk=late.pk).exists())
+
+    def test_a_buy_a_sale_used_is_still_protected(self):
+        from django.db.models import ProtectedError
+
+        first = self.buy(date(2022, 8, 1), '100')
+        self.sell(date(2023, 3, 1), '50')
+        with self.assertRaises(ProtectedError):
+            first.delete()
+        self.assertTrue(Buy.objects.filter(pk=first.pk).exists())
+
+    def test_the_reallocate_action_asks_before_it_changes_anything(self):
+        _, late, adjustment = self.a_late_buy_after_a_spread()
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_costbaseadjustment_changelist')
+        chosen = {'action': 'reallocate_action', '_selected_action': [str(adjustment.pk)]}
+
+        response = self.client.post(url, chosen)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Share after')
+        self.assertEqual(self.share_of(late), 0)
+
+        response = self.client.post(url, {**chosen, 'confirm': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertGreater(self.share_of(late), 0)
+
     @holdings_may_differ
     def test_an_instrument_whose_stored_figures_differ_refuses_changes(self):
         buy = self.buy(date(2023, 1, 10), '100')

@@ -1356,6 +1356,31 @@ class Buy(Trade):
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
 
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Delete the buy, and spread its share of any adjustment over the rest of the holding.
+
+        Its adjustment allocations protect its parcels, and dropping them alone would leave each
+        adjustment short of its total, so the adjustments it shared are reallocated instead.
+        """
+        if not live.active() or live.rebuilding() or not self.instrument_id:
+            return super().delete(*args, **kwargs)
+        with transaction.atomic():
+            live.ensure_verified(self.instrument)  # Before the allocations go, or it would differ.
+            shares = CostBaseAdjustmentAllocation.objects.filter(parcel__buy=self)
+            manual = sorted({str(year) for year in shares.exclude(
+                cost_base_adjustment__allocation_method=AllocationMethod.QTY_HELD).values_list(
+                'cost_base_adjustment__financial_year_end_date', flat=True)})
+            if manual:
+                # No rule says where a manually allocated share should go instead.
+                raise live.HoldingsRefused(
+                    f'This buy has a share of the cost base adjustments for the years ending '
+                    f'{", ".join(manual)}, which were allocated manually. Move or delete its '
+                    f'allocations of those first.')
+            self._reallocate = set(shares.values_list('cost_base_adjustment_id', flat=True))
+            with live.writing():
+                shares.delete()
+            return super().delete(*args, **kwargs)
+
     def structural_fields(self) -> tuple[str, ...]:
         # Rebuilt from its trades, a holding takes a buy's corrected date, quantity or
         # instrument; a rebuild refuses one that a sale already made cannot follow.

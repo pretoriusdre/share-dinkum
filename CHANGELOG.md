@@ -4,7 +4,7 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
-## Unreleased
+## 0.5.0 - 2026-10-11
 
 Release 0.5.0 changes the way that parcels are built from trades. Previously, each 'buy' trade
 created a parcel at the moment of entry. Things which act on or attach to those parcels, like
@@ -20,6 +20,10 @@ recalculated, and the difference is applied. Upgrading does not change your exis
   trades and lists any figure that differs from what is stored. `--rebuild` accepts the difference
   and rewrites them. `--respread` lists older cost base adjustments that today's spread would divide
   differently. The dashboard warns when there is a difference.
+- **Reallocate** cost base adjustments: an admin action that spreads the selected adjustments again
+  over the holding as it now stands, for example after entering a buy you had missed. It shows each
+  buy's share before and after, and names the sales whose gain would change, before it changes
+  anything.
 
 ### Changed
 
@@ -28,8 +32,7 @@ recalculated, and the difference is applied. Upgrading does not change your exis
   in the same save. So these are now accepted:
   - a buy or sale dated before a share split already entered;
   - a buy or sale dated before a cost base adjustment already spread. The spread is kept as it was,
-    and the admin says so; delete the adjustment and enter it again to spread it over the holding
-    as it now stands;
+    and the admin says so; Reallocate spreads it over the holding as it now stands;
   - a corrected date, quantity or instrument on a buy. A correction a sale already made cannot
     follow (fewer units than were sold, say) is refused.
 
@@ -47,6 +50,10 @@ recalculated, and the difference is applied. Upgrading does not change your exis
 
 ### Fixed
 
+- A buy can now be deleted. Its parcels go with it, and its share of each cost base adjustment is
+  reallocated to the buys still held. It is still refused if a sale took units from it (delete the
+  sale first), or if it holds a share of an adjustment allocated manually (move or delete that
+  allocation first).
 - A managed fund's annual statement entered in a currency other than the portfolio's is now left
   out of the capital gains schedule and named, rather than counted wrongly.
 - In a portfolio whose currency is not AUD, a zero amount (a parcel bought for nothing, or a

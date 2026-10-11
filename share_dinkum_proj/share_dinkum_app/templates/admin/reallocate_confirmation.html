@@ -1,0 +1,60 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block title %}Reallocate cost base adjustments | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+    &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+    &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+    &rsaquo; Reallocate
+</div>
+{% endblock %}
+
+{% block content %}
+<p>
+    Reallocating spreads each adjustment again over the holding as it now stands, weighted by
+    units and days held in its year. The adjustment's total does not change; only how it is
+    divided between buys.
+</p>
+
+{% if reallocations %}
+    {% for reallocation in reallocations %}
+        <h2>{{ reallocation.adjustment }}</h2>
+        <table>
+            <thead><tr><th>Buy</th><th>Share now</th><th>Share after</th></tr></thead>
+            <tbody>
+            {% for buy, now, after in reallocation.changes %}
+                <tr><td>{{ buy }}</td><td>{{ now|floatformat:2 }}</td><td>{{ after|floatformat:2 }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if reallocation.sales %}
+            <p class="errornote">
+                These sales took units from those buys, so their capital gains change too. If a
+                year they fall in is already lodged, its figures will no longer match:
+            </p>
+            <ul>
+            {% for sale in reallocation.sales %}<li>{{ sale }}</li>{% endfor %}
+            </ul>
+        {% endif %}
+    {% endfor %}
+
+    <form method="post">{% csrf_token %}
+        {% for id in selected %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ id }}">{% endfor %}
+        <input type="hidden" name="action" value="reallocate_action">
+        <input type="hidden" name="confirm" value="yes">
+        <input type="submit" value="Reallocate">
+        <a href="{% url opts|admin_urlname:'changelist' %}" class="button cancel-link">Cancel</a>
+    </form>
+{% else %}
+    <p>Every selected adjustment is already divided as the holding now stands. Nothing would change.</p>
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="button cancel-link">Back</a>
+{% endif %}
+
+{% if skipped %}
+    <p>Not reallocated, since each was allocated manually rather than spread by units held:</p>
+    <ul>{% for label in skipped %}<li>{{ label }}</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}

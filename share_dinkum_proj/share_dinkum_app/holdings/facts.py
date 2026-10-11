@@ -8,7 +8,7 @@ too, since working them out again could change a lodged year:
   per buy). Data entered before 0.4.0 may have been spread over an incomplete holding.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -113,8 +113,13 @@ def _amount(money: Money | None) -> Decimal | None:
     return None if money is None else money.amount
 
 
-def load(account: 'Account', instrument: 'Instrument | None' = None) -> Facts:
-    """Every fact for `account`, or for one of its instruments."""
+def load(account: 'Account', instrument: 'Instrument | None' = None,
+         reallocate: Collection[Any] = ()) -> Facts:
+    """Every fact for `account`, or for one of its instruments.
+
+    The adjustments in `reallocate` lose their pinned division, so the replay spreads them over
+    the holding as it now stands.
+    """
     from share_dinkum_app import cgt
     from share_dinkum_app.models import (
         Buy, CostBaseAdjustment, Sell, SellAllocation, ShareSplit,
@@ -154,13 +159,13 @@ def load(account: 'Account', instrument: 'Instrument | None' = None) -> Facts:
             year_start=strategies.fiscal_year_start(end, fiscal_year_type.start_month, fiscal_year_type.start_day),
             year_end=end, method=adjustment.allocation_method,
             amount=adjustment.cost_base_increase_converted.amount, legacy_id=adjustment.legacy_id,
-            spread_at_entry=adjustment._creation_handled))
+            spread_at_entry=adjustment._creation_handled and adjustment.pk not in reallocate))
     # Summed here rather than in SQL, which rounds a sum to the column's places, so the per-buy
     # totals agree exactly with the per-parcel amounts they are made of.
     holding = state.stored(account, instrument)
     lineages = holding.lineages()
     for part in holding.adjustments:
-        if part.active:
+        if part.active and part.adjustment_id not in reallocate:
             parts = facts.pinned_parts.setdefault(part.adjustment_id, {})
             lineage = lineages[part.parcel_ref]
             parts[lineage] = parts.get(lineage, Decimal('0')) + part.amount

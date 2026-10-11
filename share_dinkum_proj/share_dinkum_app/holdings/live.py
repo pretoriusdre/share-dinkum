@@ -14,8 +14,10 @@ entered, as before 0.5.0.
   carries its parcels, and the loader rebuilds once it has them all.
 """
 
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from decimal import Decimal
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -70,14 +72,17 @@ def ensure_verified(instrument: 'Instrument') -> None:
             f'differences, and add `--rebuild` to accept them.')
 
 
-def rebuild(instrument: 'Instrument') -> 'Plan':
-    """Work the instrument's holding out again and write it. Refuses a decision it cannot apply."""
+def rebuild(instrument: 'Instrument', reallocate: Collection[Any] = ()) -> 'Plan':
+    """Work the instrument's holding out again and write it. Refuses a decision it cannot apply.
+
+    The adjustments in `reallocate` are spread again over the holding as it now stands.
+    """
     from share_dinkum_app.holdings import apply, facts, replay, state
     from share_dinkum_app.models import Instrument
 
     account = instrument.account
     with writing():
-        replayed = replay.replay(facts.load(account, instrument))
+        replayed = replay.replay(facts.load(account, instrument, reallocate=reallocate))
         if replayed.problems:
             raise HoldingsRefused(' '.join(replayed.problems))
         result = apply.plan(state.stored(account, instrument), replayed.holding)
@@ -85,6 +90,42 @@ def rebuild(instrument: 'Instrument') -> 'Plan':
     Instrument.objects.filter(pk=instrument.pk).update(holdings_differ=False)
     instrument.holdings_differ = False
     return result
+
+
+@dataclass
+class Reallocation:
+    """What spreading one adjustment again would change."""
+    adjustment: str
+    #: (buy, its share now, its share after)
+    changes: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
+    #: Sales from those buys on or after the adjustment's year start, whose gain changes too.
+    sales: list[str] = field(default_factory=list)
+
+
+def preview_reallocation(instrument: 'Instrument', adjustment_ids: Collection[Any]) -> list[Reallocation]:
+    """For each adjustment whose division would change, what reallocating it changes. Writes nothing."""
+    from share_dinkum_app.holdings import facts, replay
+
+    loaded = facts.load(instrument.account, instrument)
+    sales = {sale.id: sale for sale in loaded.sales}
+    found: dict[Any, Reallocation] = {}
+    for adjustment, buy, now, after in replay.replay(loaded).respread:
+        if adjustment.id not in adjustment_ids:
+            continue
+        reallocation = found.setdefault(adjustment.id, Reallocation(adjustment.label()))
+        reallocation.changes.append((buy.label(), now, after))
+        for pin in loaded.pinned_sales:
+            sale = sales.get(pin.sale_id)
+            if (pin.buy_id == buy.id and sale is not None and sale.date >= adjustment.year_start
+                    and sale.label() not in reallocation.sales):
+                reallocation.sales.append(sale.label())
+    return list(found.values())
+
+
+def reallocate(instrument: 'Instrument', adjustment_ids: Collection[Any]) -> 'Plan':
+    """Spread the adjustments again over the instrument's holding as it now stands."""
+    ensure_verified(instrument)
+    return rebuild(instrument, reallocate=adjustment_ids)
 
 
 def instrument_of(record: Any) -> 'Instrument | None':
