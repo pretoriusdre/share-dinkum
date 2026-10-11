@@ -211,19 +211,14 @@ class ExcelGen:
         title: str | None = None,
         author: str | None = None,
         description: str | None = None,
-        template_info: str | None = None,
         url: str | None = None,
     ) -> None:
-        """Start an empty workbook. `template_info` defaults to a standard note."""
+        """Start an empty workbook."""
         self.excel_illegal_characters_re = re.compile(r'[\000-\010]|[\013-\014]|[\016-\037]')
-        
+
         self.title = title
         self.author = author
         self.description = description
-        self.template_info = (
-            template_info
-            or r'All data has been added into named tables contained on separate sheets. The table names and accompanying descriptions is described in "table_info". Primary keys, if defined, are denoted with red header cells. This exporting script is available in the following repository: https://MODEC-DnA@dev.azure.com/MODEC-DnA/dna-mops-nemo/_git/datamanagement '
-        )
         self.url = url
 
         self.table_summary: list[tuple[int, str, str | None, int]] = []
@@ -231,7 +226,6 @@ class ExcelGen:
         self.wb = Workbook()
         first_worksheet = self.wb.worksheets[0]
         self.wb.remove(first_worksheet)
-        #self._add_cover()
 
         self.sheet_counter = 0
         self._value_assistance_columns: dict[str, str] = {}   # list name -> range on the value assistance sheet
@@ -368,9 +362,6 @@ class ExcelGen:
 
         cols = df.columns
 
-        # Strip out all nan, NaT etc and replace with None:
-        df.astype(object).where(df.notnull(), None)
-
         if table_name == 'table_info':
             sheet_name = 'Index'
         else:
@@ -489,31 +480,6 @@ class ExcelGen:
             self._autofit_columns(ws)
 
         self.wb.save(output_path)
-
-    # def _add_cover(self):
-    #     metadata_list = [
-    #         ('title', self.title),
-    #         ('author', self.author),
-    #         ('description', self.description),
-    #         ('generated_at', date.today().isoformat()),
-    #     ]
-
-    #     if self.url:
-    #         metadata_list.append(('link', self.url))
-
-    #     if self.template_info:
-    #         metadata_list.append(('template_info', self.template_info))
-
-    #     meta_df = pd.DataFrame.from_records(metadata_list, columns=['key', 'value'])
-
-    #     self.add_table(
-    #         df=meta_df,
-    #         table_name='cover',
-    #         pk='key',
-    #         width_map={'key': 20, 'value': 100},
-    #         exclude_from_summary=True,
-    #         value_style_map={self.title: 'Headline 1'},
-    #     )
 
     def _add_table_summary(self) -> None:
         table_summary_df = pd.DataFrame.from_records(

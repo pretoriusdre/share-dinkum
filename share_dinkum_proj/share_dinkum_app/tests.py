@@ -1,6 +1,7 @@
 """Test suite for share_dinkum_app. Run with: python manage.py test share_dinkum_app"""
 import io
 import json
+import os
 import shutil
 import sqlite3
 import pickle
@@ -18,7 +19,7 @@ import pandas as pd
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
@@ -70,11 +71,18 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, column_help, constants, dashboard, excelinterface, income, loading, reports, version, yfinanceinterface)
+    cgt, column_help, constants, dashboard, data_checks, excelinterface, figures_dump, income, loading, reports, version,
+    yfinanceinterface)
 from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
 # --- Test data factories (minimal objects for isolation) ---
+
+
+def holdings_may_differ(method):
+    """For a test that leaves a holding a rebuild would change, on purpose: the runner's replay check skips it."""
+    method.HOLDINGS_MAY_DIFFER = True
+    return method
 
 
 def create_fiscal_year_type(description='Australian Tax Year', start_month=7, start_day=1):
@@ -1062,6 +1070,8 @@ class RepairPortfolioDataTests(TransactionTestCase):
         self.assertTrue(Parcel.objects.get(sale_date__isnull=False).calculated_is_sold)
         self.assertIsNone(self._warning(account))
 
+    # Repairs damage the creation signals left; the replay does not leave it.
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_an_adjustment_left_behind_by_a_split_is_carried_forward(self, mock_get_rate):
         """As the bug left it: on the replaced parcel, and on none of its descendants."""
         account, instrument, buy = self._portfolio(currency='AUD')
@@ -1273,6 +1283,8 @@ class SellAllocationTests(TransactionTestCase):
         self.assertTrue(sold.calculated_is_sold)
         self.assertEqual(sold.calculated_remaining_quantity, Decimal('0'))
 
+    # After the allocation is deleted the parcel stays divided; a rebuild joins it again. The figures agree.
+    @holdings_may_differ
     def test_deleting_an_allocation_clears_the_parcels_sale_date(self):
         """Otherwise a later adjustment weights the parcel as if it were sold that day."""
         account, _, parcel, sell = self._manual_sale(quantity='40')
@@ -1302,6 +1314,8 @@ class ParcelTests(TransactionTestCase):
         parcel = Parcel.objects.get(buy__instrument=inst)
         self.assertEqual(parcel.remaining_quantity, Decimal('100'))
 
+    # Splits a parcel directly, with no share split for a replay to follow.
+    @holdings_may_differ
     def test_split_or_consolidate_multiplier(self):
         acc = create_account()
         inst = create_instrument(account=acc)
@@ -1384,6 +1398,8 @@ class ShareSplitTests(TransactionTestCase):
         self.assertEqual(
             parcel.total_cost_base.amount.quantize(Decimal('0.01')), Decimal('3000.00'))
 
+    # Reversing a split adds a parcel; a rebuild has none to reverse. The figures agree.
+    @holdings_may_differ
     def test_deleting_a_split_restores_the_parcels_it_split(self):
         account, instrument, buy = self._holding()
         CostBaseAdjustment.objects.create(
@@ -1434,10 +1450,14 @@ class StructuralEditTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buys_quantity_cannot_be_changed(self):
         self._refused(self.buy, quantity=Decimal('200'))
         self.assertEqual(Parcel.objects.get(buy=self.buy).parcel_quantity, Decimal('100'))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buys_date_cannot_be_changed(self):
         self._refused(self.buy, date=date(2024, 2, 5))
 
@@ -1517,6 +1537,8 @@ class OutOfOrderEntryTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'split'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_sale_dated_before_an_applied_split_is_refused(self):
         self._split()
         self._refused(Sell(
@@ -1524,6 +1546,8 @@ class OutOfOrderEntryTests(TransactionTestCase):
             quantity=Decimal('50'), unit_price=Money(12, 'AUD'),
             total_brokerage=Money(0, 'AUD'), strategy='FIFO'))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_dated_before_an_applied_split_is_refused(self):
         self._split()
         self._refused(Buy(
@@ -1589,12 +1613,16 @@ class AdjustmentOutOfOrderTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, 'cost base adjustment'):
             record.save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_dated_before_an_applied_adjustments_year_end_is_refused(self):
         """It would get none of the adjustment, though held in its year."""
         self._adjustment()
         self._refused(self._buy(date(2022, 7, 1)))
         self._refused(self._buy(date(2024, 6, 30)))
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_buy_is_refused_even_where_the_adjustment_reached_no_parcel(self):
         self._adjustment(year_end=date(2022, 6, 30))
         self._refused(self._buy(date(2021, 7, 1)))
@@ -1603,6 +1631,8 @@ class AdjustmentOutOfOrderTests(TransactionTestCase):
         self._adjustment()
         self._buy(date(2024, 7, 1)).save()
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_sale_dated_before_an_applied_adjustments_year_end_is_refused(self):
         """The units sold would keep a share weighted as if held all year."""
         self._adjustment()
@@ -1859,6 +1889,33 @@ class DividendTests(TestCase):
         )
         self.assertEqual(div.total_franked_amount.amount, Decimal('50'))
         self.assertEqual(str(div.total_franked_amount.currency), 'AUD')
+
+    def test_a_zero_dividend_stays_in_its_own_currency(self):
+        """A zero total is in the dividend's currency, so its rate still applies to it."""
+        acc = create_account()
+        inst = create_instrument(account=acc, name='MSFT', currency='USD')
+        div = Dividend.objects.create(
+            account=acc, instrument=inst, date=date(2024, 4, 1), quantity=Decimal('100'),
+            franked_amount_per_share=Money(0, 'USD'), unfranked_amount_per_share=Money(0, 'USD'),
+            exchange_rate=create_exchange_rate(acc, 'USD', 'AUD', exchange_date=date(2024, 4, 1)),
+        )
+        self.assertEqual(div.total_dividend, Money(0, 'USD'))
+        self.assertEqual(div.total_dividend_converted, Money(0, 'AUD'))
+
+
+class ZeroCostParcelTests(TestCase):
+
+    def test_a_zero_cost_base_is_in_the_account_currency(self):
+        """A parcel with nothing in its cost base is still in the portfolio's currency."""
+        account = create_account(currency='USD')
+        instrument = create_instrument(account=account, name='MSFT', currency='USD')
+        buy = Buy.objects.create(
+            account=account, instrument=instrument, date=date(2024, 1, 10), quantity=Decimal('10'),
+            unit_price=Money(0, 'USD'), total_brokerage=Money(0, 'USD'))
+
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.total_cost_base, Money(0, 'USD'))
+        self.assertEqual(parcel.calculated_total_cost_base, Money(0, 'USD'))
 
 
 # =============================================================================
@@ -2771,6 +2828,8 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(snapshot.captured_rows.count(), 2001)
         self.assertEqual(snapshot.totals['row_count'], 2001)
 
+    # Deletes an automatic sale allocation directly, so the sale is left unallocated.
+    @holdings_may_differ
     def test_the_allocation_reference_is_not_a_foreign_key(self):
         """A snapshot row survives deletion of its sell allocation."""
         snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
@@ -2886,6 +2945,8 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         gain_row = df[df['field'] == 'capital_gain'].iloc[0]
         self.assertEqual(gain_row['difference'], -cost_base_row['difference'])
 
+    # A sale dated before one already allocated is split from parcels made after it; a rebuild orders them by date. The figures agree.
+    @holdings_may_differ
     def test_a_new_allocation_is_reported_as_added(self):
         CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
 
@@ -3592,6 +3653,841 @@ class FakeDataLoadTests(FakeMarketMixin, TransactionTestCase):
             set(CostBaseAdjustment.objects.filter(account=account).values_list('instrument__name', flat=True)),
             set(make_fake_data.ETFS))
         self.assertEqual(Sell.objects.filter(account=account).count(), len(tables['Sell']))
+
+
+#: A buy's parcels as text, written whenever the buy is saved: a rebuild that saves the buy
+#: rewrites it, as a restore does. Display only; no figure reads it.
+DISPLAY_TEXT = {('Buy', 'calculated_related_parcels')}
+
+
+def without_display_text(tables):
+    calculated = tables['calculated']
+    kept = [row for row in calculated[1:] if (row[0], row[2]) not in DISPLAY_TEXT]
+    return {**tables, 'calculated': [calculated[0], *kept]}
+
+
+TEST_FIXTURES = Path(__file__).resolve().parent / 'test_fixtures'
+GOLDEN_FIGURES = TEST_FIXTURES / 'golden_figures'
+
+
+class PinnedToday(date):
+    """`date` with `today()` fixed at the fake portfolio's as-of date, so the golden figures
+    do not change as the current year ends."""
+
+    @classmethod
+    def today(cls):
+        return date.fromisoformat(FakeMarketMixin.AS_OF)
+
+
+@patch('share_dinkum_app.cgt.schedule.date', PinnedToday)
+@patch('share_dinkum_app.cgt.residency.date', PinnedToday)
+class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
+    """The figures dump, which shows whether a change moved any figure.
+
+    The fake portfolio's dump is committed in `test_fixtures/golden_figures`. A change that is
+    meant to move figures regenerates it with SHARE_DINKUM_UPDATE_GOLDEN=1 and commits the diff.
+    """
+
+    def _load(self, path, account=None):
+        """Load a file offline, at the rate the other fake portfolio tests use. Returns the account."""
+        with figures_dump.offline(), patch.object(
+                yfinanceinterface, 'get_exchange_rate', return_value=Decimal('1.5')):
+            return loading.DataLoader(account=account, input_file=path).account
+
+    def _fake_portfolio(self):
+        output, _ = self._run('fake.xlsx')
+        account = create_account()
+        account.taxpayer_type = 'INDIVIDUAL'
+        account.save()
+        return self._load(output, account)
+
+    def assertSameFigures(self, expected, actual):
+        """Every table equal; otherwise one failure naming each table that differs, and how."""
+        self.assertEqual(sorted(expected), sorted(actual), 'the dump has different tables')
+        problems = []
+        for name in expected:
+            if expected[name] == actual[name]:
+                continue
+            missing = [row for row in expected[name] if row not in actual[name]]
+            extra = [row for row in actual[name] if row not in expected[name]]
+            problems.append(
+                f'{name}: {len(missing)} row(s) expected but not found, {len(extra)} unexpected.\n'
+                f'  expected: {missing[:3]}\n  found:    {extra[:3]}')
+        if problems:
+            self.fail('The figures differ.\n' + '\n'.join(problems))
+
+    def test_the_fake_portfolio_figures_match_the_golden_copy(self):
+        figures = figures_dump.dump(self._fake_portfolio())
+
+        if os.environ.get('SHARE_DINKUM_UPDATE_GOLDEN'):
+            shutil.rmtree(GOLDEN_FIGURES, ignore_errors=True)
+            figures_dump.write(figures, GOLDEN_FIGURES)
+            self.skipTest(f'Rewrote {GOLDEN_FIGURES}. Review the diff before committing it.')
+
+        # Through the files, so the comparison is with what was written, not what was meant.
+        written = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, written, True)
+        figures_dump.write(figures, written)
+        self.assertSameFigures(figures_dump.read(GOLDEN_FIGURES), figures_dump.read(written))
+
+    #: Stored copies that are stale before an export and refreshed by the restore's recalculation,
+    #: so they differ for a known reason. `calculated_related_parcels` is the parcels' text as it
+    #: stood when the buy was entered, before later cost base adjustments; the portfolio value is
+    #: 0 when the account was saved and blank after a restore. Remove an entry once it is fixed.
+    STALE_BEFORE_EXPORT = {('Buy', 'calculated_related_parcels'),
+                           ('Account', 'calculated_portfolio_value_converted')}
+
+    def _without_stale(self, tables):
+        calculated = tables['calculated']
+        kept = [row for row in calculated[1:] if (row[0], row[2]) not in self.STALE_BEFORE_EXPORT]
+        return {**tables, 'calculated': [calculated[0], *kept]}
+
+    def test_an_export_restores_to_the_same_figures(self):
+        account = self._fake_portfolio()
+        before = figures_dump.dump(account)
+
+        export = DataExport.objects.create(account=account)
+        export.refresh_from_db()
+        path = Path(tempfile.mkdtemp()) / Path(export.file.path).name
+        self.addCleanup(shutil.rmtree, path.parent, True)
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        restored = self._load(path)
+
+        self.assertSameFigures(self._without_stale(before), self._without_stale(figures_dump.dump(restored)))
+
+    def test_the_dump_writes_nothing(self):
+        """Reading figures creates fiscal years and placeholder rates, so the dump rolls back."""
+        account = self._fake_portfolio()
+        FiscalYear.objects.all().delete()
+        counts = {model.__name__: model.objects.count() for model in apps.get_app_config('share_dinkum_app').get_models()}
+
+        with patch.object(figures_dump, 'collect', wraps=figures_dump.collect) as collect:
+            figures_dump.dump(account)
+        self.assertTrue(collect.called)
+
+        self.assertEqual(
+            counts, {model.__name__: model.objects.count() for model in apps.get_app_config('share_dinkum_app').get_models()})
+
+    def test_the_dump_is_the_same_twice(self):
+        account = self._fake_portfolio()
+        self.assertSameFigures(figures_dump.dump(account), figures_dump.dump(account))
+
+    def test_the_fake_portfolio_agrees_with_its_replay(self):
+        from share_dinkum_app.holdings import apply, compare, facts, replay, state
+        account = self._fake_portfolio()
+        report = compare.check(account)
+        self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+        self.assertEqual(report.respread, [], 'a spread made by the app differs from a fresh one')
+        plan = apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+        self.assertTrue(plan.empty, plan.summary())
+
+    def test_every_export_ever_taken_still_loads(self):
+        """Exports taken by earlier releases, from fake data, restore into an empty database,
+        and their holdings agree with a replay."""
+        from share_dinkum_app.holdings import apply, compare, facts, replay, state
+        for path in sorted(TEST_FIXTURES.glob('export_*.xlsx')):
+            with self.subTest(path.name):
+                call_command('flush', interactive=False, verbosity=0)
+                account = self._load(path)
+                self.assertGreater(Buy.objects.filter(account=account).count(), 0)
+                self.assertGreater(Parcel.objects.filter(account=account).count(), 0)
+                figures = figures_dump.dump(account)
+                self.assertGreater(len(figures['cgt_events']), 1, 'the restored portfolio has no sales')
+                report = compare.check(account)
+                self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+                plan = apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+                self.assertTrue(plan.empty, plan.summary())
+
+                # Each instrument is checked as the restore finishes, and the restored portfolio
+                # takes new trades, back-dated ones included, under the replay writer.
+                instruments = Instrument.objects.filter(account=account, buy__isnull=False).distinct()
+                self.assertFalse(instruments.filter(holdings_differ__isnull=True).exists())
+                held = max(instruments, key=lambda instrument: instrument.quantity_held)
+                first = Buy.objects.filter(instrument=held).order_by('date').first()
+                with figures_dump.offline(), patch.object(
+                        yfinanceinterface, 'get_exchange_rate', return_value=Decimal('1.5')):
+                    Buy.objects.create(account=account, instrument=held, date=first.date,
+                                       quantity=Decimal('3'), unit_price=first.unit_price,
+                                       total_brokerage=Money(Decimal('0'), first.unit_price.currency))
+                    Sell.objects.create(account=account, instrument=held, date=date.fromisoformat(self.AS_OF),
+                                        quantity=Decimal('2'), unit_price=first.unit_price,
+                                        total_brokerage=Money(Decimal('0'), first.unit_price.currency),
+                                        strategy='FIFO')
+                self.assertEqual(compare.check(account).count, 0)
+        self.assertEqual(len(list(TEST_FIXTURES.glob('export_*.xlsx'))), 2)
+
+    def test_the_command_writes_a_csv_per_table(self):
+        account = create_account(description='Dumped')
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, True)
+
+        call_command('dump_figures', account='Dumped', out=str(out), stdout=io.StringIO())
+
+        self.assertEqual(sorted(path.stem for path in out.glob('*.csv')), sorted(figures_dump.dump(account)))
+        with self.assertRaisesMessage(CommandError, 'No portfolio named'):
+            call_command('dump_figures', account='Missing', out=str(out))
+
+
+class CalculatedSourceTests(TestCase):
+
+    def test_every_stored_figure_has_a_property_to_copy(self):
+        """A `calculated_*` field with no safe property of its name is never filled.
+
+        `calculated_affected_parcels` was such a column, since its property is
+        `affected_parcel_list`. Name the property after the field, or map it in
+        `signals.CALCULATED_SOURCES`.
+        """
+        from share_dinkum_app import signals
+        from share_dinkum_app.models import BaseModel
+
+        missing = []
+        for model in figures_dump.models_with_calculated_fields():
+            if not issubclass(model, BaseModel):
+                continue  # Account stores its own, in its save.
+            sourced = {field for field, _ in signals.calculated_sources(model)}
+            missing += [f'{model.__name__}.{field.name}' for field in figures_dump.calculated_fields(model)
+                        if field.name not in sourced]
+        self.assertEqual(missing, [])
+
+
+class HoldingStrategyTests(TestCase):
+    """The pure rules the signals and the replay share."""
+
+    def test_fifo_and_lifo_break_ties_in_the_order_made(self):
+        from share_dinkum_app.holdings import strategies
+        candidates = [('b', date(2024, 1, 2)), ('a', date(2024, 1, 2)), ('c', date(2024, 1, 1))]
+        order = lambda strategy: [name for name, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: c[1], tie=lambda c: c[0])]
+        self.assertEqual(order('FIFO'), ['c', 'a', 'b'])
+        self.assertEqual(order('LIFO'), ['a', 'b', 'c'])
+
+    def test_take_reports_what_is_left_over(self):
+        from share_dinkum_app.holdings import strategies
+        taken, left = strategies.take(Decimal('25'), [('a', Decimal('10')), ('b', Decimal('5'))])
+        self.assertEqual(taken, [('a', Decimal('10')), ('b', Decimal('5'))])
+        self.assertEqual(left, Decimal('10'))
+
+    def test_a_spread_sums_to_the_whole(self):
+        from share_dinkum_app.holdings import strategies
+        parts = strategies.spread(Decimal('100'), [('a', Decimal('1')), ('b', Decimal('1')), ('c', Decimal('1'))],
+                                  lambda value: value.quantize(Decimal('0.0001')))
+        self.assertEqual(sum(amount for _, amount, _ in parts), Decimal('100'))
+        self.assertEqual(strategies.spread(Decimal('100'), [('a', Decimal('0'))], lambda v: v), [])
+
+
+# The holdings these check were built by the creation signals, as every portfolio before 0.5.0
+# was: these are the checks and rebuilds that upgrade them.
+@override_settings(HOLDINGS_WRITER='signals')
+class HoldingsReplayTests(TransactionTestCase):
+    """The holdings worked out again from the trades, set against what is stored."""
+
+    def setUp(self):
+        from share_dinkum_app.holdings import compare
+        self.compare = compare
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+
+    def check(self):
+        return self.compare.check(self.account)
+
+    def test_a_portfolio_entered_in_date_order_agrees(self):
+        report = self.check()
+        self.assertEqual(report.count, 0, [str(d) for d in report.differences] + report.problems)
+        self.assertEqual(report.shape_differences, 0)
+        self.assertEqual(report.parcels_stored, report.parcels_replayed)
+
+    def test_the_check_writes_nothing(self):
+        models = list(apps.get_app_config('share_dinkum_app').get_models())
+        before = {model.__name__: model.objects.count() for model in models}
+        self.check()
+        self.assertEqual(before, {model.__name__: model.objects.count() for model in models})
+
+    @holdings_may_differ
+    def test_adjustment_moved_between_the_parts_of_a_buy_is_found(self):
+        """Per buy the total is pinned, but how it lies between units sold and held is worked out."""
+        sold = CostBaseAdjustmentAllocation.objects.filter(
+            account=self.account, deactivation_date__isnull=True,
+            parcel__buy=self.data['buy_one'], parcel__sale_allocation__isnull=False).order_by('id')
+        first, second = sold[0], sold[1]
+        CostBaseAdjustmentAllocation.objects.filter(pk=first.pk).update(
+            cost_base_increase=first.cost_base_increase.amount + 1)
+        CostBaseAdjustmentAllocation.objects.filter(pk=second.pk).update(
+            cost_base_increase=second.cost_base_increase.amount - 1)
+
+        kinds = {difference.kind for difference in self.check().differences}
+        self.assertIn('Adjustment on units sold', kinds)
+
+    @holdings_may_differ
+    def test_a_held_parcel_with_the_wrong_quantity_is_found(self):
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        differences = self.check().differences
+        self.assertEqual([d.kind for d in differences], ['Units held'])
+        self.assertIn('210', differences[0].stored)
+
+    @holdings_may_differ
+    def test_a_sale_of_more_than_the_buy_held_is_a_problem(self):
+        allocation = SellAllocation.objects.filter(sell=self.data['sell_loss'], is_active=True).order_by('id').first()
+        SellAllocation.objects.filter(pk=allocation.pk).update(quantity=allocation.quantity + 5000)
+        self.assertTrue(self.check().problems)
+
+    @holdings_may_differ
+    def test_a_sale_entered_before_its_buy_is_found(self):
+        """A sale entered before the buy it draws on was left unallocated; replayed, it is not."""
+        account = create_account(owner=self.account.owner, description='Out of order',
+                                 fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='OOO')
+        Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                            quantity=Decimal('10'), unit_price=Money(Decimal('5'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                           quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+
+        kinds = {difference.kind for difference in self.compare.check(account).differences}
+        self.assertEqual(kinds, {'Units sold', 'Units held', 'Units allocated to no parcel'})
+
+    def rebuild_plan(self, account=None):
+        from share_dinkum_app.holdings import apply, facts, replay, state
+        account = account or self.account
+        return apply.plan(state.stored(account), replay.replay(facts.load(account)).holding)
+
+    def test_a_rebuild_of_a_holding_entered_in_order_changes_nothing(self):
+        plan = self.rebuild_plan()
+        self.assertTrue(plan.empty, plan.summary())
+
+    @holdings_may_differ
+    def test_a_rebuild_corrects_a_wrong_quantity_in_place(self):
+        parcel = Parcel.objects.get(buy=self.data['buy_three'], deactivation_date__isnull=True)
+        Parcel.objects.filter(pk=parcel.pk).update(parcel_quantity=Decimal('210'))
+        plan = self.rebuild_plan()
+        self.assertEqual(plan.update_parcels, {parcel.pk: {'quantity': Decimal('200')}})
+        self.assertEqual(plan.summary(), 'parcels +0 ~1 -0, sale allocations +0 ~0 -0, adjustment parts +0 ~0 -0')
+
+    @holdings_may_differ
+    def test_a_rebuild_allocates_a_sale_entered_before_its_buy(self):
+        account = create_account(owner=self.account.owner, description='Out of order',
+                                 fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='OOO')
+        Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                            quantity=Decimal('4'), unit_price=Money(Decimal('5'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        buy = Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                                 quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                                 total_brokerage=Money(Decimal('0'), 'AUD'))
+        root = Parcel.objects.get(buy=buy)
+
+        plan = self.rebuild_plan(account)
+        self.assertEqual(plan.update_parcels, {root.pk: {'deactivation': date(2024, 3, 1)}})
+        self.assertEqual(len(plan.create_parcels), 2, 'the units sold and the remainder')
+        self.assertEqual([(q) for _, _, q in plan.create_sales], [Decimal('4')])
+
+    def rebuild(self, account=None):
+        from share_dinkum_app.holdings import apply
+        with figures_dump.offline():
+            return apply.rebuild(account or self.account)
+
+    def test_a_rebuild_of_an_agreeing_holding_writes_nothing(self):
+        before = figures_dump.dump(self.account)
+        counts = {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)}
+        self.assertTrue(self.rebuild().empty)
+        self.assertEqual(counts, {model.__name__: model.objects.count() for model in (Parcel, SellAllocation, CostBaseAdjustmentAllocation)})
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
+
+    def test_a_rebuild_repairs_a_wrong_quantity_in_place(self):
+        before = figures_dump.dump(self.account)
+        parcel = Parcel.objects.get(buy=self.data['buy_three'], deactivation_date__isnull=True)
+        Parcel.objects.filter(pk=parcel.pk).update(parcel_quantity=Decimal('210'))
+
+        self.rebuild()
+
+        parcel.refresh_from_db()
+        self.assertEqual(parcel.parcel_quantity, Decimal('200'), 'the same parcel, put right')
+        self.assertTrue(self.rebuild_plan().empty)
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
+
+    def test_a_rebuild_puts_moved_adjustment_back(self):
+        before = figures_dump.dump(self.account)
+        sold = CostBaseAdjustmentAllocation.objects.filter(
+            account=self.account, deactivation_date__isnull=True,
+            parcel__buy=self.data['buy_one'], parcel__sale_allocation__isnull=False).order_by('id')
+        first, second = sold[0], sold[1]
+        CostBaseAdjustmentAllocation.objects.filter(pk=first.pk).update(
+            cost_base_increase=first.cost_base_increase.amount + 1)
+        CostBaseAdjustmentAllocation.objects.filter(pk=second.pk).update(
+            cost_base_increase=second.cost_base_increase.amount - 1)
+
+        self.rebuild()
+
+        self.assertEqual(CostBaseAdjustmentAllocation.objects.get(pk=first.pk).cost_base_increase,
+                         first.cost_base_increase)
+        self.assertEqual(without_display_text(before), without_display_text(figures_dump.dump(self.account)))
+
+    def test_a_rebuild_writes_the_sale_entered_before_its_buy(self):
+        account = create_account(owner=self.account.owner, description='Rebuilt',
+                                  fy_type=self.account.fiscal_year_type)
+        instrument = create_instrument(account=account, name='RRR')
+        sale = Sell.objects.create(account=account, instrument=instrument, date=date(2024, 3, 1),
+                                   quantity=Decimal('4'), unit_price=Money(Decimal('5'), 'AUD'),
+                                   total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        buy = Buy.objects.create(account=account, instrument=instrument, date=date(2024, 1, 1),
+                                 quantity=Decimal('10'), unit_price=Money(Decimal('4'), 'AUD'),
+                                 total_brokerage=Money(Decimal('0'), 'AUD'))
+        root = Parcel.objects.get(buy=buy)
+
+        self.rebuild(account)
+
+        allocation = SellAllocation.objects.get(sell=sale)
+        self.assertEqual(allocation.quantity, Decimal('4'))
+        self.assertEqual(allocation.parcel.parent_parcel, root, 'the original parcel is kept, and split')
+        self.assertEqual(allocation.parcel.sale_date, date(2024, 3, 1))
+        instrument.refresh_from_db()
+        self.assertEqual(instrument.calculated_quantity_held, Decimal('6'))
+        sale.refresh_from_db()
+        self.assertEqual(sale.calculated_unallocated_quantity, Decimal('0'))
+        self.assertEqual(self.compare.check(account).count, 0)
+
+    def test_each_allocation_records_the_buy_it_took_from(self):
+        for allocation in SellAllocation.objects.filter(account=self.account):
+            self.assertEqual(allocation.buy_id, allocation.parcel.buy_id)
+        self.assertTrue(SellAllocation.objects.filter(account=self.account).exists())
+
+    def test_the_migration_records_the_buy_of_existing_allocations(self):
+        import importlib
+        migration = importlib.import_module('share_dinkum_app.migrations.0023_sell_allocation_buy_and_holdings_differ')
+        SellAllocation.objects.update(buy=None)
+
+        migration.record_the_buy_each_sale_used(apps, None)
+
+        for allocation in SellAllocation.objects.all():
+            self.assertEqual(allocation.buy_id, allocation.parcel.buy_id)
+
+    def test_a_rebuild_that_reshapes_parcels_keeps_every_allocation_id(self):
+        """A sale entered before an earlier-dated one was split from parcels made after it.
+        A rebuild orders them by date, re-pointing the allocations rather than replacing them,
+        so a snapshot taken before still matches its rows."""
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.account.fiscal_year_type.classify_date(date(2024, 6, 30))[0])
+        Sell.objects.create(
+            account=self.account, instrument=self.data['instrument'], date=date(2024, 6, 30),
+            quantity=Decimal('100'), unit_price=Money(Decimal('9.00'), 'AUD'),
+            total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO')
+        ids = set(SellAllocation.objects.filter(account=self.account).values_list('id', flat=True))
+        before = figures_dump.dump(self.account)
+        self.assertFalse(self.rebuild_plan().empty, 'the scenario should need reshaping')
+
+        self.rebuild()
+
+        self.assertEqual(set(SellAllocation.objects.filter(account=self.account).values_list('id', flat=True)), ids)
+        self.assertTrue(self.rebuild_plan().empty)
+        self.assertEqual(self.compare.check(self.account).count, 0)
+        # The adjustment is divided again in date order, so the last place of a cost base can
+        # round the other way; nothing moves by as much as a cent.
+        after = figures_dump.dump(self.account)
+        for table in ('cgt_events', 'cgt_schedule', 'income_figures'):
+            self.assertEqual(len(before[table]), len(after[table]), table)
+            for old_row, new_row in zip(before[table], after[table]):
+                for old, new in zip(old_row, new_row):
+                    if old != new:
+                        self.assertLess(abs(Decimal(old.split()[0]) - Decimal(new.split()[0])), Decimal('0.01'),
+                                        f'{table}: {old} -> {new}')
+        self.assertTrue(all(row.sell_allocation_id in ids for row in snapshot.captured_rows.all()))
+
+    def test_verify_records_whether_an_instrument_differs(self):
+        instrument = self.data['instrument']
+        self.assertIsNone(instrument.holdings_differ, 'unchecked until verified')
+        self.assertFalse(self.compare.verify(instrument))
+        self.assertIs(Instrument.objects.get(pk=instrument.pk).holdings_differ, False)
+
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        self.assertTrue(self.compare.verify(instrument))
+        self.assertIs(Instrument.objects.get(pk=instrument.pk).holdings_differ, True)
+        self.assertEqual(self.compare.check(self.account, instrument).count, 1)
+    test_verify_records_whether_an_instrument_differs.HOLDINGS_MAY_DIFFER = True
+
+    @holdings_may_differ
+    def test_the_dashboard_check_and_the_command_report_it(self):
+        self.assertNotIn('holdings_differ', {f.key for f in data_checks.run(self.account)})
+        Parcel.objects.filter(buy=self.data['buy_three'], deactivation_date__isnull=True).update(
+            parcel_quantity=Decimal('210'))
+        self.assertIn('holdings_differ', {f.key for f in data_checks.run(self.account)})
+
+        out = io.StringIO()
+        call_command('check_holdings', account=self.account.description, stdout=out)
+        self.assertIn('Units held', out.getvalue())
+
+
+class LiveHoldingsTests(TransactionTestCase):
+    """The replay as the writer: holdings follow the trades whatever order they are entered in."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='LIV')
+
+    def buy(self, day, quantity, price='10'):
+        return Buy.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                  quantity=Decimal(quantity), unit_price=Money(Decimal(price), 'AUD'),
+                                  total_brokerage=Money(Decimal('0'), 'AUD'))
+
+    def sell(self, day, quantity, strategy='FIFO'):
+        return Sell.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                   quantity=Decimal(quantity), unit_price=Money(Decimal('12'), 'AUD'),
+                                   total_brokerage=Money(Decimal('0'), 'AUD'), strategy=strategy)
+
+    def split(self, day, before='1', after='2'):
+        return ShareSplit.objects.create(account=self.account, instrument=self.instrument, date=day,
+                                         quantity_before=Decimal(before), quantity_after=Decimal(after))
+
+    def held(self):
+        return Instrument.objects.get(pk=self.instrument.pk).quantity_held
+
+    def test_a_buy_dated_before_an_applied_split_is_split_with_the_rest(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.split(date(2023, 6, 1))
+        late = self.buy(date(2023, 3, 1), '50')
+
+        parcel = Parcel.objects.get(buy=late, deactivation_date__isnull=True)
+        self.assertEqual(parcel.parcel_quantity, Decimal('100'))
+        self.assertEqual(self.held(), Decimal('300'))
+
+    def test_a_sale_dated_before_an_applied_split_is_in_pre_split_units(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.split(date(2023, 6, 1))
+        self.sell(date(2023, 3, 1), '40')
+
+        self.assertEqual(self.held(), Decimal('120'), '(100 - 40) units, split two for one')
+
+    def test_a_split_dated_before_an_allocated_sale_is_still_refused(self):
+        self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40')
+        with self.assertRaises(ValueError):
+            self.split(date(2023, 6, 1))
+
+    def test_a_buys_quantity_can_be_corrected(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40')
+        parcel_ids = set(Parcel.objects.filter(buy=buy).values_list('id', flat=True))
+
+        buy.quantity = Decimal('120')
+        buy.save()
+
+        self.assertEqual(self.held(), Decimal('80'))
+        self.assertEqual(set(Parcel.objects.filter(buy=buy).values_list('id', flat=True)), parcel_ids,
+                         'the same parcels, corrected in place')
+
+    def test_a_correction_below_the_units_already_sold_is_refused(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        self.sell(date(2023, 9, 1), '40', strategy='FIFO')
+        buy.quantity = Decimal('30')
+        with self.assertRaises(ValueError):
+            buy.save()
+        self.assertEqual(Buy.objects.get(pk=buy.pk).quantity, Decimal('100'))
+
+    def test_a_buys_date_can_be_corrected(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        buy.date = date(2023, 2, 10)
+        buy.save()
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.activation_date, date(2023, 2, 10))
+
+    def test_a_buy_inside_a_spread_adjustments_year_keeps_the_spread(self):
+        self.buy(date(2022, 8, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        spread = list(CostBaseAdjustmentAllocation.objects.filter(
+            cost_base_adjustment=adjustment).values_list('id', 'cost_base_increase'))
+
+        self.buy(date(2023, 1, 10), '100')
+
+        self.assertEqual(list(CostBaseAdjustmentAllocation.objects.filter(
+            cost_base_adjustment=adjustment).values_list('id', 'cost_base_increase')), spread)
+
+    def test_deleting_an_automatic_sales_allocation_makes_it_manual(self):
+        self.buy(date(2023, 1, 10), '100')
+        sale = self.sell(date(2023, 9, 1), '40')
+        SellAllocation.objects.get(sell=sale).delete()
+
+        sale.refresh_from_db()
+        self.assertEqual(sale.strategy, 'MANUAL')
+        self.assertFalse(SellAllocation.objects.filter(sell=sale).exists(), 'not allocated again')
+        self.assertEqual(self.held(), Decimal('100'))
+
+    def test_deleting_a_split_rebuilds_the_holding_without_it(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        split = self.split(date(2023, 6, 1))
+        self.assertEqual(self.held(), Decimal('200'))
+        split.delete()
+        self.assertEqual(self.held(), Decimal('100'))
+        self.assertEqual(Parcel.objects.filter(buy=buy).count(), 1)
+
+    def test_check_holdings_rebuild_accepts_the_differences(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        Parcel.objects.filter(buy=buy).update(parcel_quantity=Decimal('90'))
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=True)
+
+        out = io.StringIO()
+        call_command('check_holdings', account=self.account.description, rebuild=True, stdout=out)
+
+        self.assertIn('LIV: rebuilt', out.getvalue())
+        self.assertEqual(Parcel.objects.get(buy=buy).parcel_quantity, Decimal('100'))
+        self.assertIs(Instrument.objects.get(pk=self.instrument.pk).holdings_differ, False)
+        self.sell(date(2023, 9, 1), '10')  # Accepted again.
+
+    def test_the_admin_says_when_a_trade_leaves_a_spread_as_it_was(self):
+        from django.contrib.messages import get_messages
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from share_dinkum_app.admin import GenericModelAdmin
+
+        self.buy(date(2022, 8, 1), '100')
+        CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        late = self.buy(date(2023, 1, 10), '100')
+
+        request = RequestFactory().post('/')
+        request.session = {}
+        request._messages = FallbackStorage(request)
+        GenericModelAdmin.mention_kept_spreads(request, late)
+
+        self.assertIn('2023-06-30', ' '.join(str(m) for m in get_messages(request)))
+
+    def share_of(self, buy):
+        return sum((a.cost_base_increase.amount for a in CostBaseAdjustmentAllocation.objects.filter(
+            parcel__buy=buy, deactivation_date__isnull=True)), Decimal('0'))
+
+    def a_late_buy_after_a_spread(self):
+        first = self.buy(date(2022, 8, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'))
+        late = self.buy(date(2023, 1, 10), '100')
+        return first, late, adjustment
+
+    def test_reallocating_spreads_an_adjustment_over_a_late_buy(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        self.assertEqual(self.share_of(late), 0)
+
+        live.reallocate(self.instrument, [adjustment.pk])
+
+        self.assertGreater(self.share_of(late), 0)
+        self.assertEqual(self.share_of(first) + self.share_of(late), Decimal('50'))
+        # Now the division is pinned again: a rebuild leaves it as reallocated.
+        self.assertTrue(live.rebuild(Instrument.objects.get(pk=self.instrument.pk)).empty)
+
+    def test_the_reallocation_preview_names_the_sales_whose_gain_changes(self):
+        from share_dinkum_app.holdings import live
+
+        _, _, adjustment = self.a_late_buy_after_a_spread()
+        self.sell(date(2023, 9, 1), '50')
+
+        [preview] = live.preview_reallocation(self.instrument, [adjustment.pk])
+
+        self.assertEqual(len(preview.changes), 2)
+        self.assertEqual(len(preview.sales), 1)
+        self.assertIn('2023-09-01', preview.sales[0])
+
+    def test_a_buy_can_be_deleted_in_the_admin_with_its_parcels(self):
+        """A parcel cannot be deleted on its own, but goes with its buy."""
+        first, late, _ = self.a_late_buy_after_a_spread()
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+
+        parcel = Parcel.objects.get(buy=late)
+        page = self.client.get(reverse('admin:share_dinkum_app_parcel_delete', args=[parcel.pk]))
+        self.assertEqual(page.status_code, 403)
+
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+        self.assertNotContains(self.client.get(url), "doesn't have permission")
+        response = self.client.post(url, {'post': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Buy.objects.filter(pk=late.pk).exists())
+        self.assertFalse(Parcel.objects.filter(buy_id=late.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('50'))
+
+    def test_deleting_a_buy_reallocates_its_share_of_adjustments(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        live.reallocate(self.instrument, [adjustment.pk])
+        self.assertGreater(self.share_of(late), 0)
+
+        late.delete()
+
+        self.assertEqual(self.share_of(first), Decimal('50'))
+        self.assertEqual(CostBaseAdjustmentAllocation.objects.filter(parcel__buy_id=late.pk).count(), 0)
+
+    def test_the_admin_deletes_a_buy_holding_a_share_and_says_so(self):
+        from share_dinkum_app.holdings import live
+
+        first, late, adjustment = self.a_late_buy_after_a_spread()
+        live.reallocate(self.instrument, [adjustment.pk])
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+
+        self.assertNotContains(self.client.get(url), 'protected related objects')
+        response = self.client.post(url, {'post': 'yes'}, follow=True)
+
+        self.assertFalse(Buy.objects.filter(pk=late.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('50'))
+        self.assertContains(response, 'reallocated over the rest of the holding')
+
+    def test_a_buy_with_a_manually_allocated_share_is_refused_and_keeps_it(self):
+        """No rule says where a manual share should go, so it is not thrown away."""
+        from share_dinkum_app.holdings import live
+
+        first = self.buy(date(2022, 8, 1), '100')
+        second = self.buy(date(2022, 9, 1), '100')
+        adjustment = CostBaseAdjustment.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2023, 6, 30),
+            cost_base_increase=Money(Decimal('50'), 'AUD'), allocation_method='MANUAL')
+        for buy in (first, second):
+            CostBaseAdjustmentAllocation.objects.create(
+                account=self.account, cost_base_adjustment=adjustment,
+                parcel=Parcel.objects.get(buy=buy), cost_base_increase=Money(Decimal('25'), 'AUD'))
+
+        with self.assertRaises(live.HoldingsRefused):
+            second.delete()
+
+        self.assertTrue(Buy.objects.filter(pk=second.pk).exists())
+        self.assertEqual(self.share_of(first), Decimal('25'))
+        self.assertEqual(self.share_of(second), Decimal('25'))
+
+    def test_the_admin_shows_a_refusal_rather_than_failing(self):
+        late = self.buy(date(2023, 1, 10), '100')
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=True)
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_buy_delete', args=[late.pk])
+
+        response = self.client.post(url, {'post': 'yes'}, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'give different figures from its trades')
+        self.assertTrue(Buy.objects.filter(pk=late.pk).exists())
+
+    def test_a_buy_a_sale_used_is_still_protected(self):
+        from django.db.models import ProtectedError
+
+        first = self.buy(date(2022, 8, 1), '100')
+        self.sell(date(2023, 3, 1), '50')
+        with self.assertRaises(ProtectedError):
+            first.delete()
+        self.assertTrue(Buy.objects.filter(pk=first.pk).exists())
+
+    def test_the_reallocate_action_asks_before_it_changes_anything(self):
+        _, late, adjustment = self.a_late_buy_after_a_spread()
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_costbaseadjustment_changelist')
+        chosen = {'action': 'reallocate_action', '_selected_action': [str(adjustment.pk)]}
+
+        response = self.client.post(url, chosen)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Share after')
+        self.assertEqual(self.share_of(late), 0)
+
+        response = self.client.post(url, {**chosen, 'confirm': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertGreater(self.share_of(late), 0)
+
+    @holdings_may_differ
+    def test_an_instrument_whose_stored_figures_differ_refuses_changes(self):
+        buy = self.buy(date(2023, 1, 10), '100')
+        Parcel.objects.filter(buy=buy).update(parcel_quantity=Decimal('90'))
+        Instrument.objects.filter(pk=self.instrument.pk).update(holdings_differ=None)
+        self.instrument.refresh_from_db()
+
+        with self.assertRaisesMessage(ValueError, 'check_holdings'):
+            self.sell(date(2023, 9, 1), '10')
+        # The refusal takes back everything in the save, the flag it found included, so the
+        # instrument is checked again on its next change.
+        self.assertFalse(Sell.objects.filter(account=self.account).exists())
+        from share_dinkum_app.holdings import compare
+        self.assertTrue(compare.verify(self.instrument))
+
+
+class FetchFailureMemoryTests(TestCase):
+    """A fetch that failed is not tried again for a few minutes; one that worked always is."""
+
+    def setUp(self):
+        yfinanceinterface.forget_failures()
+        self.addCleanup(yfinanceinterface.forget_failures)
+        offline = MagicMock()
+        offline.history.side_effect = OSError('no network')
+        self.offline = offline
+
+    def test_a_failed_fetch_is_not_tried_again_at_once(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            self.assertIsNone(yfinanceinterface.get_exchange_rate('USD', 'AUD'))
+            self.assertIsNone(yfinanceinterface.get_exchange_rate('USD', 'AUD'))
+        self.assertEqual(self.offline.history.call_count, 1)
+
+    def test_another_fetch_is_still_tried(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            yfinanceinterface.get_exchange_rate('EUR', 'AUD')
+        self.assertEqual(self.offline.history.call_count, 2)
+
+    def test_it_is_tried_again_once_the_memory_lapses_or_is_cleared(self):
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=self.offline):
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            yfinanceinterface.forget_failures()
+            yfinanceinterface.get_exchange_rate('USD', 'AUD')
+            with patch.object(yfinanceinterface, 'FAILURE_MEMORY', timedelta(0)):
+                yfinanceinterface.get_exchange_rate('USD', 'AUD')
+        self.assertEqual(self.offline.history.call_count, 3)
+
+    def test_a_fetch_that_worked_is_never_held_back(self):
+        history = pd.DataFrame({'Close': [0.65]}, index=[pd.Timestamp('2024-01-02')])
+        ticker = MagicMock()
+        ticker.history.return_value = history
+        with patch('share_dinkum_app.yfinanceinterface.yf.Ticker', return_value=ticker) as make:
+            self.assertIsNotNone(yfinanceinterface.get_exchange_rate('USD', 'AUD', date(2024, 1, 2)))
+            self.assertIsNotNone(yfinanceinterface.get_exchange_rate('USD', 'AUD', date(2024, 1, 2)))
+        self.assertEqual(make.call_count, 2)
+
+    def test_refreshing_prices_tries_again(self):
+        account = create_account()
+        with patch.object(yfinanceinterface, 'forget_failures') as forget, \
+             patch.object(Account, 'update_all_exchange_rate_history'), \
+             patch.object(Account, 'update_all_price_history'):
+            account.refresh_market_data()
+        forget.assert_called_once()
+
+
+class FiguresDumpKeyTests(TestCase):
+
+    def test_every_model_with_stored_figures_has_a_natural_key(self):
+        """A new model with `calculated_*` fields needs a key in `figures_dump.Keys`."""
+        stored = {model.__name__ for model in figures_dump.models_with_calculated_fields()}
+        self.assertLessEqual(stored, {*figures_dump.KEYED_MODELS, 'Account'})
+
+    def test_an_id_in_text_becomes_the_key_of_what_it_names(self):
+        keys = figures_dump.Keys(account=None)
+        keys.by_id['01a1212d-8aae-715f-9afd-ca57c926698a'] = 'Parcel X'
+        self.assertEqual(
+            keys.translate('01a1212d-8aae-715f-9afd-ca57c926698a | INACTIVE\n01a1212d-0000-715f-9afd-ca57c926698a'),
+            'Parcel X | INACTIVE\n<id>')
+
+    def test_decimals_are_exact_and_without_an_exponent(self):
+        self.assertEqual(figures_dump._text(Decimal('1E+2')), '100')
+        self.assertEqual(figures_dump._text(Decimal('1.50')), '1.50')
+        self.assertEqual(figures_dump._text(Money(Decimal('2.5'), 'AUD')), '2.5 AUD')
 
 
 class NormaliseCellsTests(TestCase):
@@ -4666,6 +5562,21 @@ class DeemedSaleSplitTests(TransactionTestCase):
         self.assertEqual(
             deferred.gain_category, constants.CGT_GAIN_DEFERRED_NON_RESIDENTIAL)
 
+    def test_a_post_cutover_gain_not_indexed_has_no_factor(self):
+        """Not 1.000, which would read as indexed with no inflation."""
+        # A week with no residency declared denies indexation without stopping the split.
+        ResidencyPeriod.objects.filter(account=self.account).delete()
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'RESIDENT', date(2028, 3, 8))
+        events = self._events()
+        self.assertEqual(len(events), 2)
+        post = events[1]
+        self.assertEqual(post.slice, cgt.events.SLICE_POST_CUTOVER)
+        self.assertIsNone(post.indexation_factor)
+        # Not indexed only because of the gap, so the figure is not final.
+        self.assertEqual(post.pending_reason, cgt.events.PENDING_UNDECLARED_SPLIT_INDEXATION)
+        self.assertIsNone(events[0].pending_reason)
+
     def test_the_post_cutover_gain_is_indexed_and_undiscounted(self):
         """The post-cutover slice is indexed and gets no discount (s110-36(1A), s115-20)."""
         post = self._events()[1]
@@ -4822,6 +5733,94 @@ class CutoverAdjustmentSliceTests(TransactionTestCase):
         self.assertEqual(post.cost_base_adjustments, Money(Decimal('0'), 'AUD'))
         self.assertEqual(post.cost_base, Money(Decimal('16500.000'), 'AUD'))
         self.assertEqual(post.capital_gain, Money(Decimal('3490.050'), 'AUD'))
+
+
+class PostCutoverUndeclaredGapTests(TransactionTestCase):
+    """An asset bought from 1 July 2027, with residency undeclared for some days held: the
+    figure turns on what those days were, so it is left as it was and marked as not final."""
+
+    def setUp(self):
+        load_test_cpi()
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        enable_2027_regime(self)
+        self.instrument = create_instrument(account=self.account, name='GAP')
+
+    def event_for(self, bought):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=bought,
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=date(2029, 1, 15),
+                            quantity=Decimal('100'), unit_price=Money(Decimal('15'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        return cgt.disposal_events(self.account)[0]
+
+    def test_an_undeclared_gap_is_flagged_and_the_figure_left_as_it_was(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'RESIDENT', date(2028, 4, 1))
+
+        event = self.event_for(date(2027, 9, 1))
+
+        self.assertEqual(event.discount_percentage,
+                         cgt.discount_percentage(date(2027, 9, 1), date(2029, 1, 15), self.account))
+        self.assertGreater(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, cgt.events.METHOD_DISCOUNT)
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.pending_reason, cgt.events.PENDING_UNDECLARED_INDEXATION)
+        self.assertTrue(cgt.build_schedule(self.account, 'FY2028/29').is_draft)
+
+    def test_a_foreign_stay_is_left_for_the_advice_on_s115_105(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2028, 2, 29))
+        declare(self.account, 'FOREIGN', date(2028, 3, 1), date(2028, 3, 31))
+        declare(self.account, 'RESIDENT', date(2028, 4, 1))
+
+        event = self.event_for(date(2027, 9, 1))
+
+        self.assertNotEqual(event.pending_reason, cgt.events.PENDING_UNDECLARED_INDEXATION)
+        self.assertGreater(event.discount_percentage, Decimal('0'))
+
+    def test_resident_every_day_is_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertIsNotNone(event.indexation_factor)
+        self.assertIsNone(event.pending_reason)
+
+
+class StatementCurrencyTests(TransactionTestCase):
+    """A trust statement not in the portfolio's currency is left out of the gains, and flagged."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='ETF')
+
+    def statement(self, *lines):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2024, 6, 30))
+        for component, amount, currency in lines:
+            AttributionComponent.objects.create(account=self.account, statement=statement, component=component,
+                                                amount=Money(Decimal(amount), currency))
+        return statement
+
+    def test_a_statement_in_the_portfolio_currency_counts(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'AUD'))
+        events = cgt.attribution_events(self.account)
+        self.assertEqual([e.capital_gain for e in events], [Money(Decimal('100'), 'AUD')])
+
+    def test_a_statement_in_another_currency_is_left_out_and_flagged(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'USD'))
+
+        self.assertEqual(cgt.attribution_events(self.account), [])
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        self.assertTrue(schedule.is_draft)
+        self.assertTrue(any('its lines are in USD, not AUD' in w for w in schedule.warnings), schedule.warnings)
+
+    def test_a_statement_in_two_currencies_is_left_out_and_flagged(self):
+        self.statement(('DISCOUNTED_NTAP', '50', 'AUD'), ('OTHER_NTAP', '10', 'USD'))
+
+        self.assertEqual(cgt.attribution_events(self.account), [])
+        schedule = cgt.build_schedule(self.account, 'FY2023/24')
+        self.assertTrue(any('its lines are in AUD, USD' in w for w in schedule.warnings), schedule.warnings)
 
 
 class ReturnedExpatIndexationTests(TransactionTestCase):
@@ -5546,6 +6545,68 @@ class ExportRoundTripTests(TransactionTestCase):
             Parcel.objects.filter(buy__isnull=False).count(), parcels_before,
             'every parcel should be one the file supplied, not one a signal invented')
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
+    def test_a_split_keeps_the_parcels_it_was_applied_to(self):
+        """A restored split still knows its parcels, so it still guards the history.
+
+        `affected_parcels` is many-to-many, which the export does not write. Without it, the
+        split could be deleted after its parcels were sold, reversing nothing, and a sale dated
+        before it would be accepted.
+        """
+        data = create_golden_master_portfolio()
+        account, split = data['account'], data['share_split']
+        affected = set(split.affected_parcels.values_list('id', flat=True))
+        self.assertTrue(affected)
+        self.assertIsNotNone(split.deletion_blocker())
+        path = self._detached_export(account)
+
+        self._wipe()
+        loading.DataLoader(input_file=path)
+
+        restored = ShareSplit.objects.get(pk=split.pk)
+        self.assertEqual(set(restored.affected_parcels.values_list('id', flat=True)), affected)
+        self.assertIsNotNone(restored.deletion_blocker(), 'the split can be deleted after its parcels were sold')
+        early_sale = Sell(
+            account=restored.account, instrument=restored.instrument, date=date(2023, 6, 1),
+            quantity=Decimal('10'), unit_price=Money(Decimal('9.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        self.assertIsNotNone(early_sale.chronology_problem(), 'a sale dated before the split is accepted')
+
+    def test_a_split_restored_without_its_parcels_is_found_and_repaired(self):
+        """A portfolio restored before the loader relinked splits is flagged and repaired."""
+        data = create_golden_master_portfolio()
+        account, split = data['account'], data['share_split']
+        affected = set(split.affected_parcels.all())
+        split.affected_parcels.clear()
+
+        finding = {f.key: f for f in data_checks.run(account)}['splits_without_parcels']
+        self.assertTrue(finding.repairable)
+
+        call_command('repair_portfolio_data', stdout=io.StringIO())
+
+        self.assertEqual(set(split.affected_parcels.all()), affected)
+        self.assertNotIn('splits_without_parcels', {f.key for f in data_checks.run(account)})
+
+    def test_a_sale_on_the_split_date_is_not_taken_for_the_split(self):
+        """A sale the same day also replaces a parcel, with two children, not one."""
+        account = create_account()
+        instrument = create_instrument(account=account)
+        Buy.objects.create(account=account, instrument=instrument, date=date(2023, 1, 10),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Buy.objects.create(account=account, instrument=instrument, date=date(2023, 2, 10),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        split = ShareSplit.objects.create(account=account, instrument=instrument, date=date(2023, 6, 1),
+                                          quantity_before=Decimal('1'), quantity_after=Decimal('2'))
+        Sell.objects.create(account=account, instrument=instrument, date=date(2023, 6, 1),
+                            quantity=Decimal('50'), unit_price=Money(Decimal('6'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+
+        self.assertEqual(set(split.parcels_created()), set(split.affected_parcels.all()))
+        self.assertEqual(len(split.parcels_created()), 2)
+
     def test_a_column_the_model_no_longer_has_is_ignored(self):
         """A column the model no longer has is ignored on import."""
         account = create_account()
@@ -5833,7 +6894,17 @@ class RefreshPricesButtonTests(TransactionTestCase):
         # A state changing action has to be a form, not a link.
         self.assertIn('csrfmiddlewaretoken', body)
 
-    def test_it_triggers_the_same_refresh_the_account_field_did(self):
+    def test_the_refresh_stores_the_portfolio_value(self):
+        Account.objects.filter(pk=self.account.pk).update(calculated_portfolio_value_converted=-1)
+        with patch.object(Account, 'update_all_price_history'), \
+             patch.object(Account, 'update_all_exchange_rate_history'):
+            self.client.post(self.url)
+
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.calculated_portfolio_value_converted.amount,
+                         self.account.portfolio_value_converted)
+
+    def test_it_triggers_the_refresh(self):
         with patch.object(
                 Account, 'update_all_price_history') as prices, patch.object(
                 Account, 'update_all_exchange_rate_history') as rates:
@@ -5854,15 +6925,6 @@ class RefreshPricesButtonTests(TransactionTestCase):
             self.client.post(self.url)
 
         self.assertEqual(calls, ['rates', 'prices'])
-
-    def test_the_flag_is_left_clear_afterwards(self):
-        """update_price_history is cleared after the refresh."""
-        with patch.object(Account, 'update_all_price_history'), \
-             patch.object(Account, 'update_all_exchange_rate_history'):
-            self.client.post(self.url)
-
-        self.account.refresh_from_db()
-        self.assertFalse(self.account.update_price_history)
 
     def test_a_get_does_not_refresh_anything(self):
         """A GET does not refresh anything."""
@@ -6517,6 +7579,8 @@ class ImportIntegrityTests(TransactionTestCase):
             self._load(Buy=[import_buy('B1', date(2020, 1, 10)),
                             import_buy('B1', date(2021, 1, 10))])
 
+    # The signals writer refuses this; the replay accepts it (LiveHoldingsTests).
+    @override_settings(HOLDINGS_WRITER='signals')
     def test_a_changed_quantity_on_a_second_load_is_refused(self):
         self._load(Buy=[import_buy('B1', date(2020, 1, 10))])
         with self.assertRaisesMessage(ValueError, 'Delete it and enter it again'):
@@ -6878,6 +7942,27 @@ class FullBackupTests(TransactionTestCase):
         self.assertEqual(latest.name, '2026-09-05T141921')
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 1)
 
+    def test_the_database_is_the_one_env_names(self):
+        """`uv run update` backs up the database `.env` names, not a hard-coded one."""
+        project = Path(tempfile.mkdtemp())
+        (project / '.env').write_text('DB_ENGINE=django.db.backends.sqlite3\nDB_NAME=portfolio.sqlite3\n')
+        with patch.dict(os.environ):
+            os.environ.pop('DB_NAME', None)
+            os.environ.pop('DB_ENGINE', None)
+            self.assertEqual(self.backup.configured_database(project), project / 'portfolio.sqlite3')
+
+            absolute = self.root / 'elsewhere.sqlite3'
+            (project / '.env').write_text(f'DB_ENGINE=django.db.backends.sqlite3\nDB_NAME={absolute}\n')
+            self.assertEqual(self.backup.configured_database(project), absolute)
+
+            (project / '.env').write_text('DB_ENGINE=django.db.backends.postgresql\nDB_NAME=dinkum\n')
+            self.assertIsNone(self.backup.configured_database(project))
+
+    def test_media_alone_is_backed_up_without_a_sqlite_database(self):
+        result = self.backup.make_backup(None, self.media, self.destination)
+        self.assertEqual(result['database_bytes'], 0)
+        self.assertEqual(result['media_files'], 1)
+
     def test_the_old_flat_layout_is_never_pruned(self):
         """Old-layout backups are never pruned."""
         for index in range(7):
@@ -7034,12 +8119,36 @@ class CGTScheduleExportTests(TransactionTestCase):
         gains = indexed[indexed.index == 'Capital gain']['FY2023/24'].fillna(0).sum()
         trust = indexed.loc['Capital gains from trusts (including managed funds)', 'FY2023/24']
         unclassified = indexed.loc[
-            'Unclassified (not reportable until the holding is classified)', 'FY2023/24']
+            'Unclassified capital gain (not reportable until the holding is classified)', 'FY2023/24']
         total = indexed.loc['Total current year capital gains', 'FY2023/24']
 
         self.assertGreater(total, 0, 'this fixture should have gains to check')
         self.assertAlmostEqual(
             gains + (trust or 0) + (unclassified or 0), total, places=4)
+
+    def test_a_loss_on_an_unclassified_holding_has_its_own_line(self):
+        """Otherwise the loss lines fall short of the stated total, with nothing saying why."""
+        instrument = create_instrument(
+            account=self.account, name='UNCL', market=Market.objects.filter(account=self.account).first())
+        Instrument.objects.filter(pk=instrument.pk).update(cgt_asset_category_override='NOT_A_CATEGORY')
+        Buy.objects.create(
+            account=self.account, instrument=instrument, date=date(2023, 8, 1),
+            quantity=Decimal('100'), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(
+            account=self.account, instrument=instrument, date=date(2024, 3, 1),
+            quantity=Decimal('100'), unit_price=Money(Decimal('5.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+
+        frame = reports.cgt_return_schedule_frame(self.account, ['FY2023/24'])
+        indexed = frame.set_index(frame['line'].str.strip())
+        losses = indexed[indexed.index == 'Capital loss']['FY2023/24'].fillna(0).sum()
+        unclassified = indexed.loc[
+            'Unclassified capital loss (not reportable until the holding is classified)', 'FY2023/24']
+        total = indexed.loc['Total current year capital losses', 'FY2023/24']
+
+        self.assertAlmostEqual(unclassified, 500, places=4)
+        self.assertAlmostEqual(losses + unclassified, total, places=4)
 
     def test_a_draft_year_is_marked_in_its_own_column(self):
         """Draft years are marked in their own row."""
@@ -7060,6 +8169,12 @@ class CGTScheduleExportTests(TransactionTestCase):
         self.assertIn('attachment;', response['Content-Disposition'])
         self.assertIn('CGT_Schedule', response['Content-Disposition'])
         self.assertTrue(response.content[:2] == b'PK', 'an xlsx is a zip')
+
+    def test_a_quote_in_the_portfolio_name_keeps_the_filename_whole(self):
+        self.account.description = 'The "Main" Portfolio'
+        self.account.save()
+        response = self.client.post(self.url)
+        self.assertIn(r'The \"Main\" Portfolio', response['Content-Disposition'])
 
     def test_the_button_is_on_the_dashboard_under_tax(self):
         body = self.client.get(reverse('admin:dashboard')).content.decode()

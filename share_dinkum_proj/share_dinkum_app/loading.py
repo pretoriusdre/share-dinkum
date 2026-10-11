@@ -3,8 +3,8 @@ import pandas as pd
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
+import contextlib
 import shutil
-import sqlite3
 from typing import Any, cast
 from tqdm import tqdm
 from pathlib import Path
@@ -18,16 +18,15 @@ from django.core.management import call_command
 
 
 from djmoney.models.fields import MoneyField
-from djmoney.money import Money
 
 import share_dinkum_app
 from share_dinkum_app import backup as backup_module, excelinterface, recalculate
+from share_dinkum_app.holdings import compare, live, shadow
 from share_dinkum_app.choices import SellStrategy
 from django.db import models
 
 import share_dinkum_app.models as app_models
 from share_dinkum_app.utils import convert_to_decimal_field, save_with_logging, process_filefield
-from share_dinkum_app.utils.signal_helpers import disconnect_app_signals, reconnect_app_signals
 
 
 import logging
@@ -195,9 +194,6 @@ def queryset_to_df(queryset: 'models.QuerySet[Any]') -> pd.DataFrame:
     fields = [f.name for f in model._meta.fields]
     related_fields = [f.name for f in model._meta.fields if f.is_relation]
 
-    # Include model properties (calculated fields)
-    properties = [attr for attr in dir(model) if isinstance(getattr(model, attr), property)]
-
     data: list[dict[str, Any]] = []
     for obj in queryset:
         record: dict[str, Any] = {}
@@ -325,7 +321,11 @@ class DataLoader():
         template = self.is_template()
         self._had_rows = self._models_with_rows()
 
-        with transaction.atomic():
+        # An export carries its parcels and allocations beside its trades, so nothing is rebuilt
+        # as its rows load; each instrument is checked against its trades once they all have.
+        # A template's trades are rebuilt row by row, since its allocations name parcels.
+        restoring = live.writing() if not template else contextlib.nullcontext()
+        with transaction.atomic(), restoring:
             for model in model_load_order:
                 table_name = model.__name__
 
@@ -364,8 +364,16 @@ class DataLoader():
             if not template and self.account is not None:
                 # An export's derived rows arrive already handled, so the saves that would
                 # have kept the stored figures current (an instrument's holding, a parcel's
-                # sold flag) ran before the rows they count had loaded.
+                # sold flag) ran before the rows they count had loaded. Nor does it carry a
+                # split's links to its parcels, which are many-to-many.
+                recalculate.relink_split_parcels(self.account)
                 recalculate.account(self.account)
+                if live.active():
+                    for instrument in app_models.Instrument.objects.filter(account=self.account):
+                        compare.verify(instrument)
+
+            if self.account is not None:
+                shadow.check(self.account, 'loading a file')
 
     @staticmethod
     def _matched_only_by_legacy_id(model: type[models.Model]) -> bool:

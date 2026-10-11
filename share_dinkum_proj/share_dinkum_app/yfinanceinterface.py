@@ -1,9 +1,12 @@
 import yfinance as yf
+from collections.abc import Callable
 from datetime import date, timedelta, datetime, UTC
+from functools import wraps
 import pandas as pd
 import string
+import threading
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from share_dinkum_app.utils import convert_to_decimal
 
@@ -13,6 +16,55 @@ if TYPE_CHECKING:
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+#: How long a fetch that failed is not tried again. Offline, the dashboard and every foreign
+#: trade asked for the same current rate several times over, and each waited for Yahoo to fail.
+FAILURE_MEMORY = timedelta(minutes=5)
+
+_failed: dict[tuple[Any, ...], datetime] = {}
+_failed_lock = threading.Lock()
+
+F = TypeVar('F', bound=Callable[..., Any])
+
+
+def forget_failures() -> None:
+    """Try every fetch again, as an explicit refresh should."""
+    with _failed_lock:
+        _failed.clear()
+
+
+def _key_part(value: Any) -> Any:
+    # An instrument is named by its ticker: the same fetch whichever copy of it is passed.
+    return getattr(value, 'yfinance_ticker_code', None) or getattr(value, 'pk', None) or str(value)
+
+
+def _remembering_failures(nothing: Callable[[], Any]) -> Callable[[F], F]:
+    """Return `nothing()` without fetching while the same fetch failed within FAILURE_MEMORY.
+
+    Failed means it came back with nothing: an empty result is as useless as an error, and the
+    functions catch their errors. A fetch that succeeds is never held back.
+    """
+    def decorate(fetch: F) -> F:
+        @wraps(fetch)
+        def remembering(*args: Any, **kwargs: Any) -> Any:
+            key = (fetch.__name__, *map(_key_part, args), *sorted((k, _key_part(v)) for k, v in kwargs.items()))
+            now = datetime.now(UTC)
+            with _failed_lock:
+                failed_at = _failed.get(key)
+            if failed_at is not None and now - failed_at < FAILURE_MEMORY:
+                logger.debug('Not fetching %s again yet: it failed at %s.', key, failed_at)
+                return nothing()
+            result = fetch(*args, **kwargs)
+            empty = result is None or (isinstance(result, pd.DataFrame) and result.empty)
+            with _failed_lock:
+                if empty:
+                    _failed[key] = now
+                else:
+                    _failed.pop(key, None)
+            return result
+        return remembering  # type: ignore[return-value]
+    return decorate
 
 
 
@@ -44,6 +96,7 @@ def as_traded(price_history: pd.DataFrame) -> pd.DataFrame:
     return price_history
 
 
+@_remembering_failures(pd.DataFrame)
 def get_instrument_price_history(instrument: 'Instrument', start_date: date | datetime | str | None,
                                  end_date: date | datetime | str | None = None) -> pd.DataFrame:
     """Daily prices as traded that day, from `start_date` to `end_date` (default today).
@@ -134,6 +187,7 @@ def get_instrument_price_history(instrument: 'Instrument', start_date: date | da
 
 
 
+@_remembering_failures(lambda: None)
 def get_current_price(instrument: 'Instrument') -> Decimal | None:
     """Fetch live/current price from yfinance ticker info."""
     ticker_code = instrument.yfinance_ticker_code
@@ -149,6 +203,7 @@ def get_current_price(instrument: 'Instrument') -> Decimal | None:
         return None
 
 
+@_remembering_failures(pd.DataFrame)
 def get_exchange_rate_history(convert_from: str, convert_to: str, start_date: date) -> pd.DataFrame:
     
     ticker_code = f'{convert_from}{convert_to}=X'
@@ -182,6 +237,7 @@ def get_exchange_rate_history(convert_from: str, convert_to: str, start_date: da
         return pd.DataFrame([])
 
 
+@_remembering_failures(lambda: None)
 def get_exchange_rate(convert_from: str, convert_to: str, exchange_date: date | str | None = None) -> Decimal | None:
     ticker_code = f'{convert_from}{convert_to}=X'
     yfinance_obj = yf.Ticker(ticker_code)

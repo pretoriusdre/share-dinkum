@@ -1,12 +1,14 @@
 """Checks for records left wrong by bugs since fixed, or by entries the app cannot resolve.
 
-Each check is one query, so the dashboard runs them all on every visit. The
+Each check is one query, so the dashboard runs them all on every visit; the holdings replay is
+the exception, and reads every trade once. The
 `repair_portfolio_data` command fixes those marked `repairable` and lists the rest, which
 need a person: only they know which parcel a sale was of, or what an adjustment should be.
 """
 
 from dataclasses import dataclass
 from decimal import Decimal
+import logging
 from typing import TYPE_CHECKING, Any
 
 from django.db.models import F, Q, QuerySet, Sum
@@ -14,10 +16,12 @@ from django.db.models.functions import Abs, Coalesce
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell,
+        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell, ShareSplit,
     )
 
 COMMAND = 'uv run dev repair_portfolio_data'
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -111,6 +115,32 @@ def empty_adjustments(account: 'Account') -> 'QuerySet[CostBaseAdjustment]':
     )
 
 
+def splits_without_parcels(account: 'Account') -> list['ShareSplit']:
+    """Applied splits that have lost the links to the parcels they created.
+
+    Exports did not carry them, so a portfolio restored from one has none. Such a split no longer stops a sale being
+    entered before it, and can be deleted without reversing anything.
+    """
+    from share_dinkum_app.models import ShareSplit
+    unlinked = ShareSplit.objects.filter(
+        account=account, _creation_handled=True, affected_parcels__isnull=True)
+    return [split for split in unlinked if split.parcels_created()]
+
+
+def holdings_differences(account: 'Account') -> int:
+    """Figures where the stored holding differs from the one worked out again from the trades.
+
+    Not one query: it replays the holding, which reads every trade. A failure is logged and
+    counted, so a bug in the replay cannot stop the dashboard.
+    """
+    from share_dinkum_app.holdings import compare
+    try:
+        return compare.check(account).count
+    except Exception:
+        logger.exception('Could not replay the holdings of %s.', account)
+        return 1
+
+
 def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
@@ -143,10 +173,18 @@ def run(account: 'Account') -> list[Finding]:
          'cost base adjustment(s) for a year when none of the instrument was held, so in no '
          'cost base; check the year and instrument',
          False, True),
+        ('holdings_differ', holdings_differences(account),
+         'difference(s) between the stored holdings and the holdings worked out again from the '
+         'trades; `uv run dev check_holdings` lists them',
+         False, True),
         ('orphaned_adjustment_allocations', orphaned_adjustment_allocations(account).count(),
          'cost base adjustment allocation(s) left behind by a share split, and so missing '
          'from the cost base',
          True, True),
+        ('splits_without_parcels', len(splits_without_parcels(account)),
+         'share split(s) no longer linked to the parcels they created, so a sale dated before '
+         'one is not refused',
+         True, False),
         ('placeholder_rates', placeholder_rates(account).count(),
          'exchange rate(s) standing in for one that could not be fetched',
          True, True),

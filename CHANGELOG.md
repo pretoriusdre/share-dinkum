@@ -4,6 +4,67 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
+## 0.5.0 - 2026-10-11
+
+Release 0.5.0 changes the way that parcels are built from trades. Previously, each 'buy' trade
+created a parcel at the moment of entry. Things which act on or attach to those parcels, like
+sells, splits, and cost base allocations, used those existing parcels, so needed to be added
+afterwards. But what if you made a mistake in one of your old buy entries? That could affect all
+of the subsequent calculations in a way which is difficult to fix. This release solves that type
+of scenario. Every time you add, delete or update a trade, everything which is derived from it is
+recalculated, and the difference is applied. Upgrading does not change your existing figures.
+
+### Added
+
+- `uv run dev check_holdings` works each portfolio's parcels and allocations out again from its
+  trades and lists any figure that differs from what is stored. `--rebuild` accepts the difference
+  and rewrites them. `--respread` lists older cost base adjustments that today's spread would divide
+  differently. The dashboard warns when there is a difference.
+- **Reallocate** cost base adjustments: an admin action that spreads the selected adjustments again
+  over the holding as it now stands, for example after entering a buy you had missed. It shows each
+  buy's share before and after, and names the sales whose gain would change, before it changes
+  anything.
+
+### Changed
+
+- **Parcels are recalculated from trades.** Saving or deleting a buy, sale, share split, cost base
+  adjustment or allocation works the instrument's parcels out again from its trades, in date order,
+  in the same save. So these are now accepted:
+  - a buy or sale dated before a share split already entered;
+  - a buy or sale dated before a cost base adjustment already spread. The spread is kept as it was,
+    and the admin says so; Reallocate spreads it over the holding as it now stands;
+  - a corrected date, quantity or instrument on a buy. A correction a sale already made cannot
+    follow (fewer units than were sold, say) is refused.
+
+  A share split dated before a sale already allocated is still refused. Lodged CGT snapshots still
+  match.
+- Deleting an allocation of a FIFO, LIFO or minimum-CGT sale makes the sale MANUAL, so it is not
+  allocated again straight away.
+- If an instrument's stored parcels give different figures from its trades, changes to it are
+  refused until `uv run dev check_holdings --rebuild` accepts the difference.
+- Each sale allocation records the buy it took units from, and exports carry it.
+- Offline, a price or exchange rate that could not be fetched is not tried again for five minutes.
+  Refresh prices always tries again.
+- The portfolio's "Update price history" tick-box is removed. Use Refresh prices on the dashboard.
+- `uv run update` now uses `DB_NAME` in `.env`, instead of hardcoded value `db.sqlite3`.
+
+### Fixed
+
+- A buy can now be deleted. Its parcels go with it, and its share of each cost base adjustment is
+  reallocated to the buys still held. It is still refused if a sale took units from it (delete the
+  sale first), or if it holds a share of an adjustment allocated manually (move or delete that
+  allocation first).
+- A managed fund's annual statement entered in a currency other than the portfolio's is now left
+  out of the capital gains schedule and named, rather than counted wrongly.
+- In a portfolio whose currency is not AUD, a zero amount (a parcel bought for nothing, or a
+  dividend of nothing) was stored as AUD and could not be converted.
+- With the 2027 changes modelled, the part of a sale after 1 July 2027 that is not indexed showed
+  an indexation factor of 1.000, it is now blank. Where it is not indexed only because some
+  residency days are undeclared, it is marked as not final with a warning.
+- The CGT report's return layout had no line for a loss on an unclassified instrument, so
+  the loss lines fell short of the total. Added the line.
+- A portfolio name with a double quote in it broke the CGT and income report download's filename.
+
 ## 0.4.0 - 2026-10-04
 
 A minor release focused on documentation, improved sample data, ease of importing, and reporting.

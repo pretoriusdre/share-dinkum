@@ -36,6 +36,25 @@ RETAIN_BACKUPS = 5
 DEFAULT_NAME = 'main'
 
 
+def configured_database(project: PathInput) -> Path | None:
+    """The SQLite file the app uses, read from the project's `.env` the way settings does.
+
+    An environment variable wins over `.env`, as in settings. Returns None for a database that is
+    not a SQLite file (another engine, ':memory:' or a 'file:' URI), which this cannot copy.
+    """
+    from decouple import Config, RepositoryEmpty, RepositoryEnv
+
+    project = Path(project)
+    env_file = project / '.env'
+    config = Config(RepositoryEnv(str(env_file)) if env_file.exists() else RepositoryEmpty())
+
+    engine = str(config('DB_ENGINE', default='django.db.backends.sqlite3'))
+    name = str(config('DB_NAME', default='db.sqlite3'))
+    if 'sqlite' not in engine or name.startswith((':', 'file:')):
+        return None
+    return Path(name) if Path(name).is_absolute() else project / name
+
+
 def copy_sqlite_database(source: PathInput, destination: PathInput) -> None:
     """Copy a SQLite database with its online backup API, which is safe while it is in use."""
     source_connection = sqlite3.connect(f'file:{source}?mode=ro', uri=True)
@@ -105,14 +124,16 @@ def cleanup_old_backups(root: PathInput | None = None, name: str = DEFAULT_NAME,
     return removed
 
 
-def make_backup(database: PathInput, media: PathInput, root: PathInput | None = None, name: str = DEFAULT_NAME,
+def make_backup(database: PathInput | None, media: PathInput, root: PathInput | None = None, name: str = DEFAULT_NAME,
                 keep: int = RETAIN_BACKUPS) -> BackupResult | None:
     """Copy the database and media folder into a new timestamped folder, then prune.
 
-    Returns `{path, database_bytes, media_files, removed}`, or None if neither exists.
+    `database` is None when there is no SQLite file to copy. Returns
+    `{path, database_bytes, media_files, removed}`, or None if neither exists.
     """
-    database, media = Path(database), Path(media)
-    if not database.exists() and not media.exists():
+    database = Path(database) if database is not None else None
+    media = Path(media)
+    if (database is None or not database.exists()) and not media.exists():
         return None
 
     destination = set_path(root, name) / datetime.now().strftime(BACKUP_FOLDER_FORMAT)
@@ -120,7 +141,7 @@ def make_backup(database: PathInput, media: PathInput, root: PathInput | None = 
 
     result: BackupResult = {'path': destination, 'database_bytes': 0, 'media_files': 0, 'removed': []}
 
-    if database.exists():
+    if database is not None and database.exists():
         copy_sqlite_database(database, destination / database.name)
         result['database_bytes'] = database.stat().st_size
 

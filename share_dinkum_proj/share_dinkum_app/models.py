@@ -3,13 +3,11 @@ from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import bisect
 import copy
-import json
 from typing import Any, cast
 
 # Django imports
 from django.db import models, transaction
 from django.contrib.auth.models import AbstractUser
-from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
@@ -17,7 +15,6 @@ from django.core.validators import MinValueValidator
 from django.urls import reverse
 from django.db.models import Sum, F, Q, QuerySet
 from django.db.models.functions import Coalesce
-from django.forms.models import model_to_dict
 
 # Djmoney imports
 from djmoney.models.fields import MoneyField, CurrencyField
@@ -30,6 +27,7 @@ from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
+from share_dinkum_app.holdings import live
 from share_dinkum_app.choices import (
     AllocationMethod,
     AttributionComponent as AttributionComponentType,
@@ -213,9 +211,6 @@ class Account(models.Model):
     fiscal_year_type = models.ForeignKey(FiscalYearType, on_delete=models.PROTECT,
         help_text='The fiscal year pattern reports use. The Australian Tax Year runs July '
                   'to June.')
-    update_price_history = models.BooleanField(default=False,
-        help_text='Whether the app downloads price and exchange rate history for this '
-                  'portfolio.')
 
 
     #: Sets the CGT discount: half for an individual or trust, a third for a complying super
@@ -328,6 +323,19 @@ class Account(models.Model):
                     force_refresh=True,
                 )
 
+    def refresh_market_data(self) -> None:
+        """Fetch exchange rates, then prices, and store the portfolio value they give.
+
+        Rates come first. Saving an instrument stores its value converted at whatever the
+        current rate is at that moment, and nothing re-converts it afterwards, so refreshing
+        the rate second leaves every holding valued at the previous rate.
+        """
+        # Ideally run this as a background task (Celery, Django-Q, etc.)
+        yfinanceinterface.forget_failures()  # Asked for, so try even what failed a moment ago.
+        self.update_all_exchange_rate_history()
+        self.update_all_price_history()
+        self.save(update_fields=self.CALCULATED_FIELDS)
+
     CALCULATED_FIELDS = frozenset({
         'calculated_portfolio_value_converted',
         'calculated_portfolio_value_converted_currency',
@@ -338,8 +346,7 @@ class Account(models.Model):
         self.calculated_portfolio_value_converted_currency = self.currency
 
         # Every save recomputes the portfolio value, so a partial save has to write it too.
-        # Without this, a caller narrowing update_fields to its own field (as the price refresh
-        # signal does) silently discards the freshly calculated total and leaves the stored
+        # Without this, a caller narrowing update_fields to its own field silently discards the freshly calculated total and leaves the stored
         # figure behind whatever the instruments now say.
         update_fields = kwargs.get('update_fields')
         if update_fields is not None:
@@ -419,11 +426,16 @@ class BaseModel(models.Model):
                         f'more than zero, not {value}.')
         return None
 
+    def structural_fields(self) -> tuple[str, ...]:
+        """The STRUCTURAL_FIELDS in force. A buy's are fewer when the replay writes holdings."""
+        return self.STRUCTURAL_FIELDS
+
     def structural_changes(self) -> list[str]:
         """Names of the structural fields this unsaved state would change; [] if none."""
-        if not self.STRUCTURAL_FIELDS or self._state.adding or self.pk is None:
+        structural = self.structural_fields()
+        if not structural or self._state.adding or self.pk is None:
             return []
-        fields: list[Any] = [self._meta.get_field(name) for name in self.STRUCTURAL_FIELDS]
+        fields: list[Any] = [self._meta.get_field(name) for name in structural]
         stored = type(self)._default_manager.filter(pk=self.pk).values(
             '_creation_handled', *[field.attname for field in fields]).first()
         if stored is None or not stored['_creation_handled']:
@@ -467,7 +479,7 @@ class BaseModel(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         user = kwargs.pop('user', None)
         update_fields = kwargs.get('update_fields')
-        if update_fields is None or set(update_fields) & set(self.STRUCTURAL_FIELDS):
+        if update_fields is None or set(update_fields) & set(self.structural_fields()):
             changed = self.structural_changes()
             if changed:
                 raise ValueError(self._structural_change_message(changed))
@@ -479,7 +491,10 @@ class BaseModel(models.Model):
             problem = self.chronology_problem()
             if problem:
                 raise ValueError(problem)
-        super().save(*args, **kwargs)
+        # With what its signals do, as one unit: a holding rebuilt after the save that refuses
+        # the change has to take the saved row back with it.
+        with transaction.atomic():
+            super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f'{self.description}'
@@ -951,6 +966,11 @@ class Instrument(BaseModel):
 
         super().save(*args, **kwargs)
 
+    holdings_differ = models.BooleanField(null=True, blank=True, default=None, editable=False,
+        help_text='Whether the parcels stored for this instrument give different figures from '
+                  'those worked out again from its trades. Blank until checked. Set by the app; '
+                  'do not edit.')
+
     calculated_quantity_held = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True, editable=False,
         help_text='Units currently held, across all unsold parcels. Set by the app; do not '
                   'edit.')
@@ -1336,8 +1356,40 @@ class Buy(Trade):
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
 
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Delete the buy, and spread its share of any adjustment over the rest of the holding.
+
+        Its adjustment allocations protect its parcels, and dropping them alone would leave each
+        adjustment short of its total, so the adjustments it shared are reallocated instead.
+        """
+        if not live.active() or live.rebuilding() or not self.instrument_id:
+            return super().delete(*args, **kwargs)
+        with transaction.atomic():
+            live.ensure_verified(self.instrument)  # Before the allocations go, or it would differ.
+            shares = CostBaseAdjustmentAllocation.objects.filter(parcel__buy=self)
+            manual = sorted({str(year) for year in shares.exclude(
+                cost_base_adjustment__allocation_method=AllocationMethod.QTY_HELD).values_list(
+                'cost_base_adjustment__financial_year_end_date', flat=True)})
+            if manual:
+                # No rule says where a manually allocated share should go instead.
+                raise live.HoldingsRefused(
+                    f'This buy has a share of the cost base adjustments for the years ending '
+                    f'{", ".join(manual)}, which were allocated manually. Move or delete its '
+                    f'allocations of those first.')
+            self._reallocate = set(shares.values_list('cost_base_adjustment_id', flat=True))
+            with live.writing():
+                shares.delete()
+            return super().delete(*args, **kwargs)
+
+    def structural_fields(self) -> tuple[str, ...]:
+        # Rebuilt from its trades, a holding takes a buy's corrected date, quantity or
+        # instrument; a rebuild refuses one that a sale already made cannot follow.
+        if live.active():
+            return ('unit_price_currency', 'total_brokerage_currency')
+        return self.STRUCTURAL_FIELDS
+
     def chronology_problem(self) -> str | None:
-        if not self.instrument_id or not self.date:
+        if not self.instrument_id or not self.date or live.active():
             return None
         # A split is dated on its ex-date and reaches buys before it. A buy on the ex-date is
         # already in post-split units, as a sale that day is, so only a later split matters.
@@ -1424,7 +1476,7 @@ class Sell(Trade):
         )
 
     def chronology_problem(self) -> str | None:
-        if not self.instrument_id or not self.date:
+        if not self.instrument_id or not self.date or live.active():
             return None
         # A sale on a split's own date is in post-split units, so only a later split matters.
         split = ShareSplit.objects.filter(
@@ -1554,7 +1606,8 @@ class Parcel(BaseModel):
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
         total_cost_base += (self.adjusted_unit_brokerage * parcel_quantity)
-        total_cost_base = add_currencies(total_cost_base, self.total_adjustments)
+        total_cost_base = add_currencies(total_cost_base, self.total_adjustments,
+                                         default_currency=str(self.buy.account.currency))
 
         return total_cost_base
     
@@ -1744,6 +1797,11 @@ class SellAllocation(BaseModel):
         help_text='The sale the units are allocated to.')
     quantity = models.DecimalField(max_digits=16, decimal_places=4,
         help_text='Units taken from the parcel by the sale.')
+    #: The decision itself, kept apart from the parcel: a rebuild can reshape the parcel tree,
+    #: but the sale still took these units from this buy.
+    buy = models.ForeignKey(Buy, related_name='sold_by', on_delete=models.PROTECT, null=True, blank=True,
+        editable=False,
+        help_text='The buy the units were taken from. Set by the app from the parcel; do not edit.')
 
     STRUCTURAL_FIELDS: tuple[str, ...] = ('parcel', 'sell', 'quantity')
 
@@ -1841,6 +1899,11 @@ class SellAllocation(BaseModel):
             self.description = f'{self.sell.date} {self.sell.instrument.name} | {self.quantity}'
         else:
             self.description = 'INACTIVE'
+        if self.parcel_id is not None and (self.buy_id is None or self._state.adding):
+            self.buy_id = self.parcel.buy_id
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'buy' not in update_fields:
+                kwargs['update_fields'] = [*update_fields, 'buy']
         super().save(*args, **kwargs)
 
 
@@ -1898,6 +1961,32 @@ class ShareSplit(BaseModel):
             f'The sale of {self.instrument.name} on {sold_later.sell.date} has already been '
             f'allocated, and this split is {when}, so that sale was worked out in pre-split '
             f'units. Delete that sale, enter the split, then enter the sale again.')
+
+    def parcels_created(self) -> list['Parcel']:
+        """The parcels this split created, found from the parcel tree rather than the links.
+
+        An export does not carry `affected_parcels`, so a restore rebuilds them from this.
+        Applying the split replaced each parcel with a single child dated on the split, holding
+        its units times the ratio. A sale the same day also replaces a parcel, with two children.
+        """
+        quantity_field = Parcel._meta.get_field('parcel_quantity')
+        multiplier_field = Parcel._meta.get_field('cumulative_split_multiplier')
+        replaced = Parcel.objects.filter(
+            account_id=self.account_id, buy__instrument_id=self.instrument_id,
+            buy__date__lt=self.date, deactivation_date=self.date,
+        ).prefetch_related('children')
+
+        created: list[Parcel] = []
+        for parent in replaced:
+            children = [child for child in parent.children.all() if child.activation_date == self.date]
+            if len(children) != 1:
+                continue
+            child = children[0]
+            if (child.parcel_quantity == convert_to_decimal_field(parent.parcel_quantity * self.ratio, quantity_field)
+                    and child.cumulative_split_multiplier == convert_to_decimal_field(
+                        parent.cumulative_split_multiplier * self.ratio, multiplier_field)):
+                created.append(child)
+        return created
 
     def deletion_blocker(self) -> str | None:
         """Why this split cannot be deleted, or None if it can.
@@ -2235,8 +2324,10 @@ class Dividend(Income):
     
     @safe_property
     def total_dividend(self) -> Money:
-        # handle zero amounts in wrong currency
-        return add_currencies(self.total_unfranked_amount, self.total_franked_amount)
+        # A zero amount may be in any currency, so a zero total takes the dividend's own, which
+        # its exchange rate converts from.
+        return add_currencies(self.total_unfranked_amount, self.total_franked_amount,
+                              default_currency=str(self.unfranked_amount_per_share.currency))
 
     calculated_total_dividend_converted = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text='Total dividend in the portfolio currency. Set by the app; do not edit.')

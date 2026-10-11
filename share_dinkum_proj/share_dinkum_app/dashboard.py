@@ -7,7 +7,7 @@ Each action is one entry in `DASHBOARD_ACTIONS`, which supplies its URL, button,
 
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -27,6 +27,7 @@ from django.urls import reverse
 # status line is built here it has to localise them itself, or a date that read
 # "Aug. 28, 2026" on the page would silently become an ISO string.
 from django.utils.formats import localize
+from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_POST
 
 from djmoney.money import Money
@@ -724,7 +725,6 @@ def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
 def refresh_prices_view(request: HttpRequest) -> HttpResponse:
     """Refresh prices and exchange rates for the user's portfolio.
 
-    Sets `Account.update_price_history` and saves; a signal does the work.
     """
     account = _select_account_for_user(request.user)
     dashboard_url = reverse('admin:dashboard')
@@ -736,8 +736,7 @@ def refresh_prices_view(request: HttpRequest) -> HttpResponse:
         return redirect(dashboard_url)
 
     try:
-        account.update_price_history = True
-        account.save()
+        account.refresh_market_data()
     except Exception as exc:  # pragma: no cover - depends on an external provider
         logger.warning(
             'Price refresh failed for %s: %s', account, exc, exc_info=True)
@@ -794,7 +793,8 @@ def _workbook_download(request: HttpRequest, build: Callable[[Account, str], Any
     response = HttpResponse(
         payload,
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    # Built by Django, which escapes a quote in the portfolio name and encodes non-ASCII.
+    response['Content-Disposition'] = content_disposition_header(True, filename)
     return response
 
 

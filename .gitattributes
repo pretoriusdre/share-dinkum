@@ -1,0 +1,3 @@
+# The golden figures are compared byte for byte, and some values span lines. Checked out with
+# Windows line endings, those values would change and the comparison would fail.
+share_dinkum_proj/share_dinkum_app/test_fixtures/golden_figures/*.csv text eol=lf

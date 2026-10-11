@@ -1,7 +1,6 @@
 ### TODO
 
-Left over from the September 2026 review of the signal and processing logic and the October 2026
-bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what they did not.
+Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 
 #### Waiting on advice
 
@@ -17,21 +16,19 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Tax figures
 
-- **An asset bought after 1 July 2027 keeps the old 50% when indexation is unavailable** to a
-  resident individual or trust. Under s115-100(aa) and (f) it should get no discount. It only
-  happens when residency is undeclared for part of the time (indexation needs every day), and
-  the history's gaps are now reported, but the figure stays wrong until they are filled
-  (`cgt/events.py`, `_single_post_cutover_event`).
+- **A post-2027 acquisition with undeclared residency days keeps the pre-2027 treatment** (an
+  apportioned discount, no indexation), flagged as a draft (`PENDING_UNDECLARED_INDEXATION`). The
+  right figure depends on what the missing days were: resident gives indexation and no discount;
+  foreign or temporary follows the s115-105 question above. Filling the history settles it. The
+  post-2027 part of a sale split at 1 July 2027 is not indexed while such a gap exists, and is
+  flagged the same way (`PENDING_UNDECLARED_SPLIT_INDEXATION`).
 - **Not implemented, and not flagged on the schedule:** CGT event I1 on departure without an
   s104-165(2) election, the s855-45 market value cost base on becoming a resident, and the
   pre-CGT exemption. Valuations for the first two can be recorded, but nothing reads them, so
   someone who returns to Australia gets no warning.
-- **Trust gains have no loss-order category from 1 July 2027**, so they absorb losses after
+- **Trust gains have no loss-order category from 1 July 2027** (waiting on which s102-6 category
+  the Bill gives an attributed trust gain), so they absorb losses after
   every categorised gain (`cgt/events.py`, `_attribution_events`).
-- **Trust attribution events use the instrument's currency**, and component currencies are not
-  checked, so a statement in another currency would mix currencies in the schedule.
-- **A zero cost base is returned in AUD whatever the account currency** (`add_currencies`), so a
-  zero-cost parcel in a non-AUD account fails on a currency mismatch.
 
 #### Reports
 
@@ -48,12 +45,8 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
   (`reports.py`, `CGTBasisChangeReport`).
 - Snapshot totals include disregarded gains, since the realised gains report has no
   disregarded flag.
-- The post-cutover slice reports an indexation factor of 1.000 even when not indexed, where
-  `NO_INDEXATION` was meant (`cgt/events.py`, `_split_events`).
-- Losses on unclassified instruments have no row in the return layout (`reports.py`).
 - The all-years schedule (`build(account, None)`) counts a recorded carry-forward twice: as a
   prior-year loss, and again through its own year's events. Nothing calls it with `None` yet.
-- Rounding: cost base components are rounded separately and can miss the cost base by 0.0001.
 
 #### Robustness
 
@@ -63,10 +56,6 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 - Deleting a FiscalYear leaves `calculated_fiscal_year` null on the rows that pointed at it.
 - `refetch_price_history` names only the holdings the provider returned nothing for. One it has
   only part of the history for keeps its older prices adjusted, and is not named.
-- `devserver.py` backs up `db.sqlite3` before an update whatever `.env` says `DB_NAME` is, so
-  with another name `uv run update` skips the backup and says there is no data.
-- The CGT schedule download builds `Content-Disposition` by hand, so a portfolio name with a
-  quote in it breaks the filename (`dashboard.export_cgt_schedule_view`).
 
 #### Tests
 
@@ -76,16 +65,15 @@ bug scan. What those fixed is in the 0.3.0 and 0.4.0 changelogs; this is what th
 
 #### Cleanup
 
-- `ShareSplit.calculated_affected_parcels` never fills: the property is `affected_parcel_list`.
-- `utils/signal_helpers.disconnect_app_signals` is broken on Django 6 and unused.
-- `excelinterface.ExcelGen.add_table` discards its NaN clean-up (harmless: openpyxl writes NaN as
-  a blank), and its default `template_info` names an unrelated Azure DevOps repository.
+- Phase 3 step 6 of the holdings refactor: delete the creation signals, `_creation_handled` logic,
+  `STRUCTURAL_FIELDS` for buys, most of `chronology_problem`, the repair helpers and `_save_lock`,
+  once the replay writer has been in use for a while. `HOLDINGS_WRITER=signals` goes with them.
 
 #### Performance
 
-- `persist_safe_properties` evaluates every attribute in `dir()`, not just safe properties, and
-  runs `model_to_dict` for its debug log on every save.
 - Creating a buy saves its instrument about six times.
-- The price refresh makes its network calls inside the admin's transaction.
+- Loading an import template rebuilds each trade's instrument as it loads (about 28 s for the
+  10-year sample). Rebuilding once per instrument at the end needs allocations that do not name a
+  parcel as they load.
 - `repair_portfolio_data` and a restore recalculate every record in the portfolio; fine at a
   few thousand records.
