@@ -4,11 +4,13 @@ Sources:
 * a disposal (one SellAllocation), split into two rows by s112-155 when a parcel held
   across 1 July 2027 is sold after it and the 2027 regime is modelled
 * a gain attributed by a managed investment trust's annual statement
+* a parcel still held, as if sold on the reporting date (`unrealised_events`, a guide only)
 """
 
 from dataclasses import dataclass, fields, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from django.db.models import Sum
@@ -33,7 +35,8 @@ from share_dinkum_app.constants import (
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, AttributionStatement, FiscalYear, Instrument, Parcel, Buy, Sell, SellAllocation,
+        Account, AttributionStatement, CurrentExchangeRate, FiscalYear, Instrument, Parcel, Buy, Sell,
+        SellAllocation,
     )
 
 #: A disposal of a parcel: one SellAllocation.
@@ -41,6 +44,19 @@ SOURCE_DISPOSAL = 'disposal'
 
 #: A capital gain attributed by a managed investment trust, from its annual statement.
 SOURCE_ATTRIBUTION = 'trust_attribution'
+
+#: A parcel still held, as if sold on the reporting date. Never part of `all_events`.
+SOURCE_UNREALISED = 'unrealised'
+
+#: Takes Money to the account currency, or None if there is no rate.
+Converter = Callable[[Money], Money | None]
+
+#: Why an unrealised row has no figures, or is characterised only in part.
+PENDING_NO_PRICE = 'No current price for {instrument}, so its value is unknown.'
+PENDING_NO_RATE = 'No exchange rate from {currency} to {account_currency}, so its value is unknown.'
+PENDING_UNREALISED_CUTOVER = (
+    'The 1 July 2027 deemed sale and indexation are not modelled for unrealised gains, so this '
+    'row is characterised as a sale under the old rules.')
 
 #: TAP status values, re-exported from cgt.tap for reports.
 TAP = tap_module.TAP
@@ -754,3 +770,146 @@ def disposal_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' =
                     continue
                 events.append(event)
     return events
+
+
+def unrealised_events(account: 'Account', as_at: date | None = None) -> list[CGTEvent]:
+    """Every parcel still held, as if sold on `as_at` (default the reporting date).
+
+    Proceeds are the latest price with no brokerage, converted at the current rate. The
+    characterisation is a disposal's, on `as_at`. A row with no price or rate has no money
+    figures and says why in `pending_reason`. Not part of `all_events`: nothing here is reported.
+    """
+    from share_dinkum_app.clock import reporting_date
+    from share_dinkum_app.models import Parcel
+
+    as_at = as_at or reporting_date()
+    declared = residency_module.periods(account)
+    fiscal_year, _ = account.fiscal_year_type.classify_date(input_date=as_at)
+    convert = _current_rate_converter(account)
+
+    events: list[CGTEvent] = []
+    parcels = (
+        Parcel.objects.filter(account=account, is_active=True, buy__date__lte=as_at)
+        .select_related('buy', 'buy__instrument')
+        .order_by('buy__instrument__name', 'buy__date', 'id')
+    )
+    for parcel in parcels:
+        quantity = parcel.remaining_quantity
+        if quantity <= 0:
+            continue
+        events.append(_unrealised_event(
+            parcel, quantity, as_at, fiscal_year.name, convert, account=account, declared=declared))
+    return events
+
+
+def _current_rate_converter(account: 'Account') -> Converter:
+    """A function taking Money to the account currency at the current rate, or None if no rate."""
+    from share_dinkum_app.models import CurrentExchangeRate
+
+    account_currency = str(account.currency)
+    rates: dict[str, 'CurrentExchangeRate | None'] = {}
+
+    def convert(money: Money) -> Money | None:
+        currency = str(money.currency)
+        if currency == account_currency:
+            return money
+        if currency not in rates:
+            rates[currency] = CurrentExchangeRate.get_or_create(
+                account=account, convert_from=currency, convert_to=account_currency)
+        rate = rates[currency]
+        return rate.apply(money) if rate else None
+
+    return convert
+
+
+def _unrealised_event(parcel: 'Parcel', quantity: Decimal, as_at: date, fiscal_year: str | None,
+                      convert: Converter, account: 'Account',
+                      declared: residency_module.Periods | None = None) -> CGTEvent:
+    """One open parcel, as if `quantity` of it were sold on `as_at`. See `unrealised_events`."""
+    buy = parcel.buy
+    instrument = buy.instrument
+    share = share_of_parcel(parcel, quantity)
+    cost_base = _money(parcel.total_cost_base * share)
+
+    pending: list[str] = []
+    unit_sale_price: Money | None = None
+    proceeds: Money | None = None
+    if instrument.current_unit_price is None:
+        pending.append(PENDING_NO_PRICE.format(instrument=instrument.name))
+    else:
+        unit_sale_price = convert(Money(instrument.current_unit_price, instrument.currency))
+        if unit_sale_price is None:
+            pending.append(PENDING_NO_RATE.format(
+                currency=instrument.currency, account_currency=account.currency))
+        else:
+            proceeds = _money(unit_sale_price * quantity)
+            unit_sale_price = _money(unit_sale_price, UNIT_PLACES)
+
+    capital_gain = gross_gain = gross_loss = None
+    if proceeds is not None:
+        capital_gain = proceeds - cost_base
+        zero = _zero_like(capital_gain)
+        gross_gain = capital_gain if capital_gain.amount > 0 else zero
+        gross_loss = -capital_gain if capital_gain.amount < 0 else zero
+
+    if as_at >= CGT_CUTOVER_DATE and models_2027_regime(account):
+        pending.append(PENDING_UNREALISED_CUTOVER)
+
+    tap_status = tap_module.parcel_tap_status(account, instrument, buy.date, as_at, declared=declared)
+    is_disregarded, disregard_reason = tap_module.disregard(account, tap_status, as_at, declared=declared)
+
+    return CGTEvent(
+        source=SOURCE_UNREALISED,
+        event_date=as_at,
+        fiscal_year=fiscal_year,
+        instrument=instrument.name,
+        asset_category=classification.asset_category(instrument),
+        asset_category_confirmed=bool(instrument.is_classified),
+
+        sell_allocation_id=None,
+        parcel_id=parcel.id,
+        buy_id=buy.id,
+        sell_id=None,
+        legacy_buy_id=buy.legacy_id,
+        legacy_sell_id=None,
+
+        purchase_date=buy.date,
+        sale_date=as_at,
+        quantity=quantity,
+        days_held=(as_at - buy.date).days,
+
+        unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
+        buy_consideration=_money(parcel.adjusted_buy_price * quantity),
+        buy_brokerage=_money(parcel.adjusted_unit_brokerage * quantity),
+        cost_base_adjustments=_money(parcel.total_adjustments * share),
+        cost_base=cost_base,
+
+        unit_sale_price=unit_sale_price,
+        gross_proceeds=proceeds,
+        sell_brokerage=None if proceeds is None else _zero_like(proceeds),
+        net_proceeds=proceeds,
+
+        capital_gain=capital_gain,
+        gross_gain=gross_gain,
+        gross_loss=gross_loss,
+
+        method=METHOD_DISCOUNT if discount_module.is_discount_eligible(buy.date, as_at) else METHOD_OTHER,
+        discount_percentage=discount_module.discount_percentage(
+            buy.date, as_at, account=account, declared=declared),
+        regime=_regime_for(as_at),
+        tap_status=tap_status,
+        residency_status=residency_module.status_on(account, as_at, declared=declared),
+        is_disregarded=is_disregarded,
+        disregard_reason=disregard_reason,
+        discount_basis=residency_module.basis(account, declared=declared),
+        tap_override_suppressed_deeming=tap_module.override_suppresses_deeming(
+            account, instrument, buy.date, as_at, declared=declared),
+        pending_reason=' '.join(pending) or None,
+    )
+
+
+def discount_eligible_from(purchase_date: date | None) -> date | None:
+    """The first sale date that gets the CGT discount: the day after the 12-month anniversary."""
+    if purchase_date is None:
+        return None
+    return discount_module.twelve_month_anniversary(purchase_date) + timedelta(days=1)

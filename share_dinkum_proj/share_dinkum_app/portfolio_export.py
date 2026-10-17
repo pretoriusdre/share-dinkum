@@ -13,7 +13,6 @@ from django.core.files.temp import NamedTemporaryFile
 
 from share_dinkum_app import column_help, excelinterface, loading
 from share_dinkum_app.models import Account, DataExport, InstrumentPriceHistory
-from share_dinkum_app.reports import RealisedCapitalGainReport
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +44,7 @@ def write_workbook(account: Account, path: str | Path, include_price_history: bo
             gen.add_table(df, table_name=model.__name__, description=desc,
                           column_descriptions=column_help.describe_columns(model, [str(c) for c in df.columns]))
 
-    logger.info('    - Realised Capital Gains Report')
-    gen.add_table(RealisedCapitalGainReport(account=account).generate(), table_name='RealisedCapitalGains',
-                  description='Report of realised capital gains per sale allocation.')
-
+    # Records only. Capital gains are on the Australian CGT report, which says how each is taxed.
     gen.save(path)
 
 

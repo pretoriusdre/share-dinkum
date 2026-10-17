@@ -1,4 +1,5 @@
 import dataclasses
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -6,7 +7,7 @@ from typing import Any
 from djmoney.money import Money
 
 from share_dinkum_app.models import (
-    AttributionStatement, Sell, Account, FiscalYear, Parcel, CurrentExchangeRate, CGTReturnSnapshot)
+    AttributionStatement, Sell, Account, FiscalYear, CurrentExchangeRate, CGTReturnSnapshot)
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface, income
@@ -82,67 +83,78 @@ class RealisedCapitalGainReport:
 
         return pd.DataFrame(report_rows, columns=report_columns)
 
-class OpenParcelReport(BaseReport):
-    """Summary of every open (unsold) parcel: cost base and current market value."""
+class UnrealisedGainReport(BaseReport):
+    """Every parcel still held, as if sold on the reporting date, from `cgt.unrealised_events`.
+
+    A guide to what a sale would bring, characterised as a disposal would be. Not a schedule:
+    no losses are netted, and nothing here goes on a return.
+    """
+
+    #: The summary's columns after `asset_category`, in order.
+    SUMMARY_FIGURES: list[str] = [
+        'cost_base', 'market_value', 'gross_gain', 'gross_loss', 'disregarded_gain', 'discount_if_sold']
+
+    def __init__(self, account: Account, as_at: date | None = None,
+                 events: list[cgt.CGTEvent] | None = None) -> None:
+        super().__init__(account)
+        self.as_at = as_at or reporting_date()
+        self._events = events
+
+    @property
+    def events(self) -> list[cgt.CGTEvent]:
+        if self._events is None:
+            self._events = cgt.unrealised_events(self.account, as_at=self.as_at)
+        return self._events
 
     def generate(self) -> pd.DataFrame:
-        report_columns = [
-            "instrument", "parcel_id", "buy_id", "buy_date", "days_held",
-            "remaining_quantity", "unit_cost_base", "cost_base",
-            "instrument_currency", "current_unit_price", "current_value",
-            "unrealised_gain", "unrealised_gain_pct",
-        ]
+        """A row per open parcel: every CGTEvent field, the discount date and the gain as a fraction."""
+        columns = [*cgt.event_fields(), 'discount_eligible_from', 'unrealised_gain_pct']
+        rows: list[dict[str, Any]] = []
+        for event in self.events:
+            row = {name: getattr(event, name) for name in cgt.event_fields()}
+            row['asset_category'] = CGTAssetCategory.label_for(row['asset_category'])
+            row['discount_eligible_from'] = cgt.discount_eligible_from(event.purchase_date)
+            cost = getattr(event.cost_base, 'amount', None)
+            gain = getattr(event.capital_gain, 'amount', None)
+            row['unrealised_gain_pct'] = float(gain / cost) if gain is not None and cost else None
+            rows.append(row)
+        return pd.DataFrame(rows, columns=columns)
 
-        today = reporting_date()
-        report_rows: list[dict[str, Any]] = []
-
-        parcels = (
-            Parcel.objects.filter(account=self.account, is_active=True)
-            .select_related('buy', 'buy__instrument')
-        )
-
-        for parcel in parcels:
-            remaining_quantity = parcel.remaining_quantity
-            if remaining_quantity <= Decimal('0'):
-                continue
-
-            instrument = parcel.buy.instrument
-            unit_cost_base = parcel.unit_cost_base
-            cost_base = unit_cost_base * remaining_quantity
-
-            current_unit_price = instrument.current_unit_price
-            if current_unit_price is None:
-                current_value = None
-                unrealised_gain = None
-                unrealised_gain_pct = None
+    def summary(self) -> pd.DataFrame:
+        """Totals per asset category and overall, as floats. Rows with no price count only at cost."""
+        totals: dict[str, dict[str, Decimal]] = {}
+        for event in self.events:
+            label = CGTAssetCategory.label_for(event.asset_category)
+            line = totals.setdefault(label, {name: Decimal('0') for name in self.SUMMARY_FIGURES})
+            gain = _amount(event.gross_gain)
+            line['cost_base'] += _amount(event.cost_base)
+            line['market_value'] += _amount(event.net_proceeds)
+            line['gross_gain'] += gain
+            line['gross_loss'] += _amount(event.gross_loss)
+            if event.is_disregarded:
+                line['disregarded_gain'] += gain
             else:
-                current_value = self._to_account_currency(
-                    Money(current_unit_price * remaining_quantity, instrument.currency)
-                )
-                unrealised_gain = current_value - cost_base
-                unrealised_gain_pct = (
-                    float(unrealised_gain.amount / cost_base.amount) if cost_base.amount else None
-                )
+                line['discount_if_sold'] += gain * event.discount_percentage
 
-            report_rows.append({
-                "instrument": instrument.name,
-                "parcel_id": parcel.id,
-                "buy_id": parcel.buy.id,
-                "buy_date": parcel.buy.date,
-                "days_held": (today - parcel.buy.date).days,
-                "remaining_quantity": remaining_quantity,
-                "unit_cost_base": unit_cost_base,
-                "cost_base": cost_base,
-                "instrument_currency": str(instrument.currency),
-                "current_unit_price": current_unit_price,
-                "current_value": current_value,
-                "unrealised_gain": unrealised_gain,
-                "unrealised_gain_pct": unrealised_gain_pct,
-            })
+        rows: list[dict[str, Any]] = []
+        for label in sorted(totals):
+            rows.append({'asset_category': label,
+                         **{name: float(value) for name, value in totals[label].items()}})
+        if rows:
+            rows.append({'asset_category': 'Total', **{
+                name: float(sum((line[name] for line in totals.values()), Decimal('0')))
+                for name in self.SUMMARY_FIGURES}})
+        return pd.DataFrame(rows, columns=['asset_category', *self.SUMMARY_FIGURES])
 
-        df = pd.DataFrame(report_rows, columns=report_columns)
+    def warnings(self) -> list[str]:
+        """Each row's pending reason, naming its parcel."""
+        return [f'{event.instrument} bought {event.purchase_date}: {event.pending_reason}'
+                for event in self.events if event.pending_reason]
 
-        return df.sort_values(["instrument", "buy_date"], ignore_index=True) if not df.empty else df
+
+def _amount(money: Any) -> Decimal:
+    """A Money's amount, or zero for None."""
+    return Decimal('0') if money is None else Decimal(money.amount)
 
 
 class CGTBasisChangeReport:
@@ -416,10 +428,10 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         for warning in summary['warnings']:
             warnings.append({'fiscal_year': year, 'warning': warning})
 
-    events = CGTEventReport(account=account, every_year=every_year).generate()
-    for column in events.columns:
-        events[column] = events[column].map(
-            lambda value: _plain(value) if hasattr(value, 'amount') else value)
+    events = _flattened(CGTEventReport(account=account, every_year=every_year).generate())
+
+    unrealised = UnrealisedGainReport(account=account)
+    warnings += [{'fiscal_year': 'Unrealised', 'warning': text} for text in unrealised.warnings()]
 
     generator = excelinterface.ExcelGen(title='Capital Gains Tax Schedule')
     generator.add_table(
@@ -437,11 +449,28 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         events, table_name='Events', add_hyperlinks=False,
         description='Every capital gains event, with how it was characterised and why.')
     generator.add_table(
+        _flattened(unrealised.generate()), table_name='UnrealisedGains', add_hyperlinks=False,
+        description=(f'Every parcel still held, as if sold on {unrealised.as_at.isoformat()} at the latest '
+                     'price with no brokerage, and characterised as that sale would be. A guide to '
+                     'planning a sale; nothing here goes on a return.'))
+    generator.add_table(
+        unrealised.summary(), table_name='UnrealisedSummary', add_hyperlinks=False,
+        description=('The unrealised gains by asset category. Losses are not netted against gains, so '
+                     'the discount shown is the most a sale of everything could get.'))
+    generator.add_table(
         pd.DataFrame(warnings, columns=['fiscal_year', 'warning']),
         table_name='Warnings', add_hyperlinks=False,
-        description='Why a year is still a draft. Empty means every year is final.')
+        description=('Why a year is still a draft. Empty means every year is final. "Unrealised" rows '
+                     'are about the UnrealisedGains sheet and leave every year final.'))
     generator.save(output_path)
     return output_path
+
+
+def _flattened(df: pd.DataFrame) -> pd.DataFrame:
+    """`df` with each Money as a float, so Excel can sum it."""
+    for column in df.columns:
+        df[column] = df[column].map(lambda value: _plain(value) if hasattr(value, 'amount') else value)
+    return df
 
 
 #: The ATO schedule's lines in form order, as `(kind, label, figure key)`. A None key is a

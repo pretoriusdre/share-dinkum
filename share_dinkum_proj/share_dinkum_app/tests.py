@@ -62,7 +62,7 @@ from share_dinkum_app.utils.filefield_operations import user_directory_path, pro
 from share_dinkum_app.decorators import safe_property
 from share_dinkum_app.reports import (
     RealisedCapitalGainReport,
-    OpenParcelReport,
+    UnrealisedGainReport,
     CGTBasisChangeReport,
     CGTEventReport,
     CGTScheduleReport,
@@ -2033,7 +2033,7 @@ def create_golden_master_portfolio():
         total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
     )
 
-    # So OpenParcelReport produces market values rather than nulls.
+    # So UnrealisedGainReport produces market values rather than nulls.
     instrument.current_unit_price = Decimal('5.5000')
     instrument.save()
 
@@ -2135,25 +2135,37 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertTrue(any(g > 0 for g in gains))
         self.assertTrue(any(g < 0 for g in gains))
 
-    def test_open_parcel_report(self):
-        df = OpenParcelReport(account=self.account).generate()
+    @override_settings(REPORTING_DATE=date(2025, 3, 1))
+    def test_unrealised_gain_report(self):
+        df = UnrealisedGainReport(account=self.account).generate()
         self.assertEqual(len(df), 2)
 
         expected = [
-            # buy date,       qty,   unit cost base,        cost base,              market value, unrealised gain
-            (date(2023, 2, 20), '500', '6.0677678', '3033.8839', '2750.00', '-283.8839'),
-            (date(2024, 5, 1),  '200', '7.0572115', '1411.4423', '1100.00', '-311.4423'),
+            # buy date,       qty,   cost base,   market value, gain,        discount, eligible from
+            (date(2023, 2, 20), '500', '3033.8839', '2750.00', '-283.8839', '0.5', date(2024, 2, 21)),
+            (date(2024, 5, 1),  '200', '1411.4423', '1100.00', '-311.4423', '0',   date(2025, 5, 2)),
         ]
-        for (_, row), (buy_date, qty, unit_cb, cost_base, value, gain) in zip(df.iterrows(), expected):
-            self.assertEqual(row['buy_date'], buy_date)
-            self.assertEqual(row['remaining_quantity'], Decimal(qty))
-            self.assertEqual(row['unit_cost_base'].amount, Decimal(unit_cb))
+        for (_, row), (buy_date, qty, cost_base, value, gain, discount, eligible) in zip(df.iterrows(), expected):
+            self.assertEqual(row['purchase_date'], buy_date)
+            self.assertEqual(row['quantity'], Decimal(qty))
             self.assertEqual(row['cost_base'].amount, Decimal(cost_base))
-            self.assertEqual(row['current_value'].amount, Decimal(value))
-            self.assertEqual(row['unrealised_gain'].amount, Decimal(gain))
+            self.assertEqual(row['net_proceeds'].amount, Decimal(value))
+            self.assertEqual(row['capital_gain'].amount, Decimal(gain))
+            self.assertEqual(row['gross_loss'].amount, -Decimal(gain))
+            self.assertEqual(row['discount_percentage'], Decimal(discount))
+            self.assertEqual(row['discount_eligible_from'], eligible)
+            self.assertEqual(row['event_date'], date(2025, 3, 1))
+            self.assertEqual(row['fiscal_year'], 'FY2024/25')
+            self.assertEqual(row['source'], 'unrealised')
+            self.assertIsNone(row['sell_allocation_id'])
 
         self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.09357111522955773, places=12)
         self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22065535374701467, places=12)
+
+    @override_settings(REPORTING_DATE=date(2025, 3, 1))
+    def test_unrealised_events_are_not_capital_gains_events(self):
+        """A held parcel is a guide only: it is in no schedule and no snapshot."""
+        self.assertNotIn('unrealised', {event.source for event in cgt.all_events(self.account)})
 
     def test_quantities_reconcile(self):
         """Every unit bought is either held or allocated to a sale."""
@@ -2163,6 +2175,70 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertEqual(sold, Decimal('2500'))
         self.assertEqual(held, Decimal('700'))
         self.assertEqual(sold + held, bought)
+
+
+class UnrealisedEventTests(TransactionTestCase):
+    """cgt.unrealised_events: each held parcel as if sold on a day, characterised as a sale."""
+
+    AS_AT = date(2025, 3, 1)
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='XYZ')
+        self.instrument.current_unit_price = Decimal('12.0000')
+        self.instrument.save()
+
+    def _buy(self, day, quantity='100', price='10.00'):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=day,
+            quantity=Decimal(quantity), unit_price=Money(Decimal(price), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+
+    def _events(self):
+        return cgt.unrealised_events(self.account, as_at=self.AS_AT)
+
+    def test_a_parcel_held_under_a_year_gets_no_discount(self):
+        self._buy(date(2024, 6, 1))
+        [event] = self._events()
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, 'other')
+        self.assertEqual(event.capital_gain.amount, Decimal('200.00'))
+        self.assertEqual(cgt.discount_eligible_from(event.purchase_date), date(2025, 6, 2))
+
+    def test_a_foreign_resident_disregards_a_non_tap_gain(self):
+        declare(self.account, 'FOREIGN', date(2010, 1, 1))
+        self._buy(date(2020, 1, 1))
+        [event] = self._events()
+        self.assertEqual(event.tap_status, cgt.tap.NTAP)
+        self.assertTrue(event.is_disregarded)
+        self.assertEqual(event.disregard_reason, cgt.tap.REASON_FOREIGN_RESIDENT)
+
+    def test_no_price_leaves_the_money_blank_and_says_why(self):
+        self._buy(date(2020, 1, 1))
+        self.instrument.current_unit_price = None
+        self.instrument.save()
+        [event] = self._events()
+        self.assertIsNone(event.net_proceeds)
+        self.assertIsNone(event.capital_gain)
+        self.assertEqual(event.cost_base.amount, Decimal('1000.00'))
+        self.assertIn('No current price for XYZ', event.pending_reason)
+
+    def test_a_parcel_bought_after_the_day_is_left_out(self):
+        self._buy(date(2020, 1, 1))
+        self._buy(date(2025, 3, 2))
+        self.assertEqual([e.purchase_date for e in self._events()], [date(2020, 1, 1)])
+
+    def test_a_sold_parcel_is_left_out_and_a_part_sold_one_counts_what_is_left(self):
+        self._buy(date(2020, 1, 1))
+        self._buy(date(2021, 1, 1))
+        Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 1),
+            quantity=Decimal('150'), unit_price=Money(Decimal('11.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        [event] = self._events()
+        self.assertEqual(event.purchase_date, date(2021, 1, 1))
+        self.assertEqual(event.quantity, Decimal('50'))
+        self.assertEqual(event.cost_base.amount, Decimal('500.00'))
 
 
 class CGTEventTests(TransactionTestCase):
@@ -2883,6 +2959,14 @@ class CGTReturnSnapshotTests(TransactionTestCase):
 
         self.assertEqual(
             Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
+
+    def test_the_export_holds_records_and_no_derived_gains_sheet(self):
+        """Gains are on the Australian CGT report, which says how each is taxed."""
+        export = DataExport.objects.create(account=self.account, include_price_history=False)
+        export.refresh_from_db()
+        tables = excelinterface.get_all_tables_in_excel(Path(export.file.path))
+        self.assertIn('SellAllocation', tables)
+        self.assertNotIn('RealisedCapitalGains', tables)
 
 
 class CGTBasisChangeReportTests(TransactionTestCase):
@@ -6763,7 +6847,7 @@ class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
         self.assertTrue(before)
 
         RealisedCapitalGainReport(account=self.account).generate()
-        OpenParcelReport(account=self.account).generate()
+        UnrealisedGainReport(account=self.account).generate()
         CGTEventReport(account=self.account).generate()
         CGTScheduleReport(account=self.account, fiscal_year='FY2023/24').generate()
         cgt.all_events(self.account)
@@ -8390,7 +8474,32 @@ class CGTScheduleExportTests(TransactionTestCase):
     def test_the_workbook_has_a_sheet_for_each_part_of_the_answer(self):
         tables = set(pd.read_excel(self._workbook(), sheet_name='Index')['table_name'])
         self.assertEqual(
-            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'Warnings'})
+            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'UnrealisedGains',
+                     'UnrealisedSummary', 'Warnings'})
+
+    @override_settings(REPORTING_DATE=date(2025, 3, 1))
+    def test_the_unrealised_sheets_hold_the_open_parcels_and_their_total(self):
+        tables = excelinterface.get_all_tables_in_excel(self._workbook())
+        parcels = tables['UnrealisedGains']
+        self.assertEqual(len(parcels), 2)
+        self.assertTrue(all(isinstance(value, (int, float)) for value in parcels['capital_gain']),
+                        'capital_gain must be numbers, not text')
+        summary = tables['UnrealisedSummary'].set_index('asset_category')
+        self.assertAlmostEqual(summary.loc['Total', 'gross_loss'], 283.8839 + 311.4423, places=4)
+        self.assertAlmostEqual(
+            summary.loc['Total', 'market_value'], parcels['net_proceeds'].sum(), places=4)
+
+    def test_a_missing_price_is_a_warning_but_makes_no_year_a_draft(self):
+        priced = excelinterface.get_all_tables_in_excel(self._workbook())
+        self.data['instrument'].current_unit_price = None
+        self.data['instrument'].save()
+        unpriced = excelinterface.get_all_tables_in_excel(self._workbook())
+
+        warnings = unpriced['Warnings']
+        unrealised = warnings[warnings['fiscal_year'] == 'Unrealised']['warning']
+        self.assertEqual(len(unrealised), 2)
+        self.assertTrue(all('No current price for GMT' in text for text in unrealised))
+        self.assertEqual(list(unpriced['Summary']['is_draft']), list(priced['Summary']['is_draft']))
 
     def test_money_is_written_as_numbers_a_spreadsheet_can_add_up(self):
         """Money is written as numbers."""
