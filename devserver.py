@@ -1,4 +1,4 @@
-"""Entry points for `uv run dev` and `uv run update`.
+"""Entry points for `uv run dev` and `uv run update.py`.
 
 `dev` starts the Django development server. Any extra args are passed through to manage.py, so
 `uv run dev migrate` or `uv run dev test share_dinkum_app` also work. With no args it runs
@@ -6,6 +6,7 @@
 that run only.
 
 `update` backs up your data, pulls the latest code, syncs dependencies and applies any migrations.
+It is run by `update.py`, not as a console script: see there.
 """
 
 import io
@@ -200,6 +201,16 @@ def update() -> None:
     print("\nUpdate complete. Start the app with:  uv run dev")
     if backup_path:
         print(f"If something looks wrong, your previous data is in {backup_path}")
+
+
+def update_moved() -> None:
+    """The `update` console script, which ran the update until 0.6.1.
+
+    Run as Scripts/update.exe, the update's `uv sync` could not replace it on Windows. It is kept
+    so that `uv run update` says what to run instead of failing to spawn.
+    """
+    print("The update command is now:  uv run update.py")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

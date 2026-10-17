@@ -1,6 +1,6 @@
 """Backing up the database and attached documents.
 
-Shared by `uv run update`, the dashboard and the notebook's `DataBackupManager`. Backups are
+Shared by `uv run update.py`, the dashboard and the notebook's `DataBackupManager`. Backups are
 written to `<root>/<name>/<timestamp>/` and pruned to the most recent five.
 
 * No Django imports: `devserver.py` backs up before an update, when the app may not boot.

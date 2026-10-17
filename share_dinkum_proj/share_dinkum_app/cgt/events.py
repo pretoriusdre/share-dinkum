@@ -339,6 +339,7 @@ def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_da
     """
     buy = parcel.buy
 
+    held_twelve_months = indexation_module.held_twelve_months(buy.date, sale_date)
     indexation_eligible = indexation_module.is_indexation_eligible(
         account, buy.date, sale_date, declared=declared)
 
@@ -365,9 +366,10 @@ def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_da
     later_adjustments = adjustments_by_year(parcel, quantity, since=CGT_CUTOVER_DATE)
     deferred, post = _split_events(
         whole, buy, sale_date, instrument, market_value, indexation_eligible, later_adjustments)
-    if not indexation_eligible and post.pending_reason is None:
+    if held_twelve_months and not indexation_eligible and post.pending_reason is None:
         # The split applies, so the taxpayer can be indexed and no day after the cutover is
-        # foreign or temporary: only an undeclared day can have denied it.
+        # foreign or temporary: only an undeclared day can have denied it. A short hold is
+        # denied whatever the residency, so it is final.
         post = replace(post, pending_reason=PENDING_UNDECLARED_SPLIT_INDEXATION)
     return [deferred, post]
 
@@ -494,8 +496,13 @@ def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy'
     Then the figure turns on what those days were, which the history does not say. A known
     foreign or temporary day is the separate question of whether an apportioned discount
     survives 2027, still waiting on advice.
+
+    Never for a hold under 12 months: that is denied indexation (s114-10(1)) and a discount
+    whatever the residency, so the figure is final.
     """
     if buy.date < CGT_CUTOVER_DATE:
+        return False
+    if not indexation_module.held_twelve_months(buy.date, sale_date):
         return False
     if discount_module.taxpayer_type_of(account) not in (TaxpayerType.INDIVIDUAL, TaxpayerType.TRUST):
         return False
@@ -953,12 +960,21 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
     return _apply_cutover(whole, parcel, quantity, as_at, instrument, account=account, declared=declared)
 
 
-def discount_eligible_from(event: CGTEvent) -> date | None:
+def discount_eligible_from(event: CGTEvent, account: 'Account | None' = None,
+                           declared: residency_module.Periods | None = None) -> date | None:
     """The first sale date on which `event`'s gain gets the CGT discount, or None if it cannot.
 
     The day after the purchase's 12-month anniversary. None for a post-cutover slice or an
     indexed gain, which get no discount however long they are held (s115-20, s115-100).
+
+    A whole post-cutover gain held under 12 months is not indexed yet. With `account`, it is None
+    too if the holder has been resident throughout (s114-25), since they are indexed once 12
+    months pass.
     """
     if event.purchase_date is None or event.slice == SLICE_POST_CUTOVER or event.indexation_factor is not None:
+        return None
+    if (account is not None and event.regime == REGIME_POST_CUTOVER and event.event_date is not None
+            and indexation_module.residency_allows_indexation(
+                account, event.purchase_date, event.event_date, declared=declared)):
         return None
     return discount_module.twelve_month_anniversary(event.purchase_date) + timedelta(days=1)

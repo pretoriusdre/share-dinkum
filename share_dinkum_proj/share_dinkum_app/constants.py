@@ -1,8 +1,6 @@
 from datetime import date
 
 DEFAULT_CURRENCY = 'AUD'
-CGT_DISCOUNT_RATE = 0.5 # 50% discount
-CGT_DISCOUNT_THRESHOLD_DAYS = 365 # 365 days
 # Treasury Laws Amendment (Tax Reform No. 1) Act 2026, Act No. 49 of 2026. For CGT events
 # on or after this date the 50% discount is replaced for individuals and trusts by cost base
 # indexation. The date is the legal boundary and never changes; whether the app implements
@@ -14,7 +12,7 @@ CGT_CUTOVER_DATE = date(2027, 7, 1)
 # --- The 2027 regime -------------------------------------------------------------------
 
 # The rollout gate is `Account.model_2027_regime`, not a constant here. It was one, and
-# that meant editing tracked source to change a setting -- which `uv run update` then
+# that meant editing tracked source to change a setting -- which `uv run update.py` then
 # refuses to pull over, so turning modelling on quietly broke updates. The legal gate,
 # CGT_CUTOVER_DATE above, stays a constant: that date is the law and is not a setting.
 

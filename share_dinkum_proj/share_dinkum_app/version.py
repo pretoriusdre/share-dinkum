@@ -1,11 +1,12 @@
 """The installed version, and whether GitHub has a newer release.
 
-The version comes from package metadata (set from pyproject.toml by `uv sync`). A failed
+The version comes from pyproject.toml, or the package metadata where there is none. A failed
 update check logs a warning and reports no update, so it never breaks the page.
 """
 
 import json
 import logging
+import tomllib
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as installed_version
 from pathlib import Path
@@ -19,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 PACKAGE_NAME = 'share-dinkum'
+PYPROJECT_PATH = Path(__file__).resolve().parents[2] / 'pyproject.toml'
 
-# Used when the project has not been installed, eg a plain `git clone` that never had `uv sync` run.
-# Keep this in step with the version in pyproject.toml.
-FALLBACK_VERSION = '0.6.0'
+# Reported when neither pyproject.toml nor the package metadata can be read. It is not a version,
+# so no update is offered against it.
+UNKNOWN_VERSION = 'unknown'
 
 RELEASES_API_URL = 'https://api.github.com/repos/pretoriusdre/share-dinkum/releases/latest'
 RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
@@ -36,10 +38,21 @@ FAILED_CHECK_RETRY = timedelta(hours=1)
 
 
 def get_version() -> str:
+    """The version in pyproject.toml, else the installed package's.
+
+    pyproject.toml comes first because the app runs from its checkout, and the metadata changes only
+    when uv reinstalls the project: after a `git pull` with no `uv sync`, the metadata is the old
+    version until the next `uv run`, and for a server started without `uv run` it stays old.
+    """
+    try:
+        with PYPROJECT_PATH.open('rb') as file:
+            return str(tomllib.load(file)['project']['version'])
+    except (OSError, tomllib.TOMLDecodeError, KeyError):
+        pass
     try:
         return installed_version(PACKAGE_NAME)
     except PackageNotFoundError:
-        return FALLBACK_VERSION
+        return UNKNOWN_VERSION
 
 
 __version__ = get_version()

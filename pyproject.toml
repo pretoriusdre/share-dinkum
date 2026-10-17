@@ -1,6 +1,6 @@
 [project]
 name = "share-dinkum"
-version = "0.6.0"
+version = "0.6.1"
 description = "Open source share tracker for Australian and other shares"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -21,7 +21,7 @@ dependencies = [
 
 [project.scripts]
 dev = "devserver:main"
-update = "devserver:update"
+update = "devserver:update_moved"
 
 [build-system]
 requires = ["setuptools>=61"]

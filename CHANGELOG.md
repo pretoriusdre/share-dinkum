@@ -2,7 +2,34 @@
 
 All notable changes to Share Dinkum are recorded here. 
 
-To upgrade, stop the server and run `uv run update`.
+To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
+
+## 0.6.1 - 2026-10-18
+
+### Fixed
+
+- **The update command is now `uv run update.py`.** On Windows, `uv run update` stopped at
+  "Installing any new dependencies" with `failed to remove file ... Scripts/update.exe: Access is
+  denied`, since installing the new version replaced the program running the update. The new command
+  does not run from that file. `uv run update` now just tells you the new command.
+  - The update to 0.6.1 itself still runs the old command, so on Windows it may fail this one last
+    time. If it does, finish it with `uv sync`, then `uv run dev migrate`.
+
+- **The importer handles irregular files.** Excel can rename a named table when you copy its
+  sheet in from another workbook (eg `Instrument` becomes `Instrument18`). The importer used to skip
+  such tables silently, which caused subsequent load errors. It now loads the table with a warning.
+  Table names and column headers that differ only in case or spaces are also accepted.
+
+- **Import errors are clearer.** If rows name an instrument (or other record) that isn't in the
+  portfolio, one message lists every missing name, with its rows and the closest stored name. Names
+  which differ only in case (eg bhp / BHP) are accepted with a warning.
+
+- **A parcel held under 12 months is no longer indexed from 1 July 2027.** Indexation applies only to
+  an asset acquired at least 12 months before the sale (s114-10(1)), but the report indexed any
+  parcel the holder had been resident for, so it understated the gain. A shorter hold now gets no
+  indexation and no discount, and the full gain is taxed. A sale on the 12-month anniversary counts as
+  under 12 months, as it already does for the discount. The Unrealised sheet's `discount_eligible_from`
+  is blank for a resident who will be indexed instead.
 
 ## 0.6.0 - 2026-10-17
 

@@ -25,7 +25,7 @@ from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
 
-from share_dinkum_app.constants import DEFAULT_CURRENCY, CGT_DISCOUNT_RATE, CGT_DISCOUNT_THRESHOLD_DAYS
+from share_dinkum_app.constants import DEFAULT_CURRENCY
 from share_dinkum_app.models import (
     AppUser,
     FiscalYearType,
@@ -3284,22 +3284,6 @@ class AssignDefaultAccountSignalTests(TransactionTestCase):
 
 
 # =============================================================================
-# Constants
-# =============================================================================
-
-
-class ConstantsTests(TestCase):
-    """Sanity check for constants used in logic."""
-
-    def test_cgt_constants(self):
-        self.assertEqual(CGT_DISCOUNT_RATE, 0.5)
-        self.assertEqual(CGT_DISCOUNT_THRESHOLD_DAYS, 365)
-
-    def test_default_currency(self):
-        self.assertEqual(DEFAULT_CURRENCY, 'AUD')
-
-
-# =============================================================================
 # Loading: importing files into more than one portfolio
 # =============================================================================
 
@@ -3307,7 +3291,10 @@ class ConstantsTests(TestCase):
 class ImportWorkbookMixin:
     """Builds import workbooks, so tests use the real loading path."""
 
-    def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None):
+    def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None,
+                       table_names=None, extra_tables=()):
+        """`table_names` renames tables (model name -> Excel name); `extra_tables` adds (name, frame) pairs."""
+        names = {'Market': 'Market', 'Instrument': 'Instrument', 'Buy': 'Buy', **(table_names or {})}
         if markets is None:
             markets = [{'code': 'ASX', 'description': 'Australian Securities Exchange', 'suffix': 'AX'}]
         if instruments is None:
@@ -3328,9 +3315,11 @@ class ImportWorkbookMixin:
             markets = [dict(market, id=market_id) for market, market_id in zip(markets, market_ids)]
 
         generator = excelinterface.ExcelGen(title='Test import')
-        generator.add_table(pd.DataFrame(markets), table_name='Market')
-        generator.add_table(pd.DataFrame(instruments), table_name='Instrument')
-        generator.add_table(pd.DataFrame(buys), table_name='Buy')
+        generator.add_table(pd.DataFrame(markets), table_name=names['Market'])
+        generator.add_table(pd.DataFrame(instruments), table_name=names['Instrument'])
+        generator.add_table(pd.DataFrame(buys), table_name=names['Buy'])
+        for table_name, frame in extra_tables:
+            generator.add_table(frame, table_name=table_name)
         generator.save(path)
         return path
 
@@ -3458,12 +3447,122 @@ class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
             }],
         )
 
-        with self.assertRaises(Instrument.DoesNotExist):
+        with self.assertRaisesMessage(ValueError, "'NOT_LISTED' (row 1"):
             loading.DataLoader(account=self.account_a, input_file=self.workbook)
 
         self.assertEqual(Market.objects.filter(account=self.account_a).count(), 0)
         self.assertEqual(Instrument.objects.filter(account=self.account_a).count(), 0)
         self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 0)
+
+
+class DataLoaderResilienceTests(ImportWorkbookMixin, TransactionTestCase):
+    """A workbook that Excel or a person has altered still loads, or is refused in plain words."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        self.account = Account.objects.create(
+            owner=create_user(username='owner'), description='Portfolio', currency='AUD',
+            fiscal_year_type=create_fiscal_year_type())
+
+    def load(self):
+        return loading.DataLoader(account=self.account, input_file=self.workbook)
+
+    def buy(self, instrument):
+        return {
+            'legacy_id': 'buy-1', 'instrument__name': instrument, 'date': date(2023, 7, 1),
+            'quantity': Decimal('100'), 'unit_price': Decimal('40'), 'unit_price_currency': 'AUD',
+            'total_brokerage': Decimal('10'), 'total_brokerage_currency': 'AUD'}
+
+    def test_tables_renamed_by_excel_load_with_a_warning(self):
+        # The shape of the file that prompted this: Market17 and Instrument18, copied in from another
+        # workbook that already had both.
+        self.build_workbook(self.workbook, table_names={
+            'Market': 'Market17', 'Instrument': 'Instrument18', 'Buy': 'buy_2'})
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.get(account=self.account).instrument.name, 'BHP')
+        self.assertTrue(any("'Instrument18'" in line and 'read as Instrument' in line for line in logs.output))
+
+    def test_a_table_name_with_spaces_and_case_loads(self):
+        self.build_workbook(self.workbook, table_names={'Instrument': 'INSTRUMENT'})
+        self.load()
+        self.assertEqual(Instrument.objects.filter(account=self.account).count(), 1)
+
+    def test_a_table_that_matches_no_model_is_refused_with_its_nearest_name(self):
+        self.build_workbook(self.workbook, table_names={'Instrument': 'Instrumnt'})
+
+        with self.assertRaisesMessage(ValueError, "'Instrumnt' on sheet"):
+            self.load()
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)
+
+    def test_an_unrelated_table_is_skipped_with_a_warning(self):
+        # An export carries report sheets, such as RealisedCapitalGains, that no model holds.
+        self.build_workbook(self.workbook, extra_tables=[
+            ('RealisedCapitalGains', pd.DataFrame({'a': [1]})), ('Scratch', pd.DataFrame({'a': []}))])
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 1)
+        self.assertTrue(any("'RealisedCapitalGains'" in line and 'not loaded' in line for line in logs.output))
+
+    def test_two_tables_for_one_model_are_refused(self):
+        self.build_workbook(self.workbook, extra_tables=[
+            ('Instrument2', pd.DataFrame([{'name': 'CBA', 'currency': 'AUD', 'market__code': 'ASX'}]))])
+
+        with self.assertRaisesMessage(ValueError, "'Instrument' and 'Instrument2' both load into Instrument"):
+            self.load()
+
+    def test_headers_with_stray_case_and_spaces_load(self):
+        self.build_workbook(self.workbook, instruments=[
+            {' Name ': 'BHP', 'Description': 'BHP Group', 'Currency': 'AUD', 'Market__Code': 'ASX'}])
+        self.load()
+        self.assertEqual(Instrument.objects.get(account=self.account).market.code, 'ASX')
+
+    def test_every_unknown_instrument_is_listed_with_its_rows_and_a_suggestion(self):
+        buys = [self.buy('BHPP'), self.buy('BHP'), self.buy('BHPP'), self.buy('XYZ')]
+        for number, buy in enumerate(buys):
+            buy['legacy_id'] = f'buy-{number}'
+        self.build_workbook(self.workbook, buys=buys)
+
+        with self.assertRaises(ValueError) as caught:
+            self.load()
+
+        message = str(caught.exception)
+        self.assertIn("'BHPP' (rows 1, 3; did you mean 'BHP'?)", message)
+        self.assertIn("'XYZ' (row 4)", message)
+        self.assertNotIn('The file has no Instrument table', message)  # it does
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)
+
+    def test_a_file_without_an_instrument_table_says_so(self):
+        # Only reachable with no Instrument table at all: one that holds rows but matches no model
+        # is refused first, by name.
+        loader = loading.DataLoader(account=self.account)
+        loader.mapping = {}
+
+        with self.assertRaisesMessage(ValueError, 'The file has no Instrument table'):
+            loader.prepare_table(Buy, pd.DataFrame([self.buy('BHP')]))
+
+    def test_a_name_typed_in_the_wrong_case_is_read_with_a_warning(self):
+        self.build_workbook(self.workbook, buys=[self.buy('bhp')])
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.get(account=self.account).instrument.name, 'BHP')
+        self.assertTrue(any('ignoring case' in line for line in logs.output))
+
+    def test_a_misnamed_link_column_says_which_columns_are_links(self):
+        buy = self.buy('BHP')
+        buy['instrumnt__name'] = buy.pop('instrument__name')
+        self.build_workbook(self.workbook, buys=[buy])
+
+        with self.assertRaisesMessage(ValueError, 'Buy has no column instrumnt__name'):
+            self.load()
 
 
 class AccountUniquenessTests(TestCase):
@@ -3494,6 +3593,31 @@ class AccountUniquenessTests(TestCase):
 
 
 class VersionTests(TestCase):
+
+    def _pyproject(self, text):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = folder / 'pyproject.toml'
+        if text is not None:
+            path.write_text(text, encoding='utf-8')
+        return patch.object(version, 'PYPROJECT_PATH', path)
+
+    def test_the_version_is_read_from_pyproject(self):
+        """The metadata keeps the old version until uv reinstalls the project."""
+        with self._pyproject('[project]\nname = "share-dinkum"\nversion = "9.8.7"\n'):
+            with patch.object(version, 'installed_version', return_value='0.1.0'):
+                self.assertEqual(version.get_version(), '9.8.7')
+
+    def test_the_version_falls_back_to_the_metadata(self):
+        with self._pyproject(None):
+            with patch.object(version, 'installed_version', return_value='0.1.0'):
+                self.assertEqual(version.get_version(), '0.1.0')
+
+    def test_an_unreadable_version_offers_no_update(self):
+        with self._pyproject('[project]\nname = "share-dinkum"\n'):
+            with patch.object(version, 'installed_version', side_effect=version.PackageNotFoundError):
+                self.assertEqual(version.get_version(), version.UNKNOWN_VERSION)
+        self.assertIsNone(version.parse_version(version.UNKNOWN_VERSION))
 
     def test_parse_version_accepts_a_tag(self):
         self.assertEqual(version.parse_version('v1.2.3'), (1, 2, 3))
@@ -5686,6 +5810,36 @@ class IndexationEligibilityTests(TransactionTestCase):
         self.assertTrue(cgt.is_indexation_eligible(
             self.account, date(2020, 1, 15), date(2030, 1, 15)))
 
+    def test_a_hold_under_twelve_months_is_not_indexed(self):
+        """s114-10(1): the anniversary does not qualify, the day after does."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2027, 9, 1)
+        for sold, expected in [
+            (date(2028, 8, 31), False),
+            (date(2028, 9, 1), False),
+            (date(2028, 9, 2), True),
+        ]:
+            self.assertEqual(
+                cgt.is_indexation_eligible(self.account, bought, sold), expected, sold)
+
+    def test_the_twelve_months_are_a_calendar_year_across_a_leap_day(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2028, 2, 29)
+        self.assertFalse(cgt.is_indexation_eligible(self.account, bought, date(2029, 2, 28)))
+        self.assertTrue(cgt.is_indexation_eligible(self.account, bought, date(2029, 3, 1)))
+
+    def test_a_pre_cutover_purchase_is_held_from_its_own_date(self):
+        """s114-10(9): the deemed reacquisition at the cutover does not restart the 12 months."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2027, 3, 1)
+        self.assertFalse(cgt.is_indexation_eligible(self.account, bought, date(2027, 8, 1)))
+        self.assertTrue(cgt.is_indexation_eligible(self.account, bought, date(2028, 3, 2)))
+
+    def test_residency_alone_does_not_test_the_holding_period(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        self.assertTrue(cgt.indexation.residency_allows_indexation(
+            self.account, date(2027, 9, 1), date(2027, 10, 1)))
+
     def test_a_super_fund_keeps_its_third_after_the_cutover(self):
         """s115-100(b) is unchanged, so a complying fund's gain is discounted, not indexed."""
         data = create_cutover_portfolio(suffix='smsf')
@@ -5700,8 +5854,8 @@ class IndexationEligibilityTests(TransactionTestCase):
 
 
 def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix='',
-                             adjustments=()):
-    """A parcel bought well before the cutover and sold well after it.
+                             adjustments=(), buy_date=date(2020, 1, 15)):
+    """A parcel bought well before the cutover (or on `buy_date`) and sold well after it.
 
     Cost base 10,019.95, cutover value 15,000, net proceeds 19,990.05. `suffix` allows a
     second, independent portfolio in the same test. `adjustments` are
@@ -5715,7 +5869,7 @@ def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', su
     instrument = create_instrument(account=account, name='CUT')
 
     buy = Buy.objects.create(
-        account=account, instrument=instrument, date=date(2020, 1, 15),
+        account=account, instrument=instrument, date=buy_date,
         quantity=Decimal('1000'), unit_price=Money(Decimal('10.00'), 'AUD'),
         total_brokerage=Money(Decimal('19.95'), 'AUD'),
     )
@@ -5996,6 +6150,128 @@ class PostCutoverUndeclaredGapTests(TransactionTestCase):
         self.assertEqual(event.discount_percentage, Decimal('0'))
         self.assertIsNotNone(event.indexation_factor)
         self.assertIsNone(event.pending_reason)
+
+
+class IndexationTwelveMonthRuleTests(TransactionTestCase):
+    """s114-10(1): a hold under 12 months gets neither indexation nor a discount, so the
+    full gain is taxed. A final figure, whatever the residency history."""
+
+    def setUp(self):
+        load_test_cpi()
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        enable_2027_regime(self)
+        self.instrument = create_instrument(account=self.account, name='TWM')
+
+    def event_for(self, bought, sold):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=bought,
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=sold,
+                            quantity=Decimal('100'), unit_price=Money(Decimal('15'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        return cgt.disposal_events(self.account)[0]
+
+    def test_a_short_hold_is_not_indexed_and_the_full_gain_is_taxed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 3, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.cost_base, Money(Decimal('1000'), 'AUD'))
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, cgt.events.METHOD_OTHER)
+        self.assertIsNone(event.pending_reason)
+
+    def test_a_sale_on_the_anniversary_is_not_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 9, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+
+    def test_a_sale_the_day_after_the_anniversary_is_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 9, 2))
+        self.assertEqual(event.indexation_factor, Decimal('1.100'))
+        self.assertEqual(event.cost_base, Money(Decimal('1100.000'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+
+    def test_a_short_hold_with_an_undeclared_gap_is_not_flagged(self):
+        """Denied whatever the missing days were, unlike a long hold with the same gap."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2027, 12, 31))
+        declare(self.account, 'RESIDENT', date(2028, 2, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 3, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertIsNone(event.pending_reason)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+
+    def test_a_split_sale_held_under_twelve_months_taxes_the_full_gain(self):
+        data = create_cutover_portfolio(
+            suffix='short', buy_date=date(2027, 3, 1), sell_date=date(2027, 12, 1))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        # The deferred slice is measured from the original purchase (s114-10(9)).
+        self.assertEqual(deferred.method, cgt.events.METHOD_OTHER)
+        self.assertEqual(deferred.discount_percentage, Decimal('0'))
+        self.assertIsNone(post.indexation_factor)
+        self.assertEqual(post.cost_base, Money(Decimal('15000.00'), 'AUD'))
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+        self.assertIsNone(post.pending_reason)
+        self.assertEqual(
+            deferred.capital_gain.amount + post.capital_gain.amount,
+            Decimal('19990.05') - Decimal('10019.95'))
+
+    def test_a_split_sale_with_an_undeclared_gap_is_not_flagged_when_held_under_twelve_months(self):
+        data = create_cutover_portfolio(
+            suffix='shortgap', buy_date=date(2027, 3, 1), sell_date=date(2027, 12, 1))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1), date(2027, 10, 31))
+        declare(data['account'], 'RESIDENT', date(2027, 11, 8))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        self.assertIsNone(post.indexation_factor)
+        self.assertIsNone(post.pending_reason)
+        self.assertIsNone(deferred.pending_reason)
+
+    def test_a_split_sale_held_over_twelve_months_is_indexed_and_keeps_its_deferred_discount(self):
+        data = create_cutover_portfolio(
+            suffix='long', buy_date=date(2027, 3, 1), sell_date=date(2028, 3, 2))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        self.assertEqual(deferred.method, cgt.events.METHOD_DISCOUNT)
+        self.assertEqual(post.indexation_factor, Decimal('1.050'))
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+
+    def test_an_unrealised_short_hold_is_not_indexed_and_shows_no_discount_date_to_a_resident(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2027, 9, 1),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        self.instrument.current_unit_price = Decimal('15.0000')
+        self.instrument.save()
+
+        [event] = cgt.unrealised_events(self.account, as_at=date(2028, 3, 1))
+
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        anniversary_after = date(2028, 9, 2)
+        # Indexed once 12 months pass, and indexation takes the discount (s115-20).
+        self.assertIsNone(cgt.discount_eligible_from(event, account=self.account))
+        # Without the account there is nothing to say the holder is resident.
+        self.assertEqual(cgt.discount_eligible_from(event), anniversary_after)
+
+        # A complying super fund is not indexed and keeps its third.
+        self.account.taxpayer_type = 'SMSF'
+        self.account.save()
+        [event] = cgt.unrealised_events(self.account, as_at=date(2028, 3, 1))
+        self.assertEqual(cgt.discount_eligible_from(event, account=self.account), anniversary_after)
 
 
 class StatementCurrencyTests(TransactionTestCase):
@@ -6604,10 +6880,12 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
         self.market = create_market(account=self.account)
         declare(self.account, 'RESIDENT', date(2010, 1, 1))
         load_test_cpi()
+        # 110.0 x 1.045, for a sale just over 12 months after the 2028-09-01 purchase.
+        CPIIndex.objects.create(quarter_start_date=date(2029, 7, 1), index_number=Decimal('114.95'))
         enable_2027_regime(self)
 
     def _sell_at(self, name, unit_price):
-        """Buy after the cutover for 10,000 and sell when CPI is up 4.5% (indexed: 10,450)."""
+        """Buy after the cutover for 10,000 and sell 12 months on when CPI is up 4.5% (indexed: 10,450)."""
         instrument = create_instrument(
             account=self.account, market=self.market, name=name)
         Buy.objects.create(
@@ -6616,7 +6894,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
             total_brokerage=Money(Decimal('0'), 'AUD'),
         )
         Sell.objects.create(
-            account=self.account, instrument=instrument, date=date(2029, 1, 15),
+            account=self.account, instrument=instrument, date=date(2029, 9, 2),
             quantity=Decimal('1000'), unit_price=Money(Decimal(unit_price), 'AUD'),
             total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO',
         )
@@ -6625,7 +6903,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
 
     def test_the_indexation_factor_is_what_this_rests_on(self):
         self.assertEqual(
-            cgt.indexation_factor(date(2028, 9, 1), date(2029, 1, 15)),
+            cgt.indexation_factor(date(2028, 9, 1), date(2029, 9, 2)),
             Decimal('1.045'))
 
     def test_a_loss_is_measured_against_the_unindexed_cost_base(self):
@@ -8142,7 +8420,7 @@ class FullBackupTests(TransactionTestCase):
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 1)
 
     def test_the_database_is_the_one_env_names(self):
-        """`uv run update` backs up the database `.env` names, not a hard-coded one."""
+        """`uv run update.py` backs up the database `.env` names, not a hard-coded one."""
         project = Path(tempfile.mkdtemp())
         (project / '.env').write_text('DB_ENGINE=django.db.backends.sqlite3\nDB_NAME=portfolio.sqlite3\n')
         with patch.dict(os.environ):
