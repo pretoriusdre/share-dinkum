@@ -2,11 +2,18 @@
 
 All notable changes to Share Dinkum are recorded here. 
 
-To upgrade, stop the server and run `uv run update`.
+To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
 ## Unreleased
 
 ### Fixed
+
+- **The update command is now `uv run update.py`.** On Windows, `uv run update` stopped at
+  "Installing any new dependencies" with `failed to remove file ... Scripts/update.exe: Access is
+  denied`, since installing the new version replaced the program running the update. The new command
+  does not run from that file. `uv run update` now just tells you the new command.
+  - The update to 0.6.1 itself still runs the old command, so on Windows it may fail this one last
+    time. If it does, finish it with `uv sync`, then `uv run dev migrate`.
 
 - **The importer handles irregular files.** Excel can rename a named table when you copy its
   sheet in from another workbook (eg `Instrument` becomes `Instrument18`). The importer used to skip

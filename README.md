@@ -280,7 +280,7 @@ history, including any one-off steps after an upgrade.
 To update, stop the server with `Ctrl+C`, then from the repository root run:
 
 ```powershell
-uv run update
+uv run update.py
 ```
 
 That backs up your data, fetches the latest code, installs any new dependencies, and applies any
@@ -312,7 +312,7 @@ lists them, so your edits cannot be lost in a merge. Commit or discard them and 
 <details>
 <summary>Running the steps individually</summary>
 
-`uv run update` is equivalent to backing up your data and then running:
+`uv run update.py` is equivalent to backing up your data and then running:
 
 ```powershell
 git pull
