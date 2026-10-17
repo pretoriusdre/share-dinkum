@@ -19,6 +19,7 @@ from djmoney.money import Money
 
 from share_dinkum_app.choices import CGTAssetCategory, TaxpayerType
 from share_dinkum_app.cgt import discount, events as events_module, residency
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.constants import (
     CGT_LOSS_ABSORPTION_ORDER,
     CGT_GAIN_DEFERRED_RESIDENTIAL,
@@ -281,7 +282,7 @@ def _year_still_running(account: 'Account', fiscal_year: 'FiscalYearRef') -> dat
         return None
 
     end_date = year.end_date
-    return end_date if end_date and date.today() <= end_date else None
+    return end_date if end_date and reporting_date() <= end_date else None
 
 
 def _s115_105_applies(account: 'Account', event: events_module.CGTEvent) -> bool:

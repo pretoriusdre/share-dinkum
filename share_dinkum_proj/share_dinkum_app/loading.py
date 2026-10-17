@@ -860,26 +860,12 @@ class DataLoader():
         call_command('flush', interactive=False)
 
         logger.info('Deleted all models and reset DataLoader state.')
-        # Delete all data in the media folder
+        # Delete the account folders in the media folder. Nothing else in it is Share Dinkum's.
         media_folder = Path(settings.MEDIA_ROOT)
-        force_delete_and_recreate_folder(media_folder)
-        
-
-def force_delete_and_recreate_folder(folder_path: str | Path) -> None:
-    folder = Path(folder_path)
-    # Check if folder exists
-    if folder.exists():
-        for item in folder.iterdir():
-            try:
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()  # Force delete files
-            except Exception as e:
-                logger.error(f"Failed to delete {item}: {e}", exc_info=True)
-    # Recreate folder
-    folder.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Forcefully deleted and recreated folder: {folder}")
+        for name in backup_module.empty_media_folder(media_folder):
+            logger.error(f"Failed to delete {media_folder / name}")
+        media_folder.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Emptied the media folder: {media_folder}")
 
 
 
@@ -902,8 +888,8 @@ class DataBackupManager:
     RETAIN_PRE_RESTORE = 3
 
     def __init__(self, base_path: Path | None = None) -> None:
-        #: Defaults to the shared backup root; tests pass their own.
-        self.base_path = Path(base_path) if base_path else backup_module.DEFAULT_BACKUP_ROOT
+        #: Defaults to the configured backup root (`BACKUP_ROOT`); tests pass their own.
+        self.base_path = Path(base_path) if base_path else backup_module.configured_backup_root(settings.BASE_DIR)
 
     def list_backups(self, name: str) -> list[str]:
         """Backup folder names within a set, newest first."""
@@ -992,7 +978,7 @@ class DataBackupManager:
 
         db_file = Path(settings.DATABASES['default']['NAME'])
         backup_db_file = backup_path / db_file.name
-        media_backup = backup_path / "media"
+        media_backup = backup_path / backup_module.MEDIA_FOLDER_NAME
 
         # Validate before asking to confirm, so an unusable backup cannot destroy the live data.
         if not backup_db_file.exists() or not media_backup.exists():
@@ -1014,13 +1000,22 @@ class DataBackupManager:
         logger.info(f"Restoring SQLite DB from {backup_db_file} to {db_file}")
         shutil.copy2(backup_db_file, db_file)
 
-        # Restore media
-        if Path(settings.MEDIA_ROOT).exists():
-            shutil.rmtree(Path(settings.MEDIA_ROOT))
-        shutil.copytree(media_backup, Path(settings.MEDIA_ROOT))
+        self.replace_media(media_backup)
 
         logger.info("Restore completed successfully.")
 
+    def replace_media(self, media_backup: Path) -> None:
+        """Replace the account folders in `MEDIA_ROOT` with the backup's copy.
+
+        Anything else in the folder stays, and so does the folder itself.
+        """
+        media_root = Path(settings.MEDIA_ROOT)
+        failed = backup_module.empty_media_folder(media_root)
+        if failed:
+            raise OSError(
+                f"Could not remove {backup_module.describe_names(failed)} from {media_root}. "
+                "Close anything using those files, then restore again.")
+        shutil.copytree(media_backup, media_root, dirs_exist_ok=True)
 
     def snapshot_current_data(self) -> Path:
         """Copy the live database and media to the pre-restore set, so a restore can be undone.
@@ -1037,7 +1032,7 @@ class DataBackupManager:
 
         media_root = Path(settings.MEDIA_ROOT)
         if media_root.exists():
-            shutil.copytree(media_root, snapshot_path / 'media')
+            shutil.copytree(media_root, snapshot_path / backup_module.MEDIA_FOLDER_NAME)
 
         self.cleanup_old_backups(name=self.PRE_RESTORE_NAME, keep=self.RETAIN_PRE_RESTORE)
 

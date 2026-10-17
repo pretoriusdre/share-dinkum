@@ -9,6 +9,7 @@ import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from unittest import skipUnless
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
 from django.utils.html import escape
@@ -19,7 +20,7 @@ import pandas as pd
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
@@ -60,8 +61,7 @@ from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
 from share_dinkum_app.decorators import safe_property
 from share_dinkum_app.reports import (
-    RealisedCapitalGainReport,
-    OpenParcelReport,
+    UnrealisedGainReport,
     CGTBasisChangeReport,
     CGTEventReport,
     CGTScheduleReport,
@@ -1923,51 +1923,6 @@ class ZeroCostParcelTests(TestCase):
 # =============================================================================
 
 
-class RealisedCapitalGainReportTests(TestCase):
-    """Tests for RealisedCapitalGainReport."""
-
-    def test_generate_empty_account(self):
-        acc = create_account()
-        report = RealisedCapitalGainReport(account=acc)
-        df = report.generate()
-        self.assertTrue(df.empty)
-        self.assertEqual(
-            list(df.columns),
-            [
-                'sell_date', 'instrument', 'quantity_sold', 'buy_id', 'parcel_id', 'sell_id',
-                'sell_allocation_id', 'buy_date', 'days_held', 'proceeds', 'cost_base',
-                'capital_gain', 'fiscal_year',
-            ],
-        )
-
-    def test_generate_with_one_sale_allocation(self):
-        acc = create_account()
-        inst = create_instrument(account=acc)
-        buy = Buy.objects.create(
-            account=acc,
-            instrument=inst,
-            date=date(2023, 1, 5),
-            quantity=Decimal('100'),
-            unit_price=Money(50, 'AUD'),
-            total_brokerage=Money(0, 'AUD'),
-        )
-        sell = Sell.objects.create(
-            account=acc,
-            instrument=inst,
-            date=date(2024, 2, 1),
-            quantity=Decimal('50'),
-            unit_price=Money(60, 'AUD'),
-            total_brokerage=Money(0, 'AUD'),
-            strategy='FIFO',
-        )
-        report = RealisedCapitalGainReport(account=acc)
-        df = report.generate()
-        self.assertEqual(len(df), 1)
-        self.assertEqual(df.iloc[0]['instrument'], inst.name)
-        self.assertEqual(df.iloc[0]['quantity_sold'], Decimal('50'))
-        self.assertIn('capital_gain', df.columns)
-
-
 # =============================================================================
 # Reports: golden master
 # =============================================================================
@@ -2032,7 +1987,7 @@ def create_golden_master_portfolio():
         total_brokerage=Money(Decimal('9.50'), 'AUD'), strategy='FIFO',
     )
 
-    # So OpenParcelReport produces market values rather than nulls.
+    # So UnrealisedGainReport produces market values rather than nulls.
     instrument.current_unit_price = Decimal('5.5000')
     instrument.save()
 
@@ -2110,9 +2065,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertAlmostEqual(
             float(per_unit_part / per_unit_full), 61 / 366, places=4)
 
-    def test_realised_capital_gain_report(self):
-        df = RealisedCapitalGainReport(account=self.account).generate()
-        self.assertEqual(len(df), 3)
+    def test_disposal_figures(self):
+        events = cgt.disposal_events(self.account)
+        self.assertEqual(len(events), 3)
 
         expected = [
             # sell date,       qty,    days, proceeds,   cost base,              gain,                    fiscal year
@@ -2120,39 +2075,55 @@ class CGTGoldenMasterTests(TransactionTestCase):
             (date(2024, 11, 5), '500',  813, '1995.25',  '2534.1214', '-538.8714',  'FY2024/25'),
             (date(2024, 11, 5), '500',  624, '1995.25',  '3033.8840', '-1038.6340', 'FY2024/25'),
         ]
-        for (_, row), (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(df.iterrows(), expected):
-            self.assertEqual(row['sell_date'], sell_date)
-            self.assertEqual(row['quantity_sold'], Decimal(qty))
-            self.assertEqual(row['days_held'], days)
-            self.assertEqual(row['proceeds'].amount, Decimal(proceeds))
-            self.assertEqual(row['cost_base'].amount, Decimal(cost_base))
-            self.assertEqual(row['capital_gain'].amount, Decimal(gain))
-            self.assertEqual(str(row['fiscal_year']), fy)
+        for event, (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(events, expected):
+            self.assertEqual(event.event_date, sell_date)
+            self.assertEqual(event.quantity, Decimal(qty))
+            self.assertEqual(event.days_held, days)
+            self.assertEqual(event.net_proceeds.amount, Decimal(proceeds))
+            self.assertEqual(event.cost_base.amount, Decimal(cost_base))
+            self.assertEqual(event.capital_gain.amount, Decimal(gain))
+            self.assertEqual(event.fiscal_year, fy)
 
         # Both a gain and a loss are represented, so sign handling is exercised.
-        gains = [row['capital_gain'].amount for _, row in df.iterrows()]
+        gains = [event.capital_gain.amount for event in events]
         self.assertTrue(any(g > 0 for g in gains))
         self.assertTrue(any(g < 0 for g in gains))
 
-    def test_open_parcel_report(self):
-        df = OpenParcelReport(account=self.account).generate()
+    def test_unrealised_gain_report(self):
+        df = UnrealisedGainReport(account=self.account, as_at=date(2025, 3, 1)).generate()
         self.assertEqual(len(df), 2)
 
         expected = [
-            # buy date,       qty,   unit cost base,        cost base,              market value, unrealised gain
-            (date(2023, 2, 20), '500', '6.0677678', '3033.8839', '2750.00', '-283.8839'),
-            (date(2024, 5, 1),  '200', '7.0572115', '1411.4423', '1100.00', '-311.4423'),
+            # buy date,       qty,   cost base,   market value, gain,        discount, eligible from
+            (date(2023, 2, 20), '500', '3033.8839', '2750.00', '-283.8839', '0.5', date(2024, 2, 21)),
+            (date(2024, 5, 1),  '200', '1411.4423', '1100.00', '-311.4423', '0',   date(2025, 5, 2)),
         ]
-        for (_, row), (buy_date, qty, unit_cb, cost_base, value, gain) in zip(df.iterrows(), expected):
-            self.assertEqual(row['buy_date'], buy_date)
-            self.assertEqual(row['remaining_quantity'], Decimal(qty))
-            self.assertEqual(row['unit_cost_base'].amount, Decimal(unit_cb))
+        for (_, row), (buy_date, qty, cost_base, value, gain, discount, eligible) in zip(df.iterrows(), expected):
+            self.assertEqual(row['purchase_date'], buy_date)
+            self.assertEqual(row['quantity'], Decimal(qty))
             self.assertEqual(row['cost_base'].amount, Decimal(cost_base))
-            self.assertEqual(row['current_value'].amount, Decimal(value))
-            self.assertEqual(row['unrealised_gain'].amount, Decimal(gain))
+            self.assertEqual(row['net_proceeds'].amount, Decimal(value))
+            self.assertEqual(row['capital_gain'].amount, Decimal(gain))
+            self.assertEqual(row['gross_loss'].amount, -Decimal(gain))
+            self.assertEqual(row['discount_percentage'], Decimal(discount))
+            self.assertEqual(row['discount_eligible_from'], eligible)
+            self.assertEqual(row['event_date'], date(2025, 3, 1))
+            self.assertEqual(row['fiscal_year'], 'FY2024/25')
+            self.assertEqual(row['source'], 'unrealised')
+            self.assertIsNone(row['sell_allocation_id'])
 
         self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.09357111522955773, places=12)
         self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22065535374701467, places=12)
+
+    def test_unrealised_events_are_not_capital_gains_events(self):
+        """A held parcel is a guide only: it is in no schedule and no snapshot."""
+        self.assertNotIn('unrealised', {event.source for event in cgt.all_events(self.account)})
+
+    @override_settings(REPORTING_DATE=date(2025, 3, 1))
+    def test_unrealised_gains_are_as_at_today_whatever_the_reporting_date(self):
+        """The holding and price are today's, so the sale is today's too."""
+        self.assertEqual({e.event_date for e in cgt.unrealised_events(self.account)}, {date.today()})
+        self.assertEqual(UnrealisedGainReport(account=self.account).as_at, date.today())
 
     def test_quantities_reconcile(self):
         """Every unit bought is either held or allocated to a sale."""
@@ -2164,32 +2135,107 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertEqual(sold + held, bought)
 
 
+class UnrealisedEventTests(TransactionTestCase):
+    """cgt.unrealised_events: each held parcel as if sold on a day, characterised as a sale."""
+
+    AS_AT = date(2025, 3, 1)
+
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='XYZ')
+        self.instrument.current_unit_price = Decimal('12.0000')
+        self.instrument.save()
+
+    def _buy(self, day, quantity='100', price='10.00'):
+        return Buy.objects.create(
+            account=self.account, instrument=self.instrument, date=day,
+            quantity=Decimal(quantity), unit_price=Money(Decimal(price), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+
+    def _events(self):
+        return cgt.unrealised_events(self.account, as_at=self.AS_AT)
+
+    def test_a_parcel_held_under_a_year_gets_no_discount(self):
+        self._buy(date(2024, 6, 1))
+        [event] = self._events()
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, 'other')
+        self.assertEqual(event.capital_gain.amount, Decimal('200.00'))
+        self.assertEqual(cgt.discount_eligible_from(event), date(2025, 6, 2))
+
+    def test_a_foreign_resident_disregards_a_non_tap_gain(self):
+        declare(self.account, 'FOREIGN', date(2010, 1, 1))
+        self._buy(date(2020, 1, 1))
+        [event] = self._events()
+        self.assertEqual(event.tap_status, cgt.tap.NTAP)
+        self.assertTrue(event.is_disregarded)
+        self.assertEqual(event.disregard_reason, cgt.tap.REASON_FOREIGN_RESIDENT)
+
+    def test_no_price_leaves_the_money_blank_and_says_why(self):
+        self._buy(date(2020, 1, 1))
+        self.instrument.current_unit_price = None
+        self.instrument.save()
+        [event] = self._events()
+        self.assertIsNone(event.net_proceeds)
+        self.assertIsNone(event.capital_gain)
+        self.assertEqual(event.cost_base.amount, Decimal('1000.00'))
+        self.assertIn('No current price for XYZ', event.pending_reason)
+
+    def test_the_summary_leaves_out_a_parcel_with_no_price(self):
+        self._buy(date(2020, 1, 1))
+        other = create_instrument(account=self.account, market=self.instrument.market, name='NOP')
+        Buy.objects.create(
+            account=self.account, instrument=other, date=date(2020, 1, 1),
+            quantity=Decimal('10'), unit_price=Money(Decimal('5.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+        report = UnrealisedGainReport(account=self.account, as_at=self.AS_AT)
+        total = report.summary().set_index('asset_category').loc['Total']
+        self.assertEqual(total['cost_base'], 1000.0)
+        self.assertEqual(total['market_value'], 1200.0)
+        self.assertEqual(len(report.warnings()), 1)
+        self.assertIn('NOP', report.warnings()[0])
+
+    def test_a_foreign_price_uses_the_stored_rate_and_never_fetches_one(self):
+        self._buy(date(2020, 1, 1))
+        # Quoted in USD from here on; the parcel's cost base stays the AUD it was bought for.
+        Instrument.objects.filter(pk=self.instrument.pk).update(currency='USD')
+        with patch.object(CurrentExchangeRate, 'get_or_create', side_effect=AssertionError('fetched')), \
+                patch('share_dinkum_app.yfinanceinterface.get_exchange_rate',
+                      side_effect=AssertionError('fetched')):
+            [unrated] = self._events()
+            self.assertIsNone(unrated.net_proceeds)
+            self.assertIn('No exchange rate from USD to AUD', unrated.pending_reason)
+
+            CurrentExchangeRate.objects.create(
+                account=self.account, convert_from='USD', convert_to='AUD',
+                exchange_rate_multiplier=Decimal('1.5'))
+            [rated] = self._events()
+        self.assertEqual(rated.net_proceeds.amount, Decimal('1800.00'))
+
+    def test_a_parcel_bought_after_the_day_is_left_out(self):
+        self._buy(date(2020, 1, 1))
+        self._buy(date(2025, 3, 2))
+        self.assertEqual([e.purchase_date for e in self._events()], [date(2020, 1, 1)])
+
+    def test_a_sold_parcel_is_left_out_and_a_part_sold_one_counts_what_is_left(self):
+        self._buy(date(2020, 1, 1))
+        self._buy(date(2021, 1, 1))
+        Sell.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2024, 1, 1),
+            quantity=Decimal('150'), unit_price=Money(Decimal('11.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        [event] = self._events()
+        self.assertEqual(event.purchase_date, date(2021, 1, 1))
+        self.assertEqual(event.quantity, Decimal('50'))
+        self.assertEqual(event.cost_base.amount, Decimal('500.00'))
+
+
 class CGTEventTests(TransactionTestCase):
     """The cgt package reproduces the app's existing figures exactly."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
         self.account = self.data['account']
-
-    def test_events_match_the_realised_capital_gain_report(self):
-        """Disposal events match RealisedCapitalGainReport row for row."""
-        events = cgt.disposal_events(self.account)
-        df = RealisedCapitalGainReport(account=self.account).generate()
-
-        self.assertEqual(len(events), len(df))
-
-        by_allocation = {str(row['sell_allocation_id']): row for _, row in df.iterrows()}
-        for event in events:
-            row = by_allocation[str(event.sell_allocation_id)]
-            self.assertEqual(event.instrument, row['instrument'])
-            self.assertEqual(event.quantity, row['quantity_sold'])
-            self.assertEqual(event.days_held, row['days_held'])
-            self.assertEqual(event.purchase_date, row['buy_date'])
-            self.assertEqual(event.event_date, row['sell_date'])
-            self.assertEqual(event.fiscal_year, row['fiscal_year'])
-            self.assertEqual(event.cost_base.amount, row['cost_base'].amount)
-            self.assertEqual(event.net_proceeds.amount, row['proceeds'].amount)
-            self.assertEqual(event.capital_gain.amount, row['capital_gain'].amount)
 
     def test_cost_base_components_sum_to_the_cost_base(self):
         """Purchase, brokerage and adjustments sum to the cost base."""
@@ -2883,6 +2929,14 @@ class CGTReturnSnapshotTests(TransactionTestCase):
         self.assertEqual(
             Decimal(snapshot.totals['total_capital_gain']), Decimal('4414.8816'))
 
+    def test_the_export_holds_records_and_no_derived_gains_sheet(self):
+        """Gains are on the Australian CGT report, which says how each is taxed."""
+        export = DataExport.objects.create(account=self.account, include_price_history=False)
+        export.refresh_from_db()
+        tables = excelinterface.get_all_tables_in_excel(Path(export.file.path))
+        self.assertIn('SellAllocation', tables)
+        self.assertNotIn('RealisedCapitalGains', tables)
+
 
 class CGTBasisChangeReportTests(TransactionTestCase):
     """The basis change report detects and attributes changed figures."""
@@ -2912,7 +2966,7 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertEqual(
             list(df.columns),
             ['fiscal_year', 'taken_at', 'snapshot_basis', 'current_basis',
-             'snapshot_engine_version', 'sell_allocation_id', 'status', 'field',
+             'snapshot_engine_version', 'event', 'sell_allocation_id', 'slice', 'status', 'field',
              'snapshot_value', 'current_value', 'difference'],
         )
 
@@ -2979,6 +3033,171 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertFalse(CGTBasisChangeReport(account=self.account).generate().empty)
         self.assertTrue(
             CGTBasisChangeReport(account=self.account, lodged_only=True).generate().empty)
+
+
+class SnapshotOfEventsAndTotalsTests(TransactionTestCase):
+    """A snapshot holds the year's totals and how each gain is taxed, and the report compares them."""
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.fy2024 = FiscalYear.objects.get(name='FY2023/24')
+
+    def _changes(self, **kwargs):
+        return CGTBasisChangeReport(account=self.account, **kwargs).generate()
+
+    def _trust_gain(self, amount='100.00'):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.data['instrument'],
+            financial_year_end_date=date(2024, 6, 30))
+        return AttributionComponent.objects.create(
+            account=self.account, statement=statement, component='DISCOUNTED_NTAP',
+            amount=Money(Decimal(amount), 'AUD'))
+
+    def test_the_year_totals_are_those_of_the_schedule(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        schedule = cgt.build_schedule(self.account, self.fy2024)
+        self.assertEqual(snapshot.net_capital_gain, schedule.net_capital_gain)
+        self.assertEqual(snapshot.cgt_discount_applied, schedule.total_discount)
+        self.assertEqual(snapshot.is_draft, schedule.is_draft)
+
+    def test_each_row_records_how_its_gain_is_taxed(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        [event] = cgt.disposal_events(self.account, fiscal_year='FY2023/24')
+        row = snapshot.captured_rows.get()
+        self.assertEqual(row.source, cgt.events.SOURCE_DISPOSAL)
+        self.assertEqual(row.slice, cgt.events.SLICE_WHOLE)
+        self.assertEqual(row.method, event.method)
+        self.assertEqual(row.discount_percentage, event.discount_percentage)
+        self.assertIs(row.is_disregarded, False)
+
+    def test_a_snapshot_taken_now_reports_no_change(self):
+        self._trust_gain()
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        self.assertTrue(self._changes().empty)
+
+    def test_a_trust_gain_is_captured_and_its_change_reported(self):
+        component = self._trust_gain()
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        self.assertEqual(
+            sorted(snapshot.captured_rows.values_list('source', flat=True)),
+            [cgt.events.SOURCE_DISPOSAL, cgt.events.SOURCE_ATTRIBUTION])
+
+        component.amount = Money(Decimal('150.00'), 'AUD')
+        component.save()
+
+        df = self._changes()
+        gain = df[(df['field'] == 'capital_gain') & df['event'].str.contains('trust gain')]
+        self.assertEqual(list(gain['status']), ['CHANGED'])
+        self.assertEqual(gain.iloc[0]['difference'], Decimal('100.0000'))  # grossed up, 50 x 2
+
+    def test_declaring_foreign_residency_shows_the_tax_moving_though_the_gain_does_not(self):
+        """The reason a snapshot is taken before declaring residency."""
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        declare(self.account, 'FOREIGN', date(2000, 1, 1))
+
+        df = self._changes()
+        fields = set(df['field'])
+        self.assertNotIn('capital_gain', fields)
+        self.assertIn('is_disregarded', fields)
+        self.assertIn('tap_status', fields)
+        net = df[(df['event'] == CGTBasisChangeReport.YEAR_TOTAL) & (df['field'] == 'net_capital_gain')]
+        self.assertEqual(len(net), 1)
+        self.assertEqual(net.iloc[0]['current_value'], Decimal('0.0000'))
+
+    def test_an_older_snapshot_is_compared_on_its_figures_alone(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        # As one taken before snapshots recorded totals, trust gains or characterisation.
+        CGTReturnSnapshotRow.objects.filter(snapshot=snapshot).update(
+            source='', slice='', method='', tap_status='', discount_percentage=None,
+            is_disregarded=None)
+        CGTReturnSnapshot.objects.filter(pk=snapshot.pk).update(
+            is_draft=None, **{name: None for name in CGTReturnSnapshot.SCHEDULE_FIELDS if name != 'is_draft'})
+        self._trust_gain()
+        declare(self.account, 'FOREIGN', date(2000, 1, 1))
+
+        self.assertTrue(self._changes().empty)
+
+        CGTReturnSnapshotRow.objects.filter(snapshot=snapshot).update(capital_gain=Decimal('1'))
+        self.assertEqual(set(self._changes()['field']), {'capital_gain'})
+
+    def test_one_snapshot_a_year_prefers_the_lodged_one(self):
+        lodged = CGTReturnSnapshot.capture(
+            account=self.account, fiscal_year=self.fy2024, taken_at=date(2026, 8, 1), is_lodged=True)
+        CGTReturnSnapshotRow.objects.filter(snapshot=lodged).update(capital_gain=Decimal('1'))
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024, taken_at=date(2026, 9, 1))
+
+        df = self._changes(latest_per_year=True)
+        self.assertEqual(set(df['taken_at']), {date(2026, 8, 1)})
+        self.assertEqual(len(self._changes()), len(df), 'the later snapshot matches today')
+
+
+class CutoverInSnapshotsAndUnrealisedTests(TransactionTestCase):
+    """The 2027 split, in the snapshots and in unrealised gains."""
+
+    def test_a_snapshot_captures_and_compares_both_parts_of_a_split_sale(self):
+        data = create_cutover_portfolio()
+        account = data['account']
+        declare(account, 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, account)
+        fiscal_year = data['sell'].fiscal_year
+
+        snapshot = CGTReturnSnapshot.capture(account=account, fiscal_year=fiscal_year)
+        self.assertEqual(
+            sorted(snapshot.captured_rows.values_list('slice', flat=True)),
+            [cgt.events.SLICE_POST_CUTOVER, cgt.events.SLICE_PRE_CUTOVER])
+        self.assertTrue(CGTBasisChangeReport(account=account).generate().empty)
+
+        # A higher 30 June 2027 value moves gain from the part before the cutover to the part after.
+        InstrumentValuation.objects.filter(account=account).update(unit_value=Decimal('16.00'))
+        df = CGTBasisChangeReport(account=account).generate()
+        moved = df[df['field'] == 'capital_gain']
+        self.assertEqual(set(moved['slice']), {cgt.events.SLICE_PRE_CUTOVER, cgt.events.SLICE_POST_CUTOVER})
+
+    def _held_across_the_cutover(self):
+        account = create_account(
+            owner=create_user(username='heldacross'), description='Held across',
+            fy_type=create_fiscal_year_type(description='AU Tax Year Held'))
+        instrument = create_instrument(account=account, name='HLD')
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2020, 1, 15),
+            quantity=Decimal('1000'), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(Decimal('19.95'), 'AUD'))
+        InstrumentValuation.objects.create(
+            account=account, instrument=instrument, valuation_date=date(2027, 6, 30),
+            unit_value=Money(Decimal('15.00'), 'AUD'), purpose='CUTOVER_2027', source='USER')
+        instrument.current_unit_price = Decimal('20.0000')
+        instrument.save()
+        load_test_cpi()
+        declare(account, 'RESIDENT', date(2010, 1, 1))
+        return enable_2027_regime(self, account)
+
+    def test_a_holding_after_the_cutover_is_split_as_a_sale_would_be(self):
+        account = self._held_across_the_cutover()
+        deferred, post = cgt.unrealised_events(account, as_at=date(2028, 8, 20))
+
+        self.assertEqual(deferred.slice, cgt.events.SLICE_PRE_CUTOVER)
+        self.assertEqual(deferred.capital_gain.amount, Decimal('4980.05'))
+        self.assertEqual(deferred.discount_percentage, Decimal('0.5'))
+        self.assertEqual(cgt.discount_eligible_from(deferred), date(2021, 1, 16))
+
+        self.assertEqual(post.slice, cgt.events.SLICE_POST_CUTOVER)
+        self.assertEqual(post.net_proceeds.amount, Decimal('20000.00'))
+        self.assertIsNotNone(post.indexation_factor)
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+        self.assertIsNone(cgt.discount_eligible_from(post))
+
+    def test_the_summary_counts_a_split_holding_once(self):
+        account = self._held_across_the_cutover()
+        report = UnrealisedGainReport(account=account, as_at=date(2028, 8, 20))
+        total = report.summary().set_index('asset_category').loc['Total']
+        self.assertAlmostEqual(total['cost_base'], 10019.95, places=4)
+        self.assertAlmostEqual(total['market_value'], 20000.00, places=4)
+
+    def test_before_the_cutover_a_holding_is_one_row(self):
+        account = self._held_across_the_cutover()
+        [event] = cgt.unrealised_events(account, as_at=date(2027, 6, 1))
+        self.assertEqual(event.slice, cgt.events.SLICE_WHOLE)
 
 
 # =============================================================================
@@ -3670,17 +3889,9 @@ TEST_FIXTURES = Path(__file__).resolve().parent / 'test_fixtures'
 GOLDEN_FIGURES = TEST_FIXTURES / 'golden_figures'
 
 
-class PinnedToday(date):
-    """`date` with `today()` fixed at the fake portfolio's as-of date, so the golden figures
-    do not change as the current year ends."""
-
-    @classmethod
-    def today(cls):
-        return date.fromisoformat(FakeMarketMixin.AS_OF)
-
-
-@patch('share_dinkum_app.cgt.schedule.date', PinnedToday)
-@patch('share_dinkum_app.cgt.residency.date', PinnedToday)
+# The reporting date is pinned at the fake portfolio's as-of date, so the golden figures do not
+# change as the current year ends.
+@override_settings(REPORTING_DATE=FakeMarketMixin.AS_OF)
 class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
     """The figures dump, which shows whether a change moved any figure.
 
@@ -6250,7 +6461,7 @@ class StatutoryLossOrderingTests(TransactionTestCase):
 
 
 class CGTReportTests(TransactionTestCase):
-    """The CGT event and schedule reports, and the unchanged realised gain report."""
+    """The CGT event and schedule reports."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -6260,15 +6471,6 @@ class CGTReportTests(TransactionTestCase):
         df = CGTEventReport(account=self.account).generate()
         self.assertEqual(list(df.columns), cgt.event_fields())
         self.assertEqual(len(df), 3)
-
-    def test_the_realised_gain_report_did_not_grow_a_column(self):
-        """RealisedCapitalGainReport's columns are unchanged."""
-        df = RealisedCapitalGainReport(account=self.account).generate()
-        self.assertEqual(list(df.columns), [
-            'sell_date', 'instrument', 'quantity_sold', 'buy_id', 'parcel_id', 'sell_id',
-            'sell_allocation_id', 'buy_date', 'days_held', 'proceeds', 'cost_base',
-            'capital_gain', 'fiscal_year',
-        ])
 
     def test_the_schedule_report_refuses_to_call_itself_final(self):
         report = CGTScheduleReport(account=self.account, fiscal_year='FY2023/24')
@@ -6769,8 +6971,7 @@ class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
         before = self._allocation_state()
         self.assertTrue(before)
 
-        RealisedCapitalGainReport(account=self.account).generate()
-        OpenParcelReport(account=self.account).generate()
+        UnrealisedGainReport(account=self.account).generate()
         CGTEventReport(account=self.account).generate()
         CGTScheduleReport(account=self.account, fiscal_year='FY2023/24').generate()
         cgt.all_events(self.account)
@@ -7137,7 +7338,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
         self.client.force_login(empty.owner)
 
         response = self.client.post(self.url, follow=True)
-        self.assertContains(response, 'no sales yet')
+        self.assertContains(response, 'no sales or trust statements yet')
         self.assertEqual(CGTReturnSnapshot.objects.filter(account=empty).count(), 0)
 
     def test_a_get_records_nothing(self):
@@ -7848,16 +8049,14 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         current = self._year_covering(date.today())
-        with patch('share_dinkum_app.cgt.schedule.date') as fake:
-            fake.today.return_value = current.end_date
+        with override_settings(REPORTING_DATE=current.end_date):
             self.assertEqual(_year_still_running(self.account, current.name), current.end_date)
 
     def test_the_day_after_a_year_ends_it_is_closed(self):
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         current = self._year_covering(date.today())
-        with patch('share_dinkum_app.cgt.schedule.date') as fake:
-            fake.today.return_value = current.end_date + timedelta(days=1)
+        with override_settings(REPORTING_DATE=current.end_date + timedelta(days=1)):
             self.assertIsNone(_year_still_running(self.account, current.name))
 
     def test_the_all_years_view_says_nothing_about_time(self):
@@ -7958,6 +8157,89 @@ class FullBackupTests(TransactionTestCase):
             (project / '.env').write_text('DB_ENGINE=django.db.backends.postgresql\nDB_NAME=dinkum\n')
             self.assertIsNone(self.backup.configured_database(project))
 
+    def test_the_backup_folder_is_a_share_dinkum_backups_in_the_location_env_names(self):
+        project = Path(tempfile.mkdtemp())
+        with patch.dict(os.environ):
+            os.environ.pop('BACKUP_LOCATION', None)
+            self.assertEqual(self.backup.configured_backup_root(project), self.backup.DEFAULT_BACKUP_ROOT)
+            self.assertEqual(self.backup.DEFAULT_BACKUP_ROOT, Path.home() / 'share-dinkum-backups')
+
+            chosen = self.root / 'bigger-drive'
+            (project / '.env').write_text(f'BACKUP_LOCATION={chosen}\n')
+            self.assertEqual(self.backup.configured_backup_root(project), chosen / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=~/Documents\n')
+            self.assertEqual(
+                self.backup.configured_backup_root(project), Path.home() / 'Documents' / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=relative\n')
+            self.assertEqual(
+                self.backup.configured_backup_root(project), project / 'relative' / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=\n')
+            self.assertEqual(self.backup.configured_backup_root(project), self.backup.DEFAULT_BACKUP_ROOT)
+
+            os.environ['BACKUP_LOCATION'] = str(chosen)
+            (project / '.env').write_text('BACKUP_LOCATION=ignored\n')
+            self.assertEqual(self.backup.configured_backup_root(project), chosen / 'share-dinkum-backups')
+
+    def test_pruning_never_deletes_a_folder_that_is_not_a_backup(self):
+        """Someone's own folder called `main` in the backup folder keeps all of its contents."""
+        for name in ('Holiday photos', '2026 tax', 'Invoices', 'Projects', 'Receipts', 'Scans', 'Taxes'):
+            (self.destination / 'main' / name).mkdir(parents=True)
+        for index in range(7):
+            (self.destination / 'main' / f'2026-01-0{index + 1}T090000').mkdir()
+
+        removed = self.backup.cleanup_old_backups(self.destination, 'main', keep=5)
+
+        self.assertEqual(removed, ['2026-01-02T090000', '2026-01-01T090000'])
+        for name in ('Holiday photos', '2026 tax', 'Invoices', 'Projects', 'Receipts', 'Scans', 'Taxes'):
+            self.assertTrue((self.destination / 'main' / name).is_dir(), name)
+        self.assertEqual(len(self.backup.list_backups(self.destination)), 5)
+
+    def test_the_media_folder_is_a_media_folder_in_the_location_env_names(self):
+        project = Path(tempfile.mkdtemp())
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            self.assertEqual(self.backup.configured_media_root(project), project / 'media')
+
+            chosen = self.root / 'documents'
+            (project / '.env').write_text(f'MEDIA_LOCATION={chosen}\n')
+            self.assertEqual(self.backup.configured_media_root(project), chosen / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=\n')
+            self.assertEqual(self.backup.configured_media_root(project), project / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=~/dinkum\n')
+            self.assertEqual(self.backup.configured_media_root(project), Path.home() / 'dinkum' / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=relative\n')
+            self.assertEqual(self.backup.configured_media_root(project), project / 'relative' / 'media')
+
+            os.environ['MEDIA_LOCATION'] = str(chosen)
+            (project / '.env').write_text('MEDIA_LOCATION=ignored\n')
+            self.assertEqual(self.backup.configured_media_root(project), chosen / 'media')
+
+    def test_the_copy_is_called_media_whatever_the_folder_is_called(self):
+        """A restore looks for `media`, so the media folder's own name must not change it."""
+        renamed = self.root / 'share-dinkum-media'
+        self.media.rename(renamed)
+
+        result = self.backup.make_backup(self.database, renamed, self.destination)
+
+        self.assertTrue((result['path'] / 'media' / 'AFI' / 'statement.pdf').exists())
+        self.assertFalse((result['path'] / 'share-dinkum-media').exists())
+
+    def test_the_pre_restore_copy_names_the_media_folder_as_a_backup_does(self):
+        from share_dinkum_app import loading
+
+        renamed = self.root / 'share-dinkum-media'
+        self.media.rename(renamed)
+        with override_settings(MEDIA_ROOT=str(renamed)):
+            snapshot = loading.DataBackupManager(self.destination).snapshot_current_data()
+
+        self.assertTrue((snapshot / 'media' / 'AFI' / 'statement.pdf').exists())
+
     def test_media_alone_is_backed_up_without_a_sqlite_database(self):
         result = self.backup.make_backup(None, self.media, self.destination)
         self.assertEqual(result['database_bytes'], 0)
@@ -7971,6 +8253,250 @@ class FullBackupTests(TransactionTestCase):
         self.backup.make_backup(self.database, self.media, self.destination, keep=1)
 
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 7)
+
+
+class ReportingDateTests(SimpleTestCase):
+    def test_it_is_today_unless_pinned(self):
+        from share_dinkum_app.clock import reporting_date
+
+        self.assertEqual(reporting_date(), date.today())
+
+    def test_it_takes_a_date_or_an_iso_string(self):
+        from share_dinkum_app.clock import reporting_date
+
+        with override_settings(REPORTING_DATE=date(2024, 6, 30)):
+            self.assertEqual(reporting_date(), date(2024, 6, 30))
+        with override_settings(REPORTING_DATE='2024-06-30'):
+            self.assertEqual(reporting_date(), date(2024, 6, 30))
+
+
+class EnsureEnvTests(SimpleTestCase):
+    def setUp(self):
+        from share_dinkum_proj.ensure_env import ensure_env
+        self.ensure_env = ensure_env
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.env = self.folder / '.env'
+
+    def test_a_missing_env_is_copied_from_the_sample_with_a_new_key(self):
+        (self.folder / '.env.sample').write_text('SECRET_KEY=__REPLACE_ME__\nDEBUG=True\n')
+        key = self.ensure_env(self.env)
+        text = self.env.read_text()
+        self.assertIn('DEBUG=True', text)
+        self.assertIn(f'SECRET_KEY={key}', text)
+        self.assertNotIn('__REPLACE_ME__', text)
+        self.assertIn('__REPLACE_ME__', (self.folder / '.env.sample').read_text())
+
+    def test_a_missing_env_and_sample_gets_only_a_key(self):
+        key = self.ensure_env(self.env)
+        self.assertEqual(self.env.read_text(), f'SECRET_KEY={key}\n')
+
+    def test_an_existing_key_and_other_lines_are_left_alone(self):
+        self.env.write_text('SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
+        self.assertEqual(self.ensure_env(self.env), 'mine')
+        self.assertEqual(self.env.read_text(), 'SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
+
+
+class MediaRootCheckTests(SimpleTestCase):
+    def setUp(self):
+        from share_dinkum_app import system_checks
+        self.run_check = system_checks.media_root
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+
+    def ids(self, media, base=None):
+        with override_settings(MEDIA_ROOT=str(media), BASE_DIR=base or self.folder):
+            return [message.id for message in self.run_check(None)]
+
+    def test_an_existing_folder_is_quiet(self):
+        (self.folder / 'media').mkdir()
+        self.assertEqual(self.ids(self.folder / 'media'), [])
+
+    def test_a_missing_folder_with_a_parent_is_a_warning(self):
+        self.assertEqual(self.ids(self.folder / 'new'), ['share_dinkum_app.W001'])
+
+    def test_a_missing_parent_is_a_warning(self):
+        self.assertEqual(self.ids(self.folder / 'no_drive' / 'media'), ['share_dinkum_app.W002'])
+
+    def test_other_files_in_the_media_folder_are_a_warning(self):
+        media = self.folder / 'media'
+        (media / 'Documents').mkdir(parents=True)
+        self.assertEqual(self.ids(media), ['share_dinkum_app.W004'])
+
+    def test_account_folders_in_the_media_folder_are_quiet(self):
+        media = self.folder / 'media'
+        (media / '01a04b62-12bb-7200-bde0-80279c5d7e21').mkdir(parents=True)
+        self.assertEqual(self.ids(media), [])
+
+    def test_files_left_in_the_default_folder_are_a_warning(self):
+        (self.folder / 'media').mkdir()
+        (self.folder / 'media' / 'old.pdf').write_text('x')
+        elsewhere = self.folder / 'elsewhere'
+        elsewhere.mkdir()
+        self.assertEqual(self.ids(elsewhere), ['share_dinkum_app.W003'])
+
+
+class MediaFolderTests(SimpleTestCase):
+    """Clearing all data and restoring a backup touch only the account folders in the media folder.
+
+    The media folder is the `media` inside MEDIA_LOCATION, so it is never a documents or home
+    folder itself. But a folder already called `media` can hold someone's files, and they survive.
+    """
+
+    def setUp(self):
+        from share_dinkum_app import backup
+        self.backup = backup
+        self.elsewhere = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.elsewhere, ignore_errors=True)
+        self.backups = self.elsewhere / 'backups'
+
+    def make_media(self, *names, files=()):
+        """A media folder holding an empty folder for each of `names` and a file for each of `files`."""
+        media = self.elsewhere / 'my-media'
+        media.mkdir()
+        for name in names:
+            (media / name).mkdir()
+        for name in files:
+            (media / name).write_text('x')
+        return media
+
+    ACCOUNT = '01a04b62-12bb-7200-bde0-80279c5d7e21'
+
+    def test_a_missing_or_empty_folder_holds_nothing_foreign(self):
+        self.assertEqual(self.backup.foreign_media_entries(self.elsewhere / 'missing'), [])
+        self.assertEqual(self.backup.foreign_media_entries(self.make_media()), [])
+
+    def test_account_folders_are_not_foreign(self):
+        media = self.make_media(self.ACCOUNT, '01A12132-AC55-7696-AB2E-EDE757E6FD44')
+        self.assertEqual(self.backup.foreign_media_entries(media), [])
+
+    def test_anything_else_at_the_top_is_foreign(self):
+        media = self.make_media(self.ACCOUNT, 'Documents', 'AFI', files=['notes.txt', self.ACCOUNT[:-1] + 'z'])
+        # A file named like an account is not an account's folder.
+        (media / 'ffffffff-ffff-ffff-ffff-ffffffffffff').write_text('x')
+
+        self.assertEqual(
+            self.backup.foreign_media_entries(media),
+            sorted(['AFI', 'Documents', 'notes.txt', self.ACCOUNT[:-1] + 'z', 'ffffffff-ffff-ffff-ffff-ffffffffffff']))
+
+    def test_files_an_operating_system_adds_are_not_foreign(self):
+        media = self.make_media(self.ACCOUNT, files=['desktop.ini', 'Thumbs.db', '.DS_Store'])
+        self.assertEqual(self.backup.foreign_media_entries(media), [])
+
+    def test_only_a_few_names_are_shown(self):
+        self.assertEqual(self.backup.describe_names(['a', 'b']), "'a', 'b'")
+        self.assertEqual(self.backup.describe_names(list('abcdefg')), "'a', 'b', 'c', 'd', 'e' and 2 more")
+
+    def make_other_files(self, media):
+        """Files that are not Share Dinkum's, to be found untouched afterwards."""
+        (media / 'Documents').mkdir()
+        (media / 'Documents' / 'tax.pdf').write_text('not ours')
+        (media / 'budget.xlsx').write_text('not ours')
+        (media / 'desktop.ini').write_text('not data')
+
+    def assert_other_files_survive(self, media):
+        self.assertTrue(media.is_dir())
+        self.assertEqual((media / 'Documents' / 'tax.pdf').read_text(), 'not ours')
+        self.assertEqual((media / 'budget.xlsx').read_text(), 'not ours')
+        self.assertTrue((media / 'desktop.ini').exists())
+
+    def test_emptying_removes_the_account_folders_and_nothing_else(self):
+        media = self.make_media(self.ACCOUNT, '01a12132-ac55-7696-ab2e-ede757e6fd44')
+        (media / self.ACCOUNT / 'AFI').mkdir()
+        (media / self.ACCOUNT / 'AFI' / 'statement.pdf').write_text('ours')
+        self.make_other_files(media)
+
+        self.assertEqual(self.backup.empty_media_folder(media), [])
+
+        self.assertEqual(sorted(path.name for path in media.iterdir()), ['Documents', 'budget.xlsx', 'desktop.ini'])
+        self.assert_other_files_survive(media)
+
+    def test_emptying_a_missing_folder_does_nothing(self):
+        self.assertEqual(self.backup.empty_media_folder(self.elsewhere / 'missing'), [])
+
+    def test_a_folder_that_will_not_delete_is_reported_not_raised(self):
+        media = self.make_media(self.ACCOUNT)
+        with patch('share_dinkum_app.backup.shutil.rmtree', side_effect=PermissionError('open in Excel')):
+            self.assertEqual(self.backup.empty_media_folder(media), [self.ACCOUNT])
+        self.assertTrue((media / self.ACCOUNT).is_dir())
+
+    def test_clearing_all_data_removes_only_the_account_folders(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        (media / self.ACCOUNT / 'export.xlsx').write_text('ours')
+        self.make_other_files(media)
+        with override_settings(MEDIA_ROOT=str(media)), patch('builtins.input', return_value='X'), \
+                patch.object(loading, 'call_command'):
+            loading.DataLoader.clear_all_data()
+
+        self.assertFalse((media / self.ACCOUNT).exists())
+        self.assert_other_files_survive(media)
+
+    def test_clearing_all_data_can_be_declined(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        with override_settings(MEDIA_ROOT=str(media)), patch('builtins.input', return_value='n'), \
+                patch.object(loading, 'call_command', side_effect=AssertionError('flushed the database')):
+            loading.DataLoader.clear_all_data()
+
+        self.assertTrue((media / self.ACCOUNT).is_dir())
+
+    def test_a_restore_replaces_the_account_folders_and_leaves_the_rest(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        (media / self.ACCOUNT / 'old.xlsx').write_text('live, to be replaced')
+        self.make_other_files(media)
+        backed_up = self.elsewhere / 'backed-up-media'
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44').mkdir(parents=True)
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44' / 'new.xlsx').write_text('from the backup')
+
+        with override_settings(MEDIA_ROOT=str(media)):
+            loading.DataBackupManager(base_path=self.backups).replace_media(backed_up)
+
+        self.assertFalse((media / self.ACCOUNT).exists())
+        self.assertEqual(
+            (media / '01a12132-ac55-7696-ab2e-ede757e6fd44' / 'new.xlsx').read_text(), 'from the backup')
+        self.assert_other_files_survive(media)
+
+    def test_a_restore_stops_if_the_live_folders_cannot_be_removed(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        backed_up = self.elsewhere / 'backed-up-media'
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44').mkdir(parents=True)
+
+        with override_settings(MEDIA_ROOT=str(media)), \
+                patch('share_dinkum_app.backup.shutil.rmtree', side_effect=PermissionError('open in Excel')):
+            with self.assertRaisesRegex(OSError, 'Could not remove'):
+                loading.DataBackupManager(base_path=self.backups).replace_media(backed_up)
+
+        self.assertFalse((media / '01a12132-ac55-7696-ab2e-ede757e6fd44').exists(), 'nothing was copied in')
+
+    def test_the_media_folder_is_never_the_location_itself(self):
+        """Whatever place is named, even one full of other files, the media folder is a `media` inside it."""
+        project = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            for place in ('~', '~/Documents', str(Path.home().anchor), str(project)):
+                (project / '.env').write_text(f'MEDIA_LOCATION={place}\n')
+                media = self.backup.configured_media_root(project)
+                self.assertEqual(media.name, 'media', place)
+                self.assertEqual(media.parent, Path(place).expanduser(), place)
+
+    @skipUnless(os.name == 'nt', 'drive letters are a Windows matter')
+    def test_a_drive_letter_alone_means_the_top_of_that_drive(self):
+        project = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            for written, expected in (('D:', 'D:\\media'), ('c:', 'c:\\media'), ('D:data', 'D:\\data\\media'),
+                                      ('D:\\', 'D:\\media')):
+                (project / '.env').write_text(f'MEDIA_LOCATION={written}\n')
+                self.assertEqual(self.backup.configured_media_root(project), Path(expected), written)
 
 
 class FullBackupButtonTests(TransactionTestCase):
@@ -8072,7 +8598,31 @@ class CGTScheduleExportTests(TransactionTestCase):
     def test_the_workbook_has_a_sheet_for_each_part_of_the_answer(self):
         tables = set(pd.read_excel(self._workbook(), sheet_name='Index')['table_name'])
         self.assertEqual(
-            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'Warnings'})
+            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'ChangesSinceSnapshot',
+                     'UnrealisedGains', 'UnrealisedSummary', 'Warnings'})
+
+    def test_the_unrealised_sheets_hold_the_open_parcels_and_their_total(self):
+        tables = excelinterface.get_all_tables_in_excel(self._workbook())
+        parcels = tables['UnrealisedGains']
+        self.assertEqual(len(parcels), 2)
+        self.assertTrue(all(isinstance(value, (int, float)) for value in parcels['capital_gain']),
+                        'capital_gain must be numbers, not text')
+        summary = tables['UnrealisedSummary'].set_index('asset_category')
+        self.assertAlmostEqual(summary.loc['Total', 'gross_loss'], 283.8839 + 311.4423, places=4)
+        self.assertAlmostEqual(
+            summary.loc['Total', 'market_value'], parcels['net_proceeds'].sum(), places=4)
+
+    def test_a_missing_price_is_a_warning_but_makes_no_year_a_draft(self):
+        priced = excelinterface.get_all_tables_in_excel(self._workbook())
+        self.data['instrument'].current_unit_price = None
+        self.data['instrument'].save()
+        unpriced = excelinterface.get_all_tables_in_excel(self._workbook())
+
+        warnings = unpriced['Warnings']
+        unrealised = warnings[warnings['fiscal_year'] == 'Unrealised']['warning']
+        self.assertEqual(len(unrealised), 2)
+        self.assertTrue(all('No current price for GMT' in text for text in unrealised))
+        self.assertEqual(list(unpriced['Summary']['is_draft']), list(priced['Summary']['is_draft']))
 
     def test_money_is_written_as_numbers_a_spreadsheet_can_add_up(self):
         """Money is written as numbers."""

@@ -6,7 +6,7 @@ import os
 from decouple import config
 import whitenoise
 # Ensure the SECRET_KEY is set in the .env file
-from share_dinkum_proj.ensure_secret_key import ensure_secret_key
+from share_dinkum_proj.ensure_env import ensure_env
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -22,7 +22,7 @@ logger = setup_logging(level=logging.INFO)
 
 
 ENV_PATH = BASE_DIR / '.env'
-SECRET_KEY = ensure_secret_key(ENV_PATH)
+SECRET_KEY = ensure_env(ENV_PATH)
 
 
 # Quick-start development settings - unsuitable for production
@@ -178,7 +178,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+from share_dinkum_app.backup import configured_media_root
+MEDIA_ROOT = str(configured_media_root(BASE_DIR))
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
 # Tests save files too. This keeps them out of MEDIA_ROOT above (see the runner).
@@ -191,6 +192,12 @@ HOLDINGS_SHADOW = config('HOLDINGS_SHADOW', default='off')
 # What writes the holdings: 'replay', a rebuild of the instrument on every change, or 'signals',
 # the creation signals as before 0.5.0. See share_dinkum_app/holdings/live.py.
 HOLDINGS_WRITER = config('HOLDINGS_WRITER', default='replay')
+
+# The date reports are made as at (a date or an ISO string), or None for today. `uv run dev
+# --reporting-date DATE` sets it for that run through the process environment. It is deliberately
+# not read from `.env`, where a pinned date would be forgotten. Tests override it.
+# See share_dinkum_app/clock.py.
+REPORTING_DATE = os.environ.get('REPORTING_DATE') or None
 
 
 # Django's default is 1000, which a change page here passes without trying. The admin

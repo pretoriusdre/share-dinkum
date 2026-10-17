@@ -4,6 +4,45 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
+## 0.6.0 - 2026-10-17
+
+### Added
+
+- **Choose where exports, documents and backups are kept**, in `share_dinkum_proj/.env`:
+  - `MEDIA_LOCATION`: the folder that holds the `media` folder of exports and attached documents.
+    Default the project folder, so `share_dinkum_proj/media`.
+  - `BACKUP_LOCATION`: the folder that holds the `share-dinkum-backups` folder of backups. Default your
+    home folder, so `~/share-dinkum-backups`.
+  - Existing files are not moved. Move the `media` or `share-dinkum-backups` folder yourself before
+    changing either setting.
+  - Only the `media` and `share-dinkum-backups` folders inside those locations are ever written to,
+    pruned, copied, emptied or restored, so it is safe to name your Documents folder, your home folder
+    or a drive. Clear-all and restore remove only the account folders in `media`, and the start-up
+    check warns about any other files already in it.
+  - An existing `.env` is not updated. Add the two lines to it if you want them.
+- **Unrealised gains are now part of the Australian CGT report.** Each parcel you hold is treated as
+  if you sold it today, so it shows the discount it would get and when it becomes
+  eligible. From 1 July 2027 it is split and indexed as a real sale would be. It is a guide for
+  planning a sale only; none of it goes on a return.
+- **The Australian CGT report shows what has changed since your last capital gains snapshot**, on
+  a new ChangesSinceSnapshot sheet. It compares each year's lodged snapshot, or else its latest.
+
+### Changed
+
+- **The portfolio export no longer has a RealisedCapitalGains sheet.** The Australian CGT report
+  replaces it. That report is more complete: it applies the discount, losses, residency and the 2027
+  changes.
+- **Capital gains snapshots record the whole year**: its totals, including net capital gain, trust
+  gains, both parts of a sale split at 1 July 2027, and how each gain is taxed. A change in the
+  discount or residency now shows up, not only a change in the gain. Snapshots you took before
+  this are compared on what they recorded.
+- **Reporting date is configurable**, previously it was always today:
+  `uv run dev --reporting-date 2026-06-30`. It lasts for that run only.
+  It governs whether a fiscal year is still running, the residency check, the dashboard chart and
+  the date a capital gains snapshot is taken. Unrealised gains are always as at today.
+- **You no longer need to create `.env`.** The first start copies `.env.sample` and generates a
+  `SECRET_KEY`.
+
 ## 0.5.0 - 2026-10-11
 
 Release 0.5.0 changes the way that parcels are built from trades. Previously, each 'buy' trade

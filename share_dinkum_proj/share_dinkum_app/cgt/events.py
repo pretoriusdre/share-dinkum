@@ -4,11 +4,13 @@ Sources:
 * a disposal (one SellAllocation), split into two rows by s112-155 when a parcel held
   across 1 July 2027 is sold after it and the 2027 regime is modelled
 * a gain attributed by a managed investment trust's annual statement
+* a parcel still held, as if sold today (`unrealised_events`, a guide only)
 """
 
 from dataclasses import dataclass, fields, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from django.db.models import Sum
@@ -33,7 +35,8 @@ from share_dinkum_app.constants import (
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, AttributionStatement, FiscalYear, Instrument, Parcel, Buy, Sell, SellAllocation,
+        Account, AttributionStatement, CurrentExchangeRate, FiscalYear, Instrument, Parcel, Buy, Sell,
+        SellAllocation,
     )
 
 #: A disposal of a parcel: one SellAllocation.
@@ -41,6 +44,16 @@ SOURCE_DISPOSAL = 'disposal'
 
 #: A capital gain attributed by a managed investment trust, from its annual statement.
 SOURCE_ATTRIBUTION = 'trust_attribution'
+
+#: A parcel still held, as if sold today. Never part of `all_events`.
+SOURCE_UNREALISED = 'unrealised'
+
+#: Takes Money to the account currency, or None if there is no rate.
+Converter = Callable[[Money], Money | None]
+
+#: Why an unrealised row has no figures.
+PENDING_NO_PRICE = 'No current price for {instrument}, so its value is unknown.'
+PENDING_NO_RATE = 'No exchange rate from {currency} to {account_currency}, so its value is unknown.'
 
 #: TAP status values, re-exported from cgt.tap for reports.
 TAP = tap_module.TAP
@@ -177,6 +190,23 @@ def event_fields() -> list[str]:
     return [f.name for f in fields(CGTEvent)]
 
 
+def event_key(source: str | None, sell_allocation_id: object | None, slice: str | None,
+              instrument: str | None, event_date: date | None, method: str | None,
+              tap_status: str | None) -> str:
+    """What names one event across recalculations, so a snapshot row can be matched to today's.
+
+    A disposal by its sell allocation and slice, since both halves of a sale split at 1 July
+    2027 share an allocation. A trust's gain by its statement (instrument and year end), method
+    and TAP status, which is one event each. A blank source is a row captured before the source
+    was recorded, which was always a whole disposal.
+    """
+    if source == SOURCE_ATTRIBUTION:
+        day = event_date.isoformat() if event_date else ''
+        # A blank and a None TAP status are the same: stored rows hold blank for an unknown one.
+        return f'{SOURCE_ATTRIBUTION}|{instrument}|{day}|{method or ""}|{tap_status or ""}'
+    return f'{SOURCE_DISPOSAL}|{sell_allocation_id}|{slice or SLICE_WHOLE}'
+
+
 def _gain_category(instrument: 'Instrument | None', deferred: bool = False) -> str:
     """The s102-6 category a gain falls into.
 
@@ -293,31 +323,31 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
         # disposal can have happened after the cutover.
         return [whole]
 
-    return _apply_cutover(whole, allocation, account=account, declared=declared)
+    return _apply_cutover(whole, parcel, quantity, sell.date, sell.instrument, account=account,
+                          declared=declared)
 
 
-def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Account | None' = None,
+def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_date: date,
+                   instrument: 'Instrument', account: 'Account | None' = None,
                    declared: residency_module.Periods | None = None) -> list[CGTEvent]:
-    """Characterise a disposal on or after 1 July 2027.
+    """Characterise `quantity` of `parcel` disposed of on `sale_date`, on or after 1 July 2027.
 
     Two rows where s112-155 deems the parcel sold at the cutover: a deferred slice keeping the
     discount and a post-cutover slice indexed instead. One row where the deemed sale does not
-    apply, or no cutover valuation exists (marked pending).
+    apply, or no cutover valuation exists (marked pending). Shared by real sales and the
+    hypothetical ones of `unrealised_events`, so the two cannot be characterised differently.
     """
-    parcel = allocation.parcel
-    sell = allocation.sell
     buy = parcel.buy
-    quantity = allocation.quantity
 
     indexation_eligible = indexation_module.is_indexation_eligible(
-        account, buy.date, sell.date, declared=declared)
+        account, buy.date, sale_date, declared=declared)
 
     applies, reason = cutover_module.deemed_sale_applies(
-        account, buy.date, sell.date, declared=declared)
+        account, buy.date, sale_date, declared=declared)
 
     if not applies:
         return [_single_post_cutover_event(
-            whole, buy, sell, indexation_eligible, reason,
+            whole, buy, sale_date, instrument, indexation_eligible, reason,
             adjustments_by_year(parcel, quantity), account=account, declared=declared)]
 
     market_value, _source = parcel.market_value_at(
@@ -325,16 +355,16 @@ def _apply_cutover(whole: CGTEvent, allocation: 'SellAllocation', account: 'Acco
     if market_value is None:
         return [replace(
             whole,
-            gain_category=_gain_category(sell.instrument),
+            gain_category=_gain_category(instrument),
             pending_reason=cutover_module.PENDING_NO_VALUATION.format(
-                instrument=sell.instrument.name,
+                instrument=instrument.name,
                 day=cutover_module.DEEMED_SALE_DATE.isoformat()),
         )]
 
     market_value = _money(market_value * share_of_parcel(parcel, quantity))
     later_adjustments = adjustments_by_year(parcel, quantity, since=CGT_CUTOVER_DATE)
     deferred, post = _split_events(
-        whole, buy, sell, market_value, indexation_eligible, later_adjustments)
+        whole, buy, sale_date, instrument, market_value, indexation_eligible, later_adjustments)
     if not indexation_eligible and post.pending_reason is None:
         # The split applies, so the taxpayer can be indexed and no day after the cutover is
         # foreign or temporary: only an undeclared day can have denied it.
@@ -386,7 +416,8 @@ def _outcome(proceeds: Money, indexed_cost_base: Money, plain_cost_base: Money) 
     return zero, proceeds
 
 
-def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexation_eligible: bool,
+def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sale_date: date, instrument: 'Instrument',
+                               indexation_eligible: bool,
                                reason: str | None,
                                adjustments: list[indexation_module.Adjustment],
                                account: 'Account | None' = None,
@@ -400,9 +431,9 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
     Each of `adjustments` is indexed from its own quarter (`indexed_cost_base`). The factor
     reported is the one for the rest of the cost base.
     """
-    category = _gain_category(sell.instrument)
+    category = _gain_category(instrument)
     if not indexation_eligible:
-        if _undeclared_days_alone_deny_indexation(account, buy, sell, declared):
+        if _undeclared_days_alone_deny_indexation(account, buy, sale_date, declared):
             # Undeclared days are missing data, not a residency status, and the figure differs
             # with what they were. It is left as it was, and marked as not final.
             return replace(whole, gain_category=category, pending_reason=PENDING_UNDECLARED_INDEXATION)
@@ -411,9 +442,9 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sell: 'Sell', indexa
     net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
     assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
     try:
-        factor = indexation_module.indexation_factor(buy.date, sell.date)
+        factor = indexation_module.indexation_factor(buy.date, sale_date)
         indexed_cost_base = _money(cast(Money, indexation_module.indexed_cost_base(
-            plain_cost_base, buy.date, sell.date, adjustments=adjustments)))
+            plain_cost_base, buy.date, sale_date, adjustments=adjustments)))
     except indexation_module.IndexationDataUnavailable as exc:
         return replace(whole, gain_category=category, pending_reason=str(exc))
 
@@ -455,7 +486,7 @@ PENDING_UNDECLARED_SPLIT_INDEXATION = (
 )
 
 
-def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy', sell: 'Sell',
+def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy', sale_date: date,
                                            declared: residency_module.Periods | None) -> bool:
     """Whether an individual or trust's post-cutover acquisition misses indexation only for days
     whose residency is not declared, with none foreign or temporary.
@@ -472,14 +503,14 @@ def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy'
         declared = residency_module.periods(account)
     if not declared:
         return False
-    counts = residency_module.days_by_status(account, buy.date, sell.date, declared=declared)
+    counts = residency_module.days_by_status(account, buy.date, sale_date, declared=declared)
     return (counts.get(None, 0) > 0
             and counts.get(residency_module.FOREIGN, 0) == 0
             and counts.get(residency_module.TEMPORARY, 0) == 0)
 
 
-def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money,
-                  indexation_eligible: bool,
+def _split_events(whole: CGTEvent, buy: 'Buy', sale_date: date, instrument: 'Instrument',
+                  market_value: Money, indexation_eligible: bool,
                   later: list[indexation_module.Adjustment]) -> list[CGTEvent]:
     """The deferred and post-cutover gains from an s112-155 deemed sale at `market_value`.
 
@@ -508,9 +539,9 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
     indexed_reacquisition_cost = reacquisition_cost
     if indexation_eligible:
         try:
-            factor = indexation_module.indexation_factor(CGT_CUTOVER_DATE, sell.date)
+            factor = indexation_module.indexation_factor(CGT_CUTOVER_DATE, sale_date)
             indexed_reacquisition_cost = _money(cast(Money, indexation_module.indexed_cost_base(
-                reacquisition_cost, CGT_CUTOVER_DATE, sell.date, adjustments=later)))
+                reacquisition_cost, CGT_CUTOVER_DATE, sale_date, adjustments=later)))
         except indexation_module.IndexationDataUnavailable as exc:
             factor = None
             pending = str(exc)
@@ -522,7 +553,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
     # s114-10(9): the deemed reacquisition is disregarded for the 12-month rule, so the
     # deferred slice is measured from the original purchase and both slices are held for
     # more than twelve months if the parcel was.
-    deferred_eligible = discount_module.is_discount_eligible(buy.date, sell.date)
+    deferred_eligible = discount_module.is_discount_eligible(buy.date, sale_date)
 
     deferred = replace(
         whole,
@@ -538,7 +569,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
         gross_gain=deferred_gain if deferred_gain.amount > 0 else _zero_like(deferred_gain),
         gross_loss=-deferred_gain if deferred_gain.amount < 0 else _zero_like(deferred_gain),
         method=METHOD_DISCOUNT if deferred_eligible else METHOD_OTHER,
-        gain_category=_gain_category(sell.instrument, deferred=True),
+        gain_category=_gain_category(instrument, deferred=True),
         indexation_factor=NO_INDEXATION,
     )
 
@@ -546,7 +577,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
         whole,
         slice=SLICE_POST_CUTOVER,
         purchase_date=CGT_CUTOVER_DATE,
-        days_held=(sell.date - CGT_CUTOVER_DATE).days,
+        days_held=(sale_date - CGT_CUTOVER_DATE).days,
         unit_buy_price=None,
         buy_consideration=market_value,
         buy_brokerage=_zero_like(market_value),
@@ -560,7 +591,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sell: 'Sell', market_value: Money
         method=METHOD_OTHER,
         discount_percentage=Decimal('0'),
         indexation_factor=factor,
-        gain_category=_gain_category(sell.instrument),
+        gain_category=_gain_category(instrument),
         pending_reason=pending,
     )
 
@@ -718,6 +749,22 @@ def attribution_events(account: 'Account', fiscal_year: 'FiscalYear | str | None
     return events
 
 
+def years_with_events(account: 'Account') -> list['FiscalYear']:
+    """Every fiscal year with a sale or a trust's annual statement, oldest first.
+
+    A statement counts on its own: a year whose only gains a trust attributed is still a year
+    with capital gains to report, and to snapshot.
+    """
+    from share_dinkum_app.models import AttributionStatement, Sell
+
+    records: list[Sell | AttributionStatement] = [
+        *Sell.objects.filter(account=account, is_active=True),
+        *AttributionStatement.objects.filter(account=account, is_active=True),
+    ]
+    years = {record.fiscal_year for record in records if record.fiscal_year}
+    return sorted(years, key=lambda year: year.start_year)
+
+
 def all_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' = None) -> list[CGTEvent]:
     """Every capital gains event for an account, from whatever source, oldest first."""
     events = disposal_events(account, fiscal_year=fiscal_year)
@@ -754,3 +801,164 @@ def disposal_events(account: 'Account', fiscal_year: 'FiscalYear | str | None' =
                     continue
                 events.append(event)
     return events
+
+
+def unrealised_events(account: 'Account', as_at: date | None = None) -> list[CGTEvent]:
+    """Every parcel still held, as if sold on `as_at` (default today).
+
+    Proceeds are the latest stored price with no brokerage, converted at the stored rate. The
+    characterisation is a disposal's on `as_at`, including the 2027 split and indexation, so a
+    parcel can give two rows. A row with no price or rate has no money figures and says why in
+    `pending_reason`. Not part of `all_events`: nothing here is reported.
+    """
+    from share_dinkum_app.models import Parcel
+
+    # Today, not `clock.reporting_date()`. The holding and the price are today's, so a sale on any
+    # other day mixes two dates: one in the past would want that day's holding and prices, and one
+    # in the future has no price, and no CPI to index with. Neither answers a question a return
+    # asks. When the discount arrives is a column of its own (`discount_eligible_from`). Tests pass
+    # `as_at` instead.
+    as_at = as_at or date.today()
+    declared = residency_module.periods(account)
+    fiscal_year, _ = account.fiscal_year_type.classify_date(input_date=as_at)
+    convert = _current_rate_converter(account)
+
+    events: list[CGTEvent] = []
+    parcels = (
+        Parcel.objects.filter(account=account, is_active=True, buy__date__lte=as_at)
+        .select_related('buy', 'buy__instrument')
+        .order_by('buy__instrument__name', 'buy__date', 'id')
+    )
+    for parcel in parcels:
+        quantity = parcel.remaining_quantity
+        if quantity <= 0:
+            continue
+        events += _unrealised_events_of(
+            parcel, quantity, as_at, fiscal_year.name, convert, account=account, declared=declared)
+    return events
+
+
+def _current_rate_converter(account: 'Account') -> Converter:
+    """A function taking Money to the account currency at the stored current rate, or None if none.
+
+    Read as stored, never fetched, like the price it converts: refreshing is the price refresh's job,
+    so building a report does not go to the network.
+    """
+    from share_dinkum_app.models import CurrentExchangeRate
+
+    account_currency = str(account.currency)
+    rates: dict[str, 'CurrentExchangeRate | None'] = {}
+
+    def convert(money: Money) -> Money | None:
+        currency = str(money.currency)
+        if currency == account_currency:
+            return money
+        if currency not in rates:
+            rates[currency] = CurrentExchangeRate.objects.filter(
+                account=account, convert_from=currency, convert_to=account_currency).first()
+        rate = rates[currency]
+        return rate.apply(money) if rate else None
+
+    return convert
+
+
+def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fiscal_year: str | None,
+                          convert: Converter, account: 'Account',
+                          declared: residency_module.Periods | None = None) -> list[CGTEvent]:
+    """One open parcel, as if `quantity` of it were sold on `as_at`: one row, or two if split at
+    the 2027 cutover as a real sale would be. See `unrealised_events`.
+    """
+    buy = parcel.buy
+    instrument = buy.instrument
+    share = share_of_parcel(parcel, quantity)
+    cost_base = _money(parcel.total_cost_base * share)
+
+    pending: list[str] = []
+    unit_sale_price: Money | None = None
+    proceeds: Money | None = None
+    if instrument.current_unit_price is None:
+        pending.append(PENDING_NO_PRICE.format(instrument=instrument.name))
+    else:
+        unit_sale_price = convert(Money(instrument.current_unit_price, instrument.currency))
+        if unit_sale_price is None:
+            pending.append(PENDING_NO_RATE.format(
+                currency=instrument.currency, account_currency=account.currency))
+        else:
+            proceeds = _money(unit_sale_price * quantity)
+            unit_sale_price = _money(unit_sale_price, UNIT_PLACES)
+
+    capital_gain = gross_gain = gross_loss = None
+    if proceeds is not None:
+        capital_gain = proceeds - cost_base
+        zero = _zero_like(capital_gain)
+        gross_gain = capital_gain if capital_gain.amount > 0 else zero
+        gross_loss = -capital_gain if capital_gain.amount < 0 else zero
+
+    tap_status = tap_module.parcel_tap_status(account, instrument, buy.date, as_at, declared=declared)
+    is_disregarded, disregard_reason = tap_module.disregard(account, tap_status, as_at, declared=declared)
+
+    whole = CGTEvent(
+        source=SOURCE_UNREALISED,
+        event_date=as_at,
+        fiscal_year=fiscal_year,
+        instrument=instrument.name,
+        asset_category=classification.asset_category(instrument),
+        asset_category_confirmed=bool(instrument.is_classified),
+
+        sell_allocation_id=None,
+        parcel_id=parcel.id,
+        buy_id=buy.id,
+        sell_id=None,
+        legacy_buy_id=buy.legacy_id,
+        legacy_sell_id=None,
+
+        purchase_date=buy.date,
+        sale_date=as_at,
+        quantity=quantity,
+        days_held=(as_at - buy.date).days,
+
+        unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
+        buy_consideration=_money(parcel.adjusted_buy_price * quantity),
+        buy_brokerage=_money(parcel.adjusted_unit_brokerage * quantity),
+        cost_base_adjustments=_money(parcel.total_adjustments * share),
+        cost_base=cost_base,
+
+        unit_sale_price=unit_sale_price,
+        gross_proceeds=proceeds,
+        sell_brokerage=None if proceeds is None else _zero_like(proceeds),
+        net_proceeds=proceeds,
+
+        capital_gain=capital_gain,
+        gross_gain=gross_gain,
+        gross_loss=gross_loss,
+
+        method=METHOD_DISCOUNT if discount_module.is_discount_eligible(buy.date, as_at) else METHOD_OTHER,
+        discount_percentage=discount_module.discount_percentage(
+            buy.date, as_at, account=account, declared=declared),
+        regime=_regime_for(as_at),
+        tap_status=tap_status,
+        residency_status=residency_module.status_on(account, as_at, declared=declared),
+        is_disregarded=is_disregarded,
+        disregard_reason=disregard_reason,
+        discount_basis=residency_module.basis(account, declared=declared),
+        tap_override_suppressed_deeming=tap_module.override_suppresses_deeming(
+            account, instrument, buy.date, as_at, declared=declared),
+        pending_reason=' '.join(pending) or None,
+    )
+
+    # The same gates as a real sale. With no value there is nothing to split or index, and the
+    # row already says why.
+    if proceeds is None or as_at < CGT_CUTOVER_DATE or not models_2027_regime(account):
+        return [whole]
+    return _apply_cutover(whole, parcel, quantity, as_at, instrument, account=account, declared=declared)
+
+
+def discount_eligible_from(event: CGTEvent) -> date | None:
+    """The first sale date on which `event`'s gain gets the CGT discount, or None if it cannot.
+
+    The day after the purchase's 12-month anniversary. None for a post-cutover slice or an
+    indexed gain, which get no discount however long they are held (s115-20, s115-100).
+    """
+    if event.purchase_date is None or event.slice == SLICE_POST_CUTOVER or event.indexation_factor is not None:
+        return None
+    return discount_module.twelve_month_anniversary(event.purchase_date) + timedelta(days=1)

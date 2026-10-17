@@ -62,8 +62,12 @@ from share_dinkum_app.cgt.events import (
     CGTEvent,
     all_events,
     attribution_events,
+    discount_eligible_from,
     disposal_events,
     event_fields,
+    event_key,
+    unrealised_events,
+    years_with_events,
 )
 
 __all__ = [
@@ -75,8 +79,12 @@ __all__ = [
     'suggest_legal_form',
     'suggest_legal_form_from_activity',
     'suggested_country',
+    'discount_eligible_from',
     'disposal_events',
     'event_fields',
+    'event_key',
+    'unrealised_events',
+    'years_with_events',
     'apply_discount',
     'apportionment_fraction',
     'base_rate',

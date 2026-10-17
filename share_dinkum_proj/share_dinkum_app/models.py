@@ -3,7 +3,7 @@ from datetime import date, timedelta, datetime, UTC
 from decimal import Decimal, ROUND_HALF_UP
 import bisect
 import copy
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 # Django imports
 from django.db import models, transaction
@@ -23,6 +23,7 @@ from djmoney.money import Money
 
 # Local app imports
 from share_dinkum_app import yfinanceinterface
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
@@ -44,6 +45,8 @@ from share_dinkum_app.choices import (
 )
 from share_dinkum_app.constants import DEFAULT_CURRENCY
 
+if TYPE_CHECKING:
+    from share_dinkum_app.cgt.events import CGTEvent
 
 # Local but to be replaced in future
 from share_dinkum_app.uuid_future  import uuid7 # Change this to "from uuid import uuid7", once this method is available in standard library
@@ -2658,6 +2661,7 @@ class CGTReturnSnapshot(BaseModel):
 
     Gains are recomputed on every report, so a calculation change can alter a lodged year.
     Take one before lodging; CGTBasisChangeReport compares it with a fresh calculation.
+    Holds the year's schedule totals, and a row per capital gains event.
     """
 
     MODEL_DESCRIPTION = 'A record of the capital gains figures for a fiscal year as they stood at a point in time.'
@@ -2674,7 +2678,7 @@ class CGTReturnSnapshot(BaseModel):
 
     fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot',
         help_text='The fiscal year whose figures were captured.')
-    taken_at = models.DateField(default=date.today, help_text='The day these figures were captured.')
+    taken_at = models.DateField(default=reporting_date, help_text='The day these figures were captured.')
     basis = models.CharField(
         max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY,
         help_text='Whether the figures used declared residency or an assumption.')
@@ -2684,6 +2688,40 @@ class CGTReturnSnapshot(BaseModel):
     lodged_at = models.DateField(null=True, blank=True,
         help_text='Date the return was lodged. Blank if not lodged.')
 
+    # The year's schedule, as the CGT report's Summary sheet shows it. Blank on an older
+    # snapshot, which recorded only the disposals.
+    is_draft = models.BooleanField(null=True, blank=True,
+        help_text='Whether the schedule was still a draft. Blank on an older snapshot.')
+    total_current_year_capital_gains = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Total current year capital gains, before losses and the discount. Blank on an '
+                  'older snapshot.')
+    total_current_year_capital_losses = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Total current year capital losses. Blank on an older snapshot.')
+    disregarded_capital_gains = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text="Gains disregarded, such as a foreign resident's on non-taxable Australian "
+                  'property. Blank on an older snapshot.')
+    losses_applied = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Current year capital losses applied against the gains. Blank on an older '
+                  'snapshot.')
+    prior_year_losses_applied = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Prior year net capital losses applied. Blank on an older snapshot.')
+    cgt_discount_applied = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Total CGT discount applied. Blank on an older snapshot.')
+    net_capital_gain = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Net capital gain for the year, as reported on the return. Blank on an older '
+                  'snapshot.')
+    losses_carried_forward = MoneyField(
+        max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY, null=True, blank=True,
+        help_text='Net capital losses carried forward to later years. Blank on an older '
+                  'snapshot.')
+
     def __str__(self) -> str:
         lodged = ' (lodged)' if self.is_lodged else ''
         return f'{self.fiscal_year.name} snapshot {self.taken_at.isoformat()}{lodged}'
@@ -2692,12 +2730,34 @@ class CGTReturnSnapshot(BaseModel):
     CAPTURED_FIELDS: list[str] = [
         'sell_allocation_id', 'sell_date', 'instrument', 'quantity_sold',
         'days_held', 'proceeds', 'cost_base', 'capital_gain',
+        'source', 'slice', 'method', 'tap_status', 'discount_percentage', 'indexation_factor',
+        'is_disregarded',
     ]
+
+    #: Each year total stored on the snapshot, and the `cgt.Schedule` attribute it comes from.
+    SCHEDULE_FIELDS: dict[str, str] = {
+        'total_current_year_capital_gains': 'gross_gains',
+        'total_current_year_capital_losses': 'gross_losses',
+        'disregarded_capital_gains': 'disregarded_gains',
+        'losses_applied': 'current_year_losses_applied',
+        'prior_year_losses_applied': 'prior_year_losses_applied',
+        'cgt_discount_applied': 'total_discount',
+        'net_capital_gain': 'net_capital_gain',
+        'losses_carried_forward': 'losses_carried_forward',
+        'is_draft': 'is_draft',
+    }
 
     @property
     def rows(self) -> list[dict[str, Any]]:
         """The captured figures, as a list of plain dicts."""
         return [row.as_dict() for row in self.captured_rows.all()]
+
+    @property
+    def schedule_figures(self) -> dict[str, Any]:
+        """The year totals as captured, keyed as SCHEDULE_FIELDS. Empty on an older snapshot."""
+        if self.is_draft is None:
+            return {}
+        return {name: getattr(self, name) for name in self.SCHEDULE_FIELDS}
 
     @property
     def totals(self) -> dict[str, Any]:
@@ -2716,15 +2776,17 @@ class CGTReturnSnapshot(BaseModel):
     @classmethod
     def capture(cls, account: 'Account', fiscal_year: 'FiscalYear', taken_at: Date | None = None,
                 basis: str = 'LEGACY', is_lodged: bool = False) -> 'CGTReturnSnapshot':
-        """Snapshot the realised capital gains for one fiscal year.
+        """Snapshot one fiscal year: its schedule totals, and every capital gains event in it.
 
-        A second capture on the same day replaces that day's snapshot, unless it is marked as
-        lodged: that raises LodgedSnapshotError, since those are the figures that were filed.
+        The events are those of the CGT report: disposals (both halves of one split at 1 July
+        2027) and trust gains. A second capture on the same day replaces that day's snapshot,
+        unless it is marked as lodged: that raises LodgedSnapshotError, since those are the
+        figures that were filed.
         """
-        from share_dinkum_app.reports import RealisedCapitalGainReport
+        from share_dinkum_app import cgt
         from share_dinkum_app import version as version_module
 
-        taken_at = taken_at or date.today()
+        taken_at = taken_at or reporting_date()
         if cls.objects.filter(account=account, fiscal_year=fiscal_year, taken_at=taken_at,
                               is_lodged=True).exists():
             raise LodgedSnapshotError(
@@ -2732,9 +2794,9 @@ class CGTReturnSnapshot(BaseModel):
                 f'it was kept rather than replaced. Untick "is lodged" on it first to replace '
                 f'it.')
 
-        df = RealisedCapitalGainReport(account=account).generate()
-        if not df.empty:
-            df = df[df['fiscal_year'] == fiscal_year.name]
+        every_year = cgt.all_events(account)
+        events = [event for event in every_year if event.fiscal_year == fiscal_year.name]
+        schedule = cgt.build_schedule(account, fiscal_year, every_year=every_year)
 
         with transaction.atomic():
             snapshot, _created = cls.objects.update_or_create(
@@ -2745,89 +2807,128 @@ class CGTReturnSnapshot(BaseModel):
                     'basis': basis,
                     'engine_version': getattr(version_module, '__version__', ''),
                     'is_lodged': is_lodged,
+                    **{name: getattr(schedule, attribute)
+                       for name, attribute in cls.SCHEDULE_FIELDS.items()},
                 },
             )
             snapshot.captured_rows.all().delete()
 
             CGTReturnSnapshotRow.objects.bulk_create([
                 CGTReturnSnapshotRow(
-                    account=account,
-                    snapshot=snapshot,
-                    sell_allocation_id=row['sell_allocation_id'],
-                    sell_date=row['sell_date'],
-                    instrument=row['instrument'],
-                    quantity_sold=row['quantity_sold'],
-                    days_held=row['days_held'],
-                    proceeds=row['proceeds'],
-                    cost_base=row['cost_base'],
-                    capital_gain=row['capital_gain'],
-                )
-                for _, row in df.iterrows()
+                    account=account, snapshot=snapshot, **CGTReturnSnapshotRow.figures_of(event))
+                for event in events
             ])
 
         return snapshot
-    
 
 
 class CGTReturnSnapshotRow(BaseModel):
-    """One sell allocation, as it stood when a snapshot was taken.
+    """One capital gains event, as it stood when a snapshot was taken.
 
     `sell_allocation_id` is a plain UUID, not a foreign key, so the row outlives the
-    allocation if a later sale replaces it.
+    allocation if a later sale replaces it. `cgt.event_key` matches a row to today's event.
     """
 
-    MODEL_DESCRIPTION = 'One disposal within a capital gains snapshot, as it stood when taken.'
+    MODEL_DESCRIPTION = 'One capital gains event within a snapshot, as it stood when taken.'
 
     class Meta:
         ordering = ['sell_date', 'id']
 
     snapshot = models.ForeignKey(
         CGTReturnSnapshot, on_delete=models.CASCADE, related_name='captured_rows',
-        help_text='The snapshot this disposal belongs to.')
+        help_text='The snapshot this event belongs to.')
 
     sell_allocation_id = models.UUIDField(
         null=True, blank=True,
-        help_text='The allocation these figures came from. Deliberately not a foreign key: '
-                  'the allocation may since have been replaced, which is exactly what a '
-                  'snapshot is for.')
+        help_text='The allocation these figures came from, for a disposal. Deliberately not a '
+                  'foreign key: the allocation may since have been replaced, which is exactly '
+                  "what a snapshot is for. Blank for a trust's gain.")
     sell_date = models.DateField(null=True, blank=True,
-        help_text='Date of the sale.')
+        help_text="Date of the sale, or the year end of a trust's annual statement.")
     instrument = models.CharField(max_length=255, blank=True,
-        help_text='Name of the instrument sold.')
+        help_text='Name of the instrument.')
     quantity_sold = models.DecimalField(
         max_digits=16, decimal_places=4, null=True, blank=True,
-        help_text='Units sold in this disposal.')
+        help_text="Units sold in this disposal. Blank for a trust's gain.")
     days_held = models.IntegerField(null=True, blank=True,
-        help_text='Days from the buy to the sale.')
+        help_text='Days from the buy to the sale; from 1 July 2027 for the part of a sale after '
+                  "it. Blank for a trust's gain.")
 
     proceeds = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
         null=True, blank=True,
-        help_text='Proceeds of this disposal, in the portfolio currency.')
+        help_text='Proceeds of this disposal, in the portfolio currency; the 30 June 2027 value '
+                  "for the part of a sale before it. Blank for a trust's gain.")
     cost_base = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
         null=True, blank=True,
-        help_text='Cost base of this disposal, in the portfolio currency.')
+        help_text='Cost base used for this disposal, in the portfolio currency, indexed where '
+                  "indexation applies. Blank for a trust's gain.")
     capital_gain = MoneyField(
         max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
         null=True, blank=True,
-        help_text='Gain or loss on this disposal, before any CGT discount.')
+        help_text='Gain or loss, before losses are applied and before any CGT discount.')
+
+    source = models.CharField(max_length=32, blank=True, default='',
+        help_text='"disposal" for a sale, "trust_attribution" for a gain a trust attributed. '
+                  'Blank on a row from an older snapshot, which was always a disposal.')
+    slice = models.CharField(max_length=16, blank=True, default='',
+        help_text='"whole", or for a sale split at 1 July 2027, "pre_cutover" or "post_cutover". '
+                  'Blank on a row from an older snapshot.')
+    method = models.CharField(max_length=16, blank=True, default='',
+        help_text='"discount" if the gain is eligible for the CGT discount, else "other". Blank on '
+                  'a row from an older snapshot.')
+    tap_status = models.CharField(max_length=16, blank=True, default='',
+        help_text='TAP or NTAP (taxable Australian property or not). Blank where residency is '
+                  'not declared, and on a row from an older snapshot.')
+    discount_percentage = models.DecimalField(
+        max_digits=12, decimal_places=10, null=True, blank=True,
+        help_text='The fraction of the gain the CGT discount removes, such as 0.5. Blank on a row '
+                  'from an older snapshot.')
+    indexation_factor = models.DecimalField(
+        max_digits=8, decimal_places=3, null=True, blank=True,
+        help_text='The indexation factor applied to the cost base from 1 July 2027. Blank if '
+                  'not indexed.')
+    is_disregarded = models.BooleanField(null=True, blank=True,
+        help_text="Whether the gain is left out of the return, such as a foreign resident's on "
+                  'non-taxable Australian property. Blank on a row from an older snapshot.')
 
     def __str__(self) -> str:
         return f'{self.instrument} | {self.sell_date} | {self.capital_gain}'
 
+    @property
+    def is_older_capture(self) -> bool:
+        """Whether this row was captured before snapshots recorded how each gain is taxed."""
+        return not self.source
+
     def as_dict(self) -> dict[str, Any]:
         """The captured fields as a dict of Decimal, Money and date values."""
+        return {name: getattr(self, name) for name in CGTReturnSnapshot.CAPTURED_FIELDS}
+
+    @staticmethod
+    def figures_of(event: 'CGTEvent') -> dict[str, Any]:
+        """A capital gains event's figures as a row captures them, keyed as CAPTURED_FIELDS.
+
+        What a capture stores and what a comparison reads today, so the two cannot differ.
+        """
         return {
-            'sell_allocation_id': self.sell_allocation_id,
-            'sell_date': self.sell_date,
-            'instrument': self.instrument,
-            'quantity_sold': self.quantity_sold,
-            'days_held': self.days_held,
-            'proceeds': self.proceeds,
-            'cost_base': self.cost_base,
-            'capital_gain': self.capital_gain,
+            'sell_allocation_id': event.sell_allocation_id,
+            'sell_date': event.event_date,
+            'instrument': event.instrument,
+            'quantity_sold': event.quantity,
+            'days_held': event.days_held,
+            'proceeds': event.net_proceeds,
+            'cost_base': event.cost_base,
+            'capital_gain': event.capital_gain,
+            'source': event.source,
+            'slice': event.slice,
+            'method': event.method,
+            'tap_status': event.tap_status or '',
+            'discount_percentage': event.discount_percentage,
+            'indexation_factor': event.indexation_factor,
+            'is_disregarded': event.is_disregarded,
         }
+
 
 class CPIIndex(models.Model):
     """The Consumer Price Index, one row per quarter. Shared, not per account.

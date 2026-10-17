@@ -40,11 +40,6 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
   - apportioning a statement for a mid-year residency change (it is flagged);
   - the LIC capital gain deduction (shown for reference, not computed);
   - layouts other than an individual's return.
-- The basis change report keys rows by sell allocation, and both halves of a disposal split at
-  the cutover share one, so the pre-cutover half drops out of the comparison
-  (`reports.py`, `CGTBasisChangeReport`).
-- Snapshot totals include disregarded gains, since the realised gains report has no
-  disregarded flag.
 - The all-years schedule (`build(account, None)`) counts a recorded carry-forward twice: as a
   prior-year loss, and again through its own year's events. Nothing calls it with `None` yet.
 

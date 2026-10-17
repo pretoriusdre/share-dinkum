@@ -34,6 +34,7 @@ from djmoney.money import Money
 
 from share_dinkum_app import cgt, data_checks, version
 from share_dinkum_app.choices import TaxpayerType
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.models import (
     Account,
     Buy,
@@ -346,7 +347,7 @@ def prepare_dashboard_context(request: HttpRequest, context: dict[str, Any]) -> 
                 if earliest_date > date.min:
                     baseline_date = earliest_date - timedelta(days=1)
                     available_dates.add(baseline_date)
-                available_dates.add(date.today())
+                available_dates.add(reporting_date())
 
                 start_date = min(available_dates)
                 end_date = max(available_dates)
@@ -658,7 +659,7 @@ def export_data_view(request: HttpRequest) -> HttpResponseBase:
 
 @require_POST
 def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
-    """Take a capital gains snapshot for every fiscal year with a sale.
+    """Take a capital gains snapshot for every fiscal year with a sale or a trust statement.
 
     Snapshots are not marked lodged; the user ticks that themselves.
     """
@@ -671,20 +672,13 @@ def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
             'No portfolio is associated with your user, so there is nothing to record.')
         return redirect(dashboard_url)
 
-    year_ids = (
-        Sell.objects.filter(account=account, is_active=True)
-        .values_list('calculated_fiscal_year', flat=True)
-        .distinct()
-    )
-    fiscal_years = list(
-        FiscalYear.objects.filter(id__in=[y for y in year_ids if y]).order_by('start_year')
-    )
+    fiscal_years = cgt.years_with_events(account)
 
     if not fiscal_years:
         messages.info(
             request,
-            f'{account.description} has no sales yet, so there are no capital gains figures '
-            f'to record.')
+            f'{account.description} has no sales or trust statements yet, so there are no '
+            f'capital gains figures to record.')
         return redirect(dashboard_url)
 
     basis = cgt.residency_basis(account)
@@ -929,7 +923,7 @@ def _backup_root() -> Path:
     """The backup root shared with `uv run update` and the notebook."""
     from share_dinkum_app import backup as backup_module
 
-    return backup_module.DEFAULT_BACKUP_ROOT
+    return backup_module.configured_backup_root(settings.BASE_DIR)
 
 
 def _backup_status(account: Account | None) -> str:
@@ -976,7 +970,8 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='export-cgt-schedule/',
         group='Tax',
         label='Export Australian CGT report',
-        description='Gains and losses laid out as the ATO capital gains schedule, one column per year.',
+        description=('Gains and losses laid out as the ATO capital gains schedule, one column per year, '
+                     'and unrealised gains on what you hold.'),
         view=export_cgt_schedule_view,
         # Deliberately no status. The useful one is whether any year is still a draft, and
         # answering that means building every schedule -- 7.5 seconds on this portfolio, on

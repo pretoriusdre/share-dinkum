@@ -2,15 +2,17 @@
 
 `dev` starts the Django development server. Any extra args are passed through to manage.py, so
 `uv run dev migrate` or `uv run dev test share_dinkum_app` also work. With no args it runs
-`runserver`.
+`runserver`. `--reporting-date 2026-06-30` makes reports as at that date instead of today, for
+that run only.
 
 `update` backs up your data, pulls the latest code, syncs dependencies and applies any migrations.
 """
 
 import io
+import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -18,22 +20,22 @@ ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / "share_dinkum_proj"
 MANAGE = PROJECT / "manage.py"
 
-MEDIA = PROJECT / "media"
-
 # The backup itself is shared with the application, so the update path and the dashboard
 # button cannot drift apart. It imports nothing from Django, but it lives inside the project
 # directory, which is not on the path when this script is run from the repository root.
 sys.path.insert(0, str(PROJECT))
 from share_dinkum_app import backup  # noqa: E402
 
+MEDIA = backup.configured_media_root(PROJECT)
 
-def _call(command: list[str], cwd: Path | None = None) -> int:
+
+def _call(command: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
     """Run a command and return its exit code, surviving Ctrl+C.
 
     The child also receives Ctrl+C, so the first one waits for it to exit cleanly. A second
     stops it.
     """
-    process = subprocess.Popen(command, cwd=cwd)
+    process = subprocess.Popen(command, cwd=cwd, env=env)
 
     interrupts = 0
     while True:
@@ -45,9 +47,40 @@ def _call(command: list[str], cwd: Path | None = None) -> int:
                 process.terminate()
 
 
+REPORTING_DATE_FLAG = "--reporting-date"
+
+
+def _take_reporting_date(argv: list[str]) -> tuple[list[str], str | None]:
+    """Remove `--reporting-date DATE` (or `--reporting-date=DATE`) from the args.
+
+    Django would not know the flag. The date is checked here, so a typo stops the start.
+    """
+    rest: list[str] = []
+    value: str | None = None
+    args = iter(argv)
+    for arg in args:
+        if arg == REPORTING_DATE_FLAG:
+            value = next(args, "")
+        elif arg.startswith(f"{REPORTING_DATE_FLAG}="):
+            value = arg.split("=", 1)[1]
+        else:
+            rest.append(arg)
+
+    if value is None:
+        return rest, None
+    try:
+        return rest, date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise SystemExit(f"{REPORTING_DATE_FLAG} needs a date such as 2026-06-30, not '{value}'.")
+
+
 def main() -> None:
-    argv = sys.argv[1:] or ["runserver"]
-    raise SystemExit(_call([sys.executable, str(MANAGE), *argv]))
+    argv, reporting_date = _take_reporting_date(sys.argv[1:])
+    env = None
+    if reporting_date:
+        env = {**os.environ, "REPORTING_DATE": reporting_date}
+        print(f"Reports are made as at {reporting_date}, not today. This lasts for this run only.")
+    raise SystemExit(_call([sys.executable, str(MANAGE), *(argv or ["runserver"])], env=env))
 
 
 def _run(description: str, command: list[str]) -> None:
@@ -113,7 +146,7 @@ def _backup() -> Path | None:
     database = backup.configured_database(PROJECT)
     if database is None:
         print("\n==> The database is not a SQLite file, so only media is backed up.")
-    result = backup.make_backup(database, MEDIA)
+    result = backup.make_backup(database, MEDIA, backup.configured_backup_root(PROJECT))
     if result is None:
         print("\n==> No data to back up yet, skipping.")
         return None
