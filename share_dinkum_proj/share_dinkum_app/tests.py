@@ -3291,7 +3291,10 @@ class AssignDefaultAccountSignalTests(TransactionTestCase):
 class ImportWorkbookMixin:
     """Builds import workbooks, so tests use the real loading path."""
 
-    def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None):
+    def build_workbook(self, path, markets=None, instruments=None, buys=None, market_ids=None,
+                       table_names=None, extra_tables=()):
+        """`table_names` renames tables (model name -> Excel name); `extra_tables` adds (name, frame) pairs."""
+        names = {'Market': 'Market', 'Instrument': 'Instrument', 'Buy': 'Buy', **(table_names or {})}
         if markets is None:
             markets = [{'code': 'ASX', 'description': 'Australian Securities Exchange', 'suffix': 'AX'}]
         if instruments is None:
@@ -3312,9 +3315,11 @@ class ImportWorkbookMixin:
             markets = [dict(market, id=market_id) for market, market_id in zip(markets, market_ids)]
 
         generator = excelinterface.ExcelGen(title='Test import')
-        generator.add_table(pd.DataFrame(markets), table_name='Market')
-        generator.add_table(pd.DataFrame(instruments), table_name='Instrument')
-        generator.add_table(pd.DataFrame(buys), table_name='Buy')
+        generator.add_table(pd.DataFrame(markets), table_name=names['Market'])
+        generator.add_table(pd.DataFrame(instruments), table_name=names['Instrument'])
+        generator.add_table(pd.DataFrame(buys), table_name=names['Buy'])
+        for table_name, frame in extra_tables:
+            generator.add_table(frame, table_name=table_name)
         generator.save(path)
         return path
 
@@ -3442,12 +3447,122 @@ class DataLoaderMultiPortfolioTests(ImportWorkbookMixin, TransactionTestCase):
             }],
         )
 
-        with self.assertRaises(Instrument.DoesNotExist):
+        with self.assertRaisesMessage(ValueError, "'NOT_LISTED' (row 1"):
             loading.DataLoader(account=self.account_a, input_file=self.workbook)
 
         self.assertEqual(Market.objects.filter(account=self.account_a).count(), 0)
         self.assertEqual(Instrument.objects.filter(account=self.account_a).count(), 0)
         self.assertEqual(Buy.objects.filter(account=self.account_a).count(), 0)
+
+
+class DataLoaderResilienceTests(ImportWorkbookMixin, TransactionTestCase):
+    """A workbook that Excel or a person has altered still loads, or is refused in plain words."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        self.account = Account.objects.create(
+            owner=create_user(username='owner'), description='Portfolio', currency='AUD',
+            fiscal_year_type=create_fiscal_year_type())
+
+    def load(self):
+        return loading.DataLoader(account=self.account, input_file=self.workbook)
+
+    def buy(self, instrument):
+        return {
+            'legacy_id': 'buy-1', 'instrument__name': instrument, 'date': date(2023, 7, 1),
+            'quantity': Decimal('100'), 'unit_price': Decimal('40'), 'unit_price_currency': 'AUD',
+            'total_brokerage': Decimal('10'), 'total_brokerage_currency': 'AUD'}
+
+    def test_tables_renamed_by_excel_load_with_a_warning(self):
+        # The shape of the file that prompted this: Market17 and Instrument18, copied in from another
+        # workbook that already had both.
+        self.build_workbook(self.workbook, table_names={
+            'Market': 'Market17', 'Instrument': 'Instrument18', 'Buy': 'buy_2'})
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.get(account=self.account).instrument.name, 'BHP')
+        self.assertTrue(any("'Instrument18'" in line and 'read as Instrument' in line for line in logs.output))
+
+    def test_a_table_name_with_spaces_and_case_loads(self):
+        self.build_workbook(self.workbook, table_names={'Instrument': 'INSTRUMENT'})
+        self.load()
+        self.assertEqual(Instrument.objects.filter(account=self.account).count(), 1)
+
+    def test_a_table_that_matches_no_model_is_refused_with_its_nearest_name(self):
+        self.build_workbook(self.workbook, table_names={'Instrument': 'Instrumnt'})
+
+        with self.assertRaisesMessage(ValueError, "'Instrumnt' on sheet"):
+            self.load()
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)
+
+    def test_an_unrelated_table_is_skipped_with_a_warning(self):
+        # An export carries report sheets, such as RealisedCapitalGains, that no model holds.
+        self.build_workbook(self.workbook, extra_tables=[
+            ('RealisedCapitalGains', pd.DataFrame({'a': [1]})), ('Scratch', pd.DataFrame({'a': []}))])
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 1)
+        self.assertTrue(any("'RealisedCapitalGains'" in line and 'not loaded' in line for line in logs.output))
+
+    def test_two_tables_for_one_model_are_refused(self):
+        self.build_workbook(self.workbook, extra_tables=[
+            ('Instrument2', pd.DataFrame([{'name': 'CBA', 'currency': 'AUD', 'market__code': 'ASX'}]))])
+
+        with self.assertRaisesMessage(ValueError, "'Instrument' and 'Instrument2' both load into Instrument"):
+            self.load()
+
+    def test_headers_with_stray_case_and_spaces_load(self):
+        self.build_workbook(self.workbook, instruments=[
+            {' Name ': 'BHP', 'Description': 'BHP Group', 'Currency': 'AUD', 'Market__Code': 'ASX'}])
+        self.load()
+        self.assertEqual(Instrument.objects.get(account=self.account).market.code, 'ASX')
+
+    def test_every_unknown_instrument_is_listed_with_its_rows_and_a_suggestion(self):
+        buys = [self.buy('BHPP'), self.buy('BHP'), self.buy('BHPP'), self.buy('XYZ')]
+        for number, buy in enumerate(buys):
+            buy['legacy_id'] = f'buy-{number}'
+        self.build_workbook(self.workbook, buys=buys)
+
+        with self.assertRaises(ValueError) as caught:
+            self.load()
+
+        message = str(caught.exception)
+        self.assertIn("'BHPP' (rows 1, 3; did you mean 'BHP'?)", message)
+        self.assertIn("'XYZ' (row 4)", message)
+        self.assertNotIn('The file has no Instrument table', message)  # it does
+        self.assertEqual(Buy.objects.filter(account=self.account).count(), 0)
+
+    def test_a_file_without_an_instrument_table_says_so(self):
+        # Only reachable with no Instrument table at all: one that holds rows but matches no model
+        # is refused first, by name.
+        loader = loading.DataLoader(account=self.account)
+        loader.mapping = {}
+
+        with self.assertRaisesMessage(ValueError, 'The file has no Instrument table'):
+            loader.prepare_table(Buy, pd.DataFrame([self.buy('BHP')]))
+
+    def test_a_name_typed_in_the_wrong_case_is_read_with_a_warning(self):
+        self.build_workbook(self.workbook, buys=[self.buy('bhp')])
+
+        with self.assertLogs('share_dinkum_app.loading', 'WARNING') as logs:
+            self.load()
+
+        self.assertEqual(Buy.objects.get(account=self.account).instrument.name, 'BHP')
+        self.assertTrue(any('ignoring case' in line for line in logs.output))
+
+    def test_a_misnamed_link_column_says_which_columns_are_links(self):
+        buy = self.buy('BHP')
+        buy['instrumnt__name'] = buy.pop('instrument__name')
+        self.build_workbook(self.workbook, buys=[buy])
+
+        with self.assertRaisesMessage(ValueError, 'Buy has no column instrumnt__name'):
+            self.load()
 
 
 class AccountUniquenessTests(TestCase):

@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
 import contextlib
+import difflib
+import re
 import shutil
 from typing import Any, cast
 from tqdm import tqdm
@@ -36,11 +38,83 @@ logger = logging.getLogger(__name__)
 PreparedTable = tuple[type[models.Model], pd.DataFrame, pd.DataFrame]
 
 
+#: Tables in a workbook that hold no data for a model. The index sheet's table.
+IGNORED_TABLES = frozenset({'table_info'})
+
+#: Text fields a lookup falls back to matching without regard to case: `tls` for `TLS`.
+CASE_INSENSITIVE_LOOKUPS = frozenset({'name', 'code', 'description'})
+
+#: How alike a table's name and a model's must be for the table to count as a mistyped model.
+TYPO_CUTOFF = 0.75
+
+#: Most rows named per value in a lookup error.
+MAX_ROWS_LISTED = 5
+
+
 def make_tz_naive(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             df[col] = df[col].dt.tz_localize(None)
     return df
+
+
+def table_key(name: str) -> str:
+    """A table name with case, spaces, underscores and a trailing number ignored.
+
+    Excel renames a table to `Instrument18` when a sheet is copied in from a workbook that already
+    has an `Instrument`, so `Instrument18`, `instrument_2` and `Cost Base Adjustment` all name a model.
+    """
+    return re.sub(r'[\s_]+', '', name.rstrip('0123456789 _')).casefold()
+
+
+def resolve_table_names(mapping: dict[str, pd.DataFrame], model_names: Iterable[str]) -> dict[str, pd.DataFrame]:
+    """The file's tables keyed by the model each one loads into.
+
+    A table whose name is a model's, apart from case, spacing or a trailing number, is read as that
+    model's, with a warning. A table with rows that is close to a model's name but not it (a typo, such
+    as `Instrumnt`) is refused: it used to be skipped without a word, and what depended on it then
+    failed with an unrelated error. Any other table only warns, since an export carries report sheets
+    and a workbook may carry notes, and every export ever taken must still load. Two tables for one
+    model are refused, as there is no telling which is meant.
+    """
+    names = list(model_names)
+    by_key = {table_key(name): name for name in names}
+    resolved: dict[str, pd.DataFrame] = {}
+    read_from: dict[str, str] = {}
+    unrecognised: list[str] = []
+
+    for table_name, df in mapping.items():
+        if table_name in IGNORED_TABLES:
+            continue
+        sheet = df.attrs.get('sheet')
+        where = f" on sheet '{sheet}'" if sheet else ''
+        model_name = table_name if table_name in names else by_key.get(table_key(table_name))
+
+        if model_name is None:
+            near = difflib.get_close_matches(table_name, names, n=1, cutoff=TYPO_CUTOFF)
+            if df.empty:
+                logger.debug("Table '%s'%s matches no model and is empty, so it was skipped.", table_name, where)
+            elif near and not df.attrs.get('from_sheet'):
+                unrecognised.append(f"'{table_name}'{where} (did you mean {near[0]}?)")
+            else:
+                logger.warning("'%s'%s matches no model, so it was not loaded.", table_name, where)
+            continue
+
+        if model_name in resolved:
+            raise ValueError(
+                f"Tables '{read_from[model_name]}' and '{table_name}' both load into {model_name}, so "
+                f"it is not clear which is meant. Delete one, or rename it, in Excel's Table Design tab.")
+        if model_name != table_name:
+            logger.warning("Table '%s'%s was read as %s.", table_name, where, model_name)
+        resolved[model_name] = excelinterface.clean_headers(df, f"Table '{table_name}'{where}")
+        read_from[model_name] = table_name
+
+    if unrecognised:
+        raise ValueError(
+            f'The file has {"a table" if len(unrecognised) == 1 else "tables"} with rows that '
+            f'match no model: {", ".join(unrecognised)}. They would be skipped, so nothing in them '
+            f'would load. Rename each to the model it holds (Table Design > Table Name).')
+    return resolved
 
 
 def restore_blank_text_defaults(df: pd.DataFrame, model: type[models.Model]) -> pd.DataFrame:
@@ -238,7 +312,9 @@ class DataLoader():
         self.account = account
 
         if self.input_file:
-            self.mapping = excelinterface.get_all_tables_in_excel(self.input_file)
+            self.mapping = resolve_table_names(
+                excelinterface.get_all_tables_in_excel(self.input_file),
+                [model.__name__ for model in self.get_model_load_order()])
             if self.account is None:
                 self.account = self.account_named_by_file()
             self.load_all_tables()
@@ -533,21 +609,8 @@ class DataLoader():
             
             # Foreign key lookup by name
             col_parts = col.split('__')   # eg 'instrument__name' > ['instrument', 'name']
-            if len(col_parts) == 2: 
-                base_field_name = col_parts[0]   # instrument
-                lookup_field = col_parts[1]  # i.e. name
-                field_instance = model._meta.get_field(base_field_name)
-                related_model = cast(type[models.Model], field_instance.related_model)
-
-
-                df[base_field_name] = df[col].apply(
-                    lambda field_val : self.get_related_obj_by_name(  # type: ignore[arg-type, return-value]
-                        related_model=related_model, 
-                        account=self.account,
-                        filters={lookup_field : field_val}
-                        ) if field_val else None
-                            )
-                df = df.drop(columns=[col])
+            if len(col_parts) == 2:
+                df = self.resolve_lookup_column(model, df, col)
                 continue
 
             # A column the model no longer has. Renaming or removing a field retires every
@@ -821,32 +884,125 @@ class DataLoader():
         )
 
 
+    def related_scope(self, related_model: type[models.Model], account: 'app_models.Account | None',
+                      filters: dict[str, Any]) -> dict[str, Any]:
+        """`filters` narrowed to the portfolio, for a lookup of `related_model`."""
+        scoped = dict(filters)
+
+        # Add 'account' to filters only if it exists on the related model
+        if 'account' in {f.name for f in related_model._meta.get_fields()}:
+            scoped['account'] = account
+
+        # A fiscal year's name is only unique within its type, and the types are shared, so another
+        # portfolio's calendar year would otherwise match an Australian one.
+        if related_model is app_models.FiscalYear and account is not None:
+            scoped.setdefault('fiscal_year_type', account.fiscal_year_type)
+        return scoped
+
+    def find_related(self, related_model: type[models.Model], account: 'app_models.Account | None',
+                     filters: dict[str, Any]) -> tuple[models.Model | None, str]:
+        """The record `filters` name, and why not if none: '' , 'missing' or 'ambiguous'.
+
+        A name or code that matches nothing exactly is tried again ignoring case, and used if that
+        finds exactly one, with a warning: `tls` was typed for `TLS`.
+        """
+        scoped = self.related_scope(related_model, account, filters)
+        manager = related_model._default_manager
+        try:
+            return manager.get(**scoped), ''
+        except MultipleObjectsReturned:
+            return None, 'ambiguous'
+        except ObjectDoesNotExist:
+            pass
+
+        folded = {f'{key}__iexact' if key in CASE_INSENSITIVE_LOOKUPS and isinstance(value, str) else key: value
+                  for key, value in scoped.items()}
+        if folded != scoped:
+            matches = list(manager.filter(**folded)[:2])
+            if len(matches) == 1:
+                logger.warning('%s %r was read as %r, ignoring case.', related_model.__name__,
+                               next(iter(filters.values())), str(matches[0]))
+                return matches[0], ''
+        return None, 'missing'
+
+    def closest_names(self, related_model: type[models.Model], lookup_field: str, value: Any) -> list[str]:
+        """Up to three stored values of `lookup_field` that nearly match `value`."""
+        scope = self.related_scope(related_model, self.account, {})
+        stored = related_model._default_manager.filter(**scope).values_list(lookup_field, flat=True)
+        return difflib.get_close_matches(str(value), [str(s) for s in stored[:5000] if s], n=3, cutoff=0.6)
+
     def get_related_obj_by_name(self, related_model: type[models.Model], account: 'app_models.Account | None',
                                 filters: dict[str, Any]) -> models.Model | None:
 
         if not filters:
             return None
 
-        # Get all field names of the related model
-        related_model_fields = {f.name for f in related_model._meta.get_fields()}
+        found, problem = self.find_related(related_model, account, filters)
+        if found is not None:
+            return found
+        described = ', '.join(f'{key} "{value}"' for key, value in filters.items())
+        raise ValueError(
+            f'"{account}" has {"more than one" if problem == "ambiguous" else "no"} '
+            f'{related_model.__name__} with {described}. Check the spelling, and that the '
+            f'{related_model.__name__} sheet is in the same file.')
 
-        # Add 'account' to filters only if it exists on the related model
-        if 'account' in related_model_fields:
-            filters['account'] = account
+    def resolve_lookup_column(self, model: type[models.Model], df: pd.DataFrame, column: str) -> pd.DataFrame:
+        """Replace a column such as `instrument__name` with the `instrument` records it names.
 
-        # A fiscal year's name is only unique within its type, and the types are shared, so another
-        # portfolio's calendar year would otherwise match an Australian one.
-        if related_model is app_models.FiscalYear and account is not None:
-            filters.setdefault('fiscal_year_type', account.fiscal_year_type)
-
+        Every value is looked up before any failure is raised, so a file with several wrong names
+        lists them all, each with the rows it is on and the nearest stored name.
+        """
+        base_field_name, lookup_field = column.split('__')
         try:
-            return related_model._default_manager.get(**filters)
-        except ObjectDoesNotExist:
-            logger.error(f"No match found for {related_model.__name__} with filters: {filters}")
-            raise
-        except MultipleObjectsReturned:
-            logger.error(f"Multiple matches found for {related_model.__name__} with filters: {filters}")
-            raise
+            field_instance: Any = model._meta.get_field(base_field_name)
+        except FieldDoesNotExist:
+            field_instance = None
+        if field_instance is None or not field_instance.is_relation or field_instance.related_model is None:
+            relations = ', '.join(sorted(f.name for f in model._meta.fields if f.is_relation))
+            raise ValueError(
+                f'{model.__name__} has no column {column}, because {base_field_name} is not one of its '
+                f'links to another table. Its links are: {relations}.')
+        related_model = cast(type[models.Model], field_instance.related_model)
+        related_name = related_model.__name__
+
+        found: dict[Any, models.Model] = {}
+        problems: dict[Any, str] = {}
+        for value in dict.fromkeys(v for v in df[column] if v):
+            record, problem = self.find_related(related_model, self.account, {lookup_field: value})
+            if record is not None:
+                found[value] = record
+            else:
+                problems[value] = problem
+
+        if problems:
+            rows: dict[Any, list[int]] = {value: [] for value in problems}
+            for index, value in df[column].items():
+                if value in rows:
+                    rows[value].append(cast(int, index) + 1)
+
+            def describe(value: Any) -> str:
+                listed = ', '.join(str(r) for r in rows[value][:MAX_ROWS_LISTED])
+                more = ', ...' if len(rows[value]) > MAX_ROWS_LISTED else ''
+                near = self.closest_names(related_model, lookup_field, value) if problems[value] == 'missing' else []
+                hint = f"; did you mean {' or '.join(repr(n) for n in near)}?" if near else ''
+                return f"'{value}' (row{'s' if len(rows[value]) > 1 else ''} {listed}{more}{hint})"
+
+            missing = [describe(v) for v, p in problems.items() if p == 'missing']
+            ambiguous = [describe(v) for v, p in problems.items() if p == 'ambiguous']
+            message = f'{model.__name__} {column} names {related_name} records that cannot be used.'
+            if missing:
+                message += f' No {related_name} in "{self.account}" matches: {", ".join(missing)}.'
+            if ambiguous:
+                message += f' More than one {related_name} matches: {", ".join(ambiguous)}.'
+            scope = self.related_scope(related_model, self.account, {})
+            if related_name not in self.mapping and not related_model._default_manager.filter(**scope).exists():
+                message += (f' The file has no {related_name} table and "{self.account}" has no '
+                            f'{related_name} records. Check that each sheet\'s table is named for its model.')
+            raise ValueError(message)
+
+        df[base_field_name] = pd.Series([found.get(v) if v else None for v in df[column]],
+                                        index=df.index, dtype=object)
+        return df.drop(columns=[column])
 
 
     @classmethod

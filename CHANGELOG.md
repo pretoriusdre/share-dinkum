@@ -8,6 +8,15 @@ To upgrade, stop the server and run `uv run update`.
 
 ### Fixed
 
+- **The importer handles irregular files.** Excel can rename a named table when you copy its
+  sheet in from another workbook (eg `Instrument` becomes `Instrument18`). The importer used to skip
+  such tables silently, which caused subsequent load errors. It now loads the table with a warning.
+  Table names and column headers that differ only in case or spaces are also accepted.
+
+- **Import errors are clearer.** If rows name an instrument (or other record) that isn't in the
+  portfolio, one message lists every missing name, with its rows and the closest stored name. Names
+  which differ only in case (eg bhp / BHP) are accepted with a warning.
+
 - **A parcel held under 12 months is no longer indexed from 1 July 2027.** Indexation applies only to
   an asset acquired at least 12 months before the sale (s114-10(1)), but the report indexed any
   parcel the holder had been resident for, so it understated the gain. A shorter hold now gets no

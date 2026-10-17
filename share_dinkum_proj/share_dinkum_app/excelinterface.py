@@ -81,6 +81,25 @@ def name_as_text(value: Any) -> Any:
     return str(value)
 
 
+def clean_headers(df: pd.DataFrame, description: str) -> pd.DataFrame:
+    """Column headers lower-cased, trimmed and with spaces as underscores.
+
+    ` Instrument__Name` is the column `instrument__name`; the loader finds columns by field name.
+    Two headers that become the same are refused, as one would silently replace the other. Only the
+    loader calls it, on tables that hold a model: a report's headers, such as `FY2024/25`, are names.
+    """
+    headers = [re.sub(r'\s+', '_', h.strip()).lower() if isinstance(h, str) else h for h in df.columns]
+    named = [h for h in headers if isinstance(h, str) and h]
+    repeated = sorted({h for h in named if named.count(h) > 1})
+    if repeated:
+        raise ValueError(
+            f'{description} has more than one column called {", ".join(repeated)} once case and '
+            f'spaces are ignored. Rename or remove the extra column.')
+    df = df.copy()
+    df.columns = pd.Index(headers, dtype=object)
+    return df
+
+
 def clean_frame(df: pd.DataFrame) -> pd.DataFrame:
     """Text cells stripped of surrounding spaces, and a cell of only spaces made blank.
 
@@ -118,6 +137,8 @@ def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.Da
         df = clean_frame(make_tz_naive(df))
         df = df.astype(object).where(pd.notna(df), None) # Cast NaN to Nones as NaN is truthy
         df = df.dropna(how='all')
+        # Not a named table, so the loader only warns if it matches no model.
+        df.attrs.update(sheet=ws.title, from_sheet=True)
         return df
 
     wb = load_workbook(filename, data_only=True)
@@ -174,6 +195,7 @@ def get_all_tables_in_excel(filename: str | Path | IO[bytes]) -> dict[str, pd.Da
                 df = make_tz_naive(df)
                 df = df.astype(object).where(pd.notna(df), None)
                 df = clean_frame(df).dropna(how='all')
+                df.attrs.update(sheet=ws.title, from_sheet=False)
 
                 mapping[table.name] = df
         else:
