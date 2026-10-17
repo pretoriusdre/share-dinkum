@@ -12,7 +12,7 @@ CGT_CUTOVER_DATE = date(2027, 7, 1)
 # --- The 2027 regime -------------------------------------------------------------------
 
 # The rollout gate is `Account.model_2027_regime`, not a constant here. It was one, and
-# that meant editing tracked source to change a setting -- which `uv run update` then
+# that meant editing tracked source to change a setting -- which `uv run update.py` then
 # refuses to pull over, so turning modelling on quietly broke updates. The legal gate,
 # CGT_CUTOVER_DATE above, stays a constant: that date is the law and is not a setting.
 

@@ -3594,6 +3594,31 @@ class AccountUniquenessTests(TestCase):
 
 class VersionTests(TestCase):
 
+    def _pyproject(self, text):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = folder / 'pyproject.toml'
+        if text is not None:
+            path.write_text(text, encoding='utf-8')
+        return patch.object(version, 'PYPROJECT_PATH', path)
+
+    def test_the_version_is_read_from_pyproject(self):
+        """The metadata keeps the old version until uv reinstalls the project."""
+        with self._pyproject('[project]\nname = "share-dinkum"\nversion = "9.8.7"\n'):
+            with patch.object(version, 'installed_version', return_value='0.1.0'):
+                self.assertEqual(version.get_version(), '9.8.7')
+
+    def test_the_version_falls_back_to_the_metadata(self):
+        with self._pyproject(None):
+            with patch.object(version, 'installed_version', return_value='0.1.0'):
+                self.assertEqual(version.get_version(), '0.1.0')
+
+    def test_an_unreadable_version_offers_no_update(self):
+        with self._pyproject('[project]\nname = "share-dinkum"\n'):
+            with patch.object(version, 'installed_version', side_effect=version.PackageNotFoundError):
+                self.assertEqual(version.get_version(), version.UNKNOWN_VERSION)
+        self.assertIsNone(version.parse_version(version.UNKNOWN_VERSION))
+
     def test_parse_version_accepts_a_tag(self):
         self.assertEqual(version.parse_version('v1.2.3'), (1, 2, 3))
         self.assertEqual(version.parse_version('1.2.3'), (1, 2, 3))
@@ -8395,7 +8420,7 @@ class FullBackupTests(TransactionTestCase):
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 1)
 
     def test_the_database_is_the_one_env_names(self):
-        """`uv run update` backs up the database `.env` names, not a hard-coded one."""
+        """`uv run update.py` backs up the database `.env` names, not a hard-coded one."""
         project = Path(tempfile.mkdtemp())
         (project / '.env').write_text('DB_ENGINE=django.db.backends.sqlite3\nDB_NAME=portfolio.sqlite3\n')
         with patch.dict(os.environ):
