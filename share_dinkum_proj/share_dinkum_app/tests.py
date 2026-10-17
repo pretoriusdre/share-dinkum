@@ -7978,6 +7978,33 @@ class ReportingDateTests(SimpleTestCase):
             self.assertEqual(reporting_date(), date(2024, 6, 30))
 
 
+class EnsureEnvTests(SimpleTestCase):
+    def setUp(self):
+        from share_dinkum_proj.ensure_env import ensure_env
+        self.ensure_env = ensure_env
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.env = self.folder / '.env'
+
+    def test_a_missing_env_is_copied_from_the_sample_with_a_new_key(self):
+        (self.folder / '.env.sample').write_text('SECRET_KEY=__REPLACE_ME__\nDEBUG=True\n')
+        key = self.ensure_env(self.env)
+        text = self.env.read_text()
+        self.assertIn('DEBUG=True', text)
+        self.assertIn(f'SECRET_KEY={key}', text)
+        self.assertNotIn('__REPLACE_ME__', text)
+        self.assertIn('__REPLACE_ME__', (self.folder / '.env.sample').read_text())
+
+    def test_a_missing_env_and_sample_gets_only_a_key(self):
+        key = self.ensure_env(self.env)
+        self.assertEqual(self.env.read_text(), f'SECRET_KEY={key}\n')
+
+    def test_an_existing_key_and_other_lines_are_left_alone(self):
+        self.env.write_text('SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
+        self.assertEqual(self.ensure_env(self.env), 'mine')
+        self.assertEqual(self.env.read_text(), 'SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
+
+
 class FullBackupButtonTests(TransactionTestCase):
     """The dashboard's Full backup button."""
 

@@ -227,17 +227,11 @@ This creates a `.venv` folder, downloads Python 3.13 if needed, and installs the
 pinned in `uv.lock`. You never need to activate the virtual environment: every command below uses
 `uv run`, which does it for you.
 
-### 3. Create your settings file
+### 3. Your settings file
 
-```powershell
-cd share_dinkum_proj
-copy .env.sample .env
-```
-
-On macOS/Linux use `cp .env.sample .env` instead.
-
-The defaults work as-is, using a local SQLite database. Optionally, open `.env` and replace
-`SECRET_KEY=__REPLACE_ME__` with any long random string.
+Nothing to do: the first time the app starts it copies `share_dinkum_proj/.env.sample` to
+`share_dinkum_proj/.env` and fills in a random `SECRET_KEY`. The defaults use a local SQLite
+database. Open `.env` afterwards to move the backup or media folders (see Updating, below).
 
 ### 4. Create the database
 

@@ -6,7 +6,7 @@ import os
 from decouple import config
 import whitenoise
 # Ensure the SECRET_KEY is set in the .env file
-from share_dinkum_proj.ensure_secret_key import ensure_secret_key
+from share_dinkum_proj.ensure_env import ensure_env
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -22,7 +22,7 @@ logger = setup_logging(level=logging.INFO)
 
 
 ENV_PATH = BASE_DIR / '.env'
-SECRET_KEY = ensure_secret_key(ENV_PATH)
+SECRET_KEY = ensure_env(ENV_PATH)
 
 
 # Quick-start development settings - unsuitable for production
