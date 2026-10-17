@@ -194,7 +194,9 @@ def update() -> None:
     backup_path = _backup()
 
     _run("Getting the latest code", ["git", "pull"])
-    _run("Installing any new dependencies", ["uv", "sync"])
+    # Skip the project itself: on Windows, reinstalling it replaces Scripts/update.exe, which is
+    # the process running this update, and fails with "Access is denied".
+    _run("Installing any new dependencies", ["uv", "sync", "--no-install-project"])
     _run("Updating the database structure", [sys.executable, str(MANAGE), "migrate"])
 
     print("\nUpdate complete. Start the app with:  uv run dev")
