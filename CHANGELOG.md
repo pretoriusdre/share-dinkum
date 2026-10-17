@@ -4,7 +4,7 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
-## Unreleased
+## 0.6.1 - 2026-10-18
 
 ### Fixed
 
