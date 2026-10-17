@@ -19,7 +19,7 @@ import pandas as pd
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
@@ -3670,17 +3670,9 @@ TEST_FIXTURES = Path(__file__).resolve().parent / 'test_fixtures'
 GOLDEN_FIGURES = TEST_FIXTURES / 'golden_figures'
 
 
-class PinnedToday(date):
-    """`date` with `today()` fixed at the fake portfolio's as-of date, so the golden figures
-    do not change as the current year ends."""
-
-    @classmethod
-    def today(cls):
-        return date.fromisoformat(FakeMarketMixin.AS_OF)
-
-
-@patch('share_dinkum_app.cgt.schedule.date', PinnedToday)
-@patch('share_dinkum_app.cgt.residency.date', PinnedToday)
+# The reporting date is pinned at the fake portfolio's as-of date, so the golden figures do not
+# change as the current year ends.
+@override_settings(REPORTING_DATE=FakeMarketMixin.AS_OF)
 class FiguresDumpTests(FakeMarketMixin, TransactionTestCase):
     """The figures dump, which shows whether a change moved any figure.
 
@@ -7848,16 +7840,14 @@ class YearInProgressIsADraftTests(TransactionTestCase):
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         current = self._year_covering(date.today())
-        with patch('share_dinkum_app.cgt.schedule.date') as fake:
-            fake.today.return_value = current.end_date
+        with override_settings(REPORTING_DATE=current.end_date):
             self.assertEqual(_year_still_running(self.account, current.name), current.end_date)
 
     def test_the_day_after_a_year_ends_it_is_closed(self):
         from share_dinkum_app.cgt.schedule import _year_still_running
 
         current = self._year_covering(date.today())
-        with patch('share_dinkum_app.cgt.schedule.date') as fake:
-            fake.today.return_value = current.end_date + timedelta(days=1)
+        with override_settings(REPORTING_DATE=current.end_date + timedelta(days=1)):
             self.assertIsNone(_year_still_running(self.account, current.name))
 
     def test_the_all_years_view_says_nothing_about_time(self):
@@ -7971,6 +7961,21 @@ class FullBackupTests(TransactionTestCase):
         self.backup.make_backup(self.database, self.media, self.destination, keep=1)
 
         self.assertEqual(len(self.backup.legacy_backups(self.destination)), 7)
+
+
+class ReportingDateTests(SimpleTestCase):
+    def test_it_is_today_unless_pinned(self):
+        from share_dinkum_app.clock import reporting_date
+
+        self.assertEqual(reporting_date(), date.today())
+
+    def test_it_takes_a_date_or_an_iso_string(self):
+        from share_dinkum_app.clock import reporting_date
+
+        with override_settings(REPORTING_DATE=date(2024, 6, 30)):
+            self.assertEqual(reporting_date(), date(2024, 6, 30))
+        with override_settings(REPORTING_DATE='2024-06-30'):
+            self.assertEqual(reporting_date(), date(2024, 6, 30))
 
 
 class FullBackupButtonTests(TransactionTestCase):

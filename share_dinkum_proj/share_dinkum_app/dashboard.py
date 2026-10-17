@@ -34,6 +34,7 @@ from djmoney.money import Money
 
 from share_dinkum_app import cgt, data_checks, version
 from share_dinkum_app.choices import TaxpayerType
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.models import (
     Account,
     Buy,
@@ -346,7 +347,7 @@ def prepare_dashboard_context(request: HttpRequest, context: dict[str, Any]) -> 
                 if earliest_date > date.min:
                     baseline_date = earliest_date - timedelta(days=1)
                     available_dates.add(baseline_date)
-                available_dates.add(date.today())
+                available_dates.add(reporting_date())
 
                 start_date = min(available_dates)
                 end_date = max(available_dates)

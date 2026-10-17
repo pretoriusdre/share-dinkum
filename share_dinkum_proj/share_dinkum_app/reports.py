@@ -1,5 +1,4 @@
 import dataclasses
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface, income
 from share_dinkum_app.choices import CGTAssetCategory
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.cgt.schedule import Schedule
 
 def _key(value: Any) -> str | None:
@@ -93,7 +93,7 @@ class OpenParcelReport(BaseReport):
             "unrealised_gain", "unrealised_gain_pct",
         ]
 
-        today = date.today()
+        today = reporting_date()
         report_rows: list[dict[str, Any]] = []
 
         parcels = (

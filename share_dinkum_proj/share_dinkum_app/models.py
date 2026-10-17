@@ -23,6 +23,7 @@ from djmoney.money import Money
 
 # Local app imports
 from share_dinkum_app import yfinanceinterface
+from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
@@ -2674,7 +2675,7 @@ class CGTReturnSnapshot(BaseModel):
 
     fiscal_year = models.ForeignKey(FiscalYear, on_delete=models.PROTECT, related_name='cgt_return_snapshot',
         help_text='The fiscal year whose figures were captured.')
-    taken_at = models.DateField(default=date.today, help_text='The day these figures were captured.')
+    taken_at = models.DateField(default=reporting_date, help_text='The day these figures were captured.')
     basis = models.CharField(
         max_length=16, choices=CGTBasis.choices, default=CGTBasis.LEGACY,
         help_text='Whether the figures used declared residency or an assumption.')
@@ -2724,7 +2725,7 @@ class CGTReturnSnapshot(BaseModel):
         from share_dinkum_app.reports import RealisedCapitalGainReport
         from share_dinkum_app import version as version_module
 
-        taken_at = taken_at or date.today()
+        taken_at = taken_at or reporting_date()
         if cls.objects.filter(account=account, fiscal_year=fiscal_year, taken_at=taken_at,
                               is_lodged=True).exists():
             raise LodgedSnapshotError(

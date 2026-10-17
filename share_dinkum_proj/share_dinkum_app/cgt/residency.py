@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 from share_dinkum_app.choices import CGTBasis, ResidencyStatus
+from share_dinkum_app.clock import reporting_date
 
 #: Re-exported from ResidencyStatus.
 if TYPE_CHECKING:
@@ -183,7 +184,7 @@ def coverage_problems(account: 'Account | None', declared: Periods | None = None
             f'earliest purchase was on {earliest_buy.date.isoformat()}.')
 
     last = declared[-1]
-    if last.end_date is not None and last.end_date < date.today():
+    if last.end_date is not None and last.end_date < reporting_date():
         problems.append(
             f'Residency is declared only up to {last.end_date.isoformat()}. The days since '
             f'count as not resident: they deny indexation and reduce the discount. Add a '

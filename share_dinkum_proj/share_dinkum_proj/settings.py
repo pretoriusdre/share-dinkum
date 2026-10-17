@@ -192,6 +192,12 @@ HOLDINGS_SHADOW = config('HOLDINGS_SHADOW', default='off')
 # the creation signals as before 0.5.0. See share_dinkum_app/holdings/live.py.
 HOLDINGS_WRITER = config('HOLDINGS_WRITER', default='replay')
 
+# The date reports are made as at (a date or an ISO string), or None for today. `uv run dev
+# --reporting-date DATE` sets it for that run through the process environment. It is deliberately
+# not read from `.env`, where a pinned date would be forgotten. Tests override it.
+# See share_dinkum_app/clock.py.
+REPORTING_DATE = os.environ.get('REPORTING_DATE') or None
+
 
 # Django's default is 1000, which a change page here passes without trying. The admin
 # builds an inline for every related model, so an instrument held for a decade arrives with
