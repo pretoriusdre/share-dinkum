@@ -7,87 +7,26 @@ from typing import Any
 from djmoney.money import Money
 
 from share_dinkum_app.models import (
-    AttributionStatement, Sell, Account, FiscalYear, CurrentExchangeRate, CGTReturnSnapshot)
+    Account, FiscalYear, CGTReturnSnapshot, CGTReturnSnapshotRow)
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface, income
 from share_dinkum_app.choices import CGTAssetCategory
-from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.cgt.schedule import Schedule
-
-def _key(value: Any) -> str | None:
-    """A sell allocation id as text, or None, so snapshot and current keys compare equal."""
-    return None if value is None else str(value)
 
 
 class BaseReport:
-    """Base for reports, with cached conversion of Money to the account currency."""
-
-    def __init__(self, account: Account) -> None:
-        self.account = account
-        self._rate_cache: dict[str, CurrentExchangeRate] = {}
-
-    def _to_account_currency(self, money: Money) -> Money:
-        if money is None:
-            return money
-        if str(money.currency) == str(self.account.currency):
-            return money
-
-        rate = self._rate_cache.get(str(money.currency))
-        if rate is None:
-            rate = CurrentExchangeRate.get_or_create(
-                account=self.account,
-                convert_from=str(money.currency),
-                convert_to=self.account.currency,
-            )
-            if not rate:
-                raise ValueError(f'No exchange rate available for {money.currency} to {self.account.currency}')
-            self._rate_cache[str(money.currency)] = rate
-
-        return rate.apply(money)
-
-
-class RealisedCapitalGainReport:
-    """One row per disposal event (normally one per sell allocation), from `cgt.disposal_events`.
-
-    The columns are fixed for existing users; new fields go on CGTEventReport.
-    """
+    """Base for reports on one portfolio."""
 
     def __init__(self, account: Account) -> None:
         self.account = account
 
-    def generate(self) -> pd.DataFrame:
-        report_columns = [
-            "sell_date", "instrument", "quantity_sold", "buy_id", "parcel_id", "sell_id", "sell_allocation_id",
-            "buy_date", "days_held", "proceeds", "cost_base", "capital_gain", "fiscal_year"
-        ]
-
-        report_rows = [
-            {
-                "sell_date": event.event_date,
-                "instrument": event.instrument,
-                "quantity_sold": event.quantity,
-                "buy_id": event.buy_id,
-                "parcel_id": event.parcel_id,
-                "sell_id": event.sell_id,
-                "sell_allocation_id": event.sell_allocation_id,
-                "buy_date": event.purchase_date,
-                "days_held": event.days_held,
-                "proceeds": event.net_proceeds,
-                "cost_base": event.cost_base,
-                "capital_gain": event.capital_gain,
-                "fiscal_year": event.fiscal_year,
-            }
-            for event in cgt.disposal_events(self.account)
-        ]
-
-        return pd.DataFrame(report_rows, columns=report_columns)
 
 class UnrealisedGainReport(BaseReport):
-    """Every parcel still held, as if sold on the reporting date, from `cgt.unrealised_events`.
+    """Every parcel still held, as if sold today, from `cgt.unrealised_events`.
 
-    A guide to what a sale would bring, characterised as a disposal would be. Not a schedule:
-    no losses are netted, and nothing here goes on a return.
+    A guide to what a sale would bring, characterised as a disposal would be, 2027 split and
+    indexation included. Not a schedule: no losses are netted, and nothing here goes on a return.
     """
 
     #: The summary's columns after `asset_category`, in order.
@@ -97,7 +36,8 @@ class UnrealisedGainReport(BaseReport):
     def __init__(self, account: Account, as_at: date | None = None,
                  events: list[cgt.CGTEvent] | None = None) -> None:
         super().__init__(account)
-        self.as_at = as_at or reporting_date()
+        # Today, not the reporting date: see `cgt.unrealised_events`.
+        self.as_at = as_at or date.today()
         self._events = events
 
     @property
@@ -107,13 +47,14 @@ class UnrealisedGainReport(BaseReport):
         return self._events
 
     def generate(self) -> pd.DataFrame:
-        """A row per open parcel: every CGTEvent field, the discount date and the gain as a fraction."""
+        """A row per open parcel, or per part of one split at 1 July 2027: every CGTEvent field,
+        the date the discount becomes available, and the gain as a fraction of the cost base."""
         columns = [*cgt.event_fields(), 'discount_eligible_from', 'unrealised_gain_pct']
         rows: list[dict[str, Any]] = []
         for event in self.events:
             row = {name: getattr(event, name) for name in cgt.event_fields()}
             row['asset_category'] = CGTAssetCategory.label_for(row['asset_category'])
-            row['discount_eligible_from'] = cgt.discount_eligible_from(event.purchase_date)
+            row['discount_eligible_from'] = cgt.discount_eligible_from(event)
             cost = getattr(event.cost_base, 'amount', None)
             gain = getattr(event.capital_gain, 'amount', None)
             row['unrealised_gain_pct'] = float(gain / cost) if gain is not None and cost else None
@@ -121,14 +62,25 @@ class UnrealisedGainReport(BaseReport):
         return pd.DataFrame(rows, columns=columns)
 
     def summary(self) -> pd.DataFrame:
-        """Totals per asset category and overall, as floats. Rows with no price count only at cost."""
+        """Totals per asset category and overall, as floats.
+
+        The cost base is before indexation, and with the market value is counted once per parcel
+        though a split parcel has two rows: the purchase on the part before 1 July 2027, the value
+        on the part after it. A parcel with no value (no price or rate) is left out, so cost and
+        value cover the same parcels; it is on Warnings instead.
+        """
         totals: dict[str, dict[str, Decimal]] = {}
         for event in self.events:
+            if event.net_proceeds is None:
+                continue
             label = CGTAssetCategory.label_for(event.asset_category)
             line = totals.setdefault(label, {name: Decimal('0') for name in self.SUMMARY_FIGURES})
+            if event.slice != cgt.events.SLICE_POST_CUTOVER:
+                line['cost_base'] += _amount(event.buy_consideration) + _amount(event.buy_brokerage)
+            line['cost_base'] += _amount(event.cost_base_adjustments)
+            if event.slice != cgt.events.SLICE_PRE_CUTOVER:
+                line['market_value'] += _amount(event.net_proceeds)
             gain = _amount(event.gross_gain)
-            line['cost_base'] += _amount(event.cost_base)
-            line['market_value'] += _amount(event.net_proceeds)
             line['gross_gain'] += gain
             line['gross_loss'] += _amount(event.gross_loss)
             if event.is_disregarded:
@@ -158,26 +110,58 @@ def _amount(money: Any) -> Decimal:
 
 
 class CGTBasisChangeReport:
-    """Compare each snapshot with a fresh calculation of its year.
+    """Compare snapshots with a fresh calculation of their year.
 
-    Reports every sell allocation that changed, was added or was removed.
+    Per event, matched by `cgt.event_key`: each captured field that moved, and events added or
+    removed. Both parts of a sale split at 1 July 2027 are compared, and trust gains too. Per
+    year: each schedule total that moved, net capital gain included.
+
+    An older snapshot recorded only its disposals' figures, so it is compared on those alone:
+    not on how each gain was taxed, not on year totals, and its lack of trust gains is not
+    reported.
     """
 
-    #: Fields compared. Rows are matched on sell allocation id.
-    COMPARED_FIELDS: list[str] = ['quantity_sold', 'days_held', 'proceeds', 'cost_base', 'capital_gain']
+    #: Compared on every row.
+    FIGURE_FIELDS: list[str] = ['quantity_sold', 'days_held', 'proceeds', 'cost_base', 'capital_gain']
 
-    def __init__(self, account: Account, fiscal_year: FiscalYear | None = None,
-                 lodged_only: bool = False) -> None:
-        self.account = account
-        self.fiscal_year = fiscal_year
-        self.lodged_only = lodged_only
+    #: Compared only on a row that captured them.
+    CHARACTERISATION_FIELDS: list[str] = [
+        'method', 'tap_status', 'discount_percentage', 'indexation_factor', 'is_disregarded']
+
+    #: Kept for callers that name the compared fields; every one, in report order.
+    COMPARED_FIELDS: list[str] = FIGURE_FIELDS + CHARACTERISATION_FIELDS
 
     #: Compare at stored money precision, so division residue in older snapshots is not
     #: reported as a change.
     COMPARISON_PLACES = Decimal('0.0001')
 
+    #: Fields stored at another precision, compared at it.
+    FIELD_PLACES: dict[str, Decimal] = {
+        'discount_percentage': Decimal('0.0000000001'),
+        'indexation_factor': Decimal('0.001'),
+    }
+
+    #: The `event` of a row about a year total.
+    YEAR_TOTAL = 'Year total'
+
+    COLUMNS: list[str] = [
+        'fiscal_year', 'taken_at', 'snapshot_basis', 'current_basis', 'snapshot_engine_version',
+        'event', 'sell_allocation_id', 'slice', 'status', 'field', 'snapshot_value',
+        'current_value', 'difference',
+    ]
+
+    def __init__(self, account: Account, fiscal_year: FiscalYear | None = None,
+                 lodged_only: bool = False, latest_per_year: bool = False,
+                 every_year: list[cgt.CGTEvent] | None = None) -> None:
+        self.account = account
+        self.fiscal_year = fiscal_year
+        self.lodged_only = lodged_only
+        #: Compare only one snapshot a year: the latest lodged one, or else the latest.
+        self.latest_per_year = latest_per_year
+        self._every_year = every_year
+
     @classmethod
-    def _as_decimal(cls, value: Any) -> Decimal | None:
+    def _as_decimal(cls, value: Any, places: Decimal | None = None) -> Decimal | None:
         if value is None or value == '':
             return None
         if isinstance(value, Money):
@@ -187,43 +171,69 @@ class CGTBasisChangeReport:
                 value = Decimal(str(value))
             except (ArithmeticError, ValueError):
                 return None
-        return value.quantize(cls.COMPARISON_PLACES, rounding=ROUND_HALF_UP)
+        return value.quantize(places or cls.COMPARISON_PLACES, rounding=ROUND_HALF_UP)
 
-    def _current_rows_by_key(self, fiscal_year_name: str | None) -> dict[str | None, Any]:
-        """Current figures for one fiscal year, keyed by sell allocation."""
-        df = RealisedCapitalGainReport(account=self.account).generate()
-        if df.empty:
-            return {}
-        df = df[df['fiscal_year'] == fiscal_year_name]
-        return {_key(row['sell_allocation_id']): row for _, row in df.iterrows()}
+    @classmethod
+    def _comparable(cls, field: str, value: Any) -> Any:
+        """`value` as it is compared: a number at its field's precision, else as it is."""
+        if value is None or value == '':
+            return None
+        if isinstance(value, (bool, str)):
+            return value
+        return cls._as_decimal(value, cls.FIELD_PLACES.get(field))
 
-    def generate(self) -> pd.DataFrame:
-        report_columns = [
-            'fiscal_year', 'taken_at', 'snapshot_basis', 'current_basis',
-            'snapshot_engine_version', 'sell_allocation_id', 'status', 'field',
-            'snapshot_value', 'current_value', 'difference',
-        ]
-        report_rows: list[dict[str, Any]] = []
+    @staticmethod
+    def _key(row: dict[str, Any]) -> str:
+        return cgt.event_key(row['source'], row['sell_allocation_id'], row['slice'], row['instrument'],
+                             row['sell_date'], row['method'], row['tap_status'])
 
-        # The basis is a property of the account today, not of the snapshot.
-        current_basis = cgt.residency_basis(self.account)
+    @staticmethod
+    def _describe(row: dict[str, Any]) -> str:
+        """What a row is about, for a person reading the report."""
+        if row['source'] == cgt.events.SOURCE_ATTRIBUTION:
+            return (f"{row['instrument']} trust gain, year to {row['sell_date']} "
+                    f"({row['method']}, {row['tap_status'] or 'TAP unknown'})")
+        part = {cgt.events.SLICE_PRE_CUTOVER: ', part before 1 July 2027',
+                cgt.events.SLICE_POST_CUTOVER: ', part after 30 June 2027'}.get(row['slice'], '')
+        return f"{row['instrument']} sold {row['sell_date']}{part}"
 
+    def _snapshots(self) -> list[CGTReturnSnapshot]:
         snapshots = CGTReturnSnapshot.objects.filter(account=self.account, is_active=True)
         if self.fiscal_year is not None:
             snapshots = snapshots.filter(fiscal_year=self.fiscal_year)
         if self.lodged_only:
             snapshots = snapshots.filter(is_lodged=True)
+        chosen = list(snapshots.select_related('fiscal_year').order_by('fiscal_year__start_year', 'taken_at'))
+        if not self.latest_per_year:
+            return chosen
+        by_year: dict[Any, CGTReturnSnapshot] = {}
+        for snapshot in chosen:
+            kept = by_year.get(snapshot.fiscal_year_id)
+            # Ordered by date, so a later one replaces an earlier, unless only the earlier was lodged.
+            if kept is None or snapshot.is_lodged or not kept.is_lodged:
+                by_year[snapshot.fiscal_year_id] = snapshot
+        return list(by_year.values())
 
-        for snapshot in snapshots.select_related('fiscal_year'):
+    def generate(self) -> pd.DataFrame:
+        report_rows: list[dict[str, Any]] = []
+
+        # The basis is a property of the account today, not of the snapshot.
+        current_basis = cgt.residency_basis(self.account)
+        every_year = self._every_year if self._every_year is not None else cgt.all_events(self.account)
+        schedules: dict[str | None, Schedule] = {}
+
+        for snapshot in self._snapshots():
             fiscal_year_name = snapshot.fiscal_year.name
-            current_rows = self._current_rows_by_key(fiscal_year_name)
-            # Keyed as text on both sides. The snapshot holds a real UUID and the report
-            # a UUID too, but they arrive through pandas, and matching on the string form
-            # is the one thing that cannot be quietly wrong about a type.
-            snapshot_rows = {
-                _key(row.get('sell_allocation_id')): row for row in snapshot.rows}
+            older = snapshot.is_draft is None
+            current_rows = {
+                self._key(row): row
+                for row in (CGTReturnSnapshotRow.figures_of(event) for event in every_year
+                            if event.fiscal_year == fiscal_year_name)
+                if not (older and row['source'] != cgt.events.SOURCE_DISPOSAL)
+            }
+            snapshot_rows = {self._key(row): row for row in snapshot.rows}
 
-            def base_row(allocation_id: str | None, status: str, field: str, was: Any, now: Any,
+            def base_row(row: dict[str, Any] | None, status: str, field: str, was: Any, now: Any,
                          diff: Any) -> dict[str, Any]:
                 return {
                     'fiscal_year': fiscal_year_name,
@@ -231,7 +241,9 @@ class CGTBasisChangeReport:
                     'snapshot_basis': snapshot.basis,
                     'current_basis': current_basis,
                     'snapshot_engine_version': snapshot.engine_version,
-                    'sell_allocation_id': allocation_id,
+                    'event': self.YEAR_TOTAL if row is None else self._describe(row),
+                    'sell_allocation_id': None if row is None else row['sell_allocation_id'],
+                    'slice': None if row is None else (row['slice'] or None),
                     'status': status,
                     'field': field,
                     'snapshot_value': was,
@@ -239,37 +251,46 @@ class CGTBasisChangeReport:
                     'difference': diff,
                 }
 
-            for allocation_id, snapshot_row in snapshot_rows.items():
-                current_row = current_rows.get(allocation_id)
+            def compare(row: dict[str, Any] | None, fields: list[str], before: dict[str, Any],
+                        after: dict[str, Any]) -> None:
+                for field in fields:
+                    was = self._comparable(field, before.get(field))
+                    now = self._comparable(field, after.get(field))
+                    if was == now:
+                        continue
+                    numbers = isinstance(was, Decimal) and isinstance(now, Decimal)
+                    report_rows.append(base_row(
+                        row, 'CHANGED', field, was, now, (now - was) if numbers else None))
+
+            for key, snapshot_row in snapshot_rows.items():
+                current_row = current_rows.get(key)
                 if current_row is None:
                     report_rows.append(base_row(
-                        allocation_id, 'REMOVED', 'capital_gain',
-                        snapshot_row.get('capital_gain'), None, None))
+                        snapshot_row, 'REMOVED', 'capital_gain',
+                        self._as_decimal(snapshot_row.get('capital_gain')), None, None))
                     continue
+                fields = self.FIGURE_FIELDS if not snapshot_row['source'] else self.COMPARED_FIELDS
+                # The current row's own description, so a moved date reads as it is now.
+                compare(current_row, fields, snapshot_row, current_row)
 
-                for field in self.COMPARED_FIELDS:
-                    was = self._as_decimal(snapshot_row.get(field))
-                    now = self._as_decimal(current_row.get(field))
-                    if was is None and now is None:
-                        continue
-                    if was is not None and now is not None and was == now:
-                        continue
-                    difference = (now - was) if (was is not None and now is not None) else None
+            for key, current_row in current_rows.items():
+                if key not in snapshot_rows:
                     report_rows.append(base_row(
-                        allocation_id, 'CHANGED', field, was, now, difference))
-
-            for allocation_id, current_row in current_rows.items():
-                if allocation_id not in snapshot_rows:
-                    report_rows.append(base_row(
-                        allocation_id, 'ADDED', 'capital_gain',
+                        current_row, 'ADDED', 'capital_gain',
                         None, self._as_decimal(current_row.get('capital_gain')), None))
 
-        df = pd.DataFrame(report_rows, columns=report_columns)
+            if not older:
+                if fiscal_year_name not in schedules:
+                    schedules[fiscal_year_name] = cgt.build_schedule(
+                        self.account, snapshot.fiscal_year, every_year=every_year)
+                schedule = schedules[fiscal_year_name]
+                now_totals = {name: getattr(schedule, attribute)
+                              for name, attribute in CGTReturnSnapshot.SCHEDULE_FIELDS.items()}
+                compare(None, list(CGTReturnSnapshot.SCHEDULE_FIELDS), snapshot.schedule_figures, now_totals)
+
+        df = pd.DataFrame(report_rows, columns=self.COLUMNS)
         if not df.empty:
-            df = df.sort_values(
-                ['fiscal_year', 'taken_at', 'sell_allocation_id', 'field'],
-                ignore_index=True,
-            )
+            df = df.sort_values(['fiscal_year', 'taken_at', 'event', 'field'], ignore_index=True)
         return df
 
 
@@ -380,15 +401,7 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
     Draft years are included, with an `is_draft` column and a Warnings sheet.
     """
     if fiscal_years is None:
-        # A statement counts on its own: a year whose only gains a trust attributed is still a
-        # year with capital gains to report.
-        records: list[Sell | AttributionStatement] = [
-            *Sell.objects.filter(account=account, is_active=True),
-            *AttributionStatement.objects.filter(account=account, is_active=True),
-        ]
-        years = {record.fiscal_year for record in records if record.fiscal_year}
-        fiscal_years = [
-            year.name for year in sorted(years, key=lambda year: year.start_year)]
+        fiscal_years = [year.name for year in cgt.years_with_events(account) if year.name]
 
     # Worked out once: each year's schedule, the return frame and the events sheet all need it.
     every_year = cgt.all_events(account)
@@ -430,6 +443,9 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
 
     events = _flattened(CGTEventReport(account=account, every_year=every_year).generate())
 
+    changes = _flattened(CGTBasisChangeReport(
+        account=account, latest_per_year=True, every_year=every_year).generate())
+
     unrealised = UnrealisedGainReport(account=account)
     warnings += [{'fiscal_year': 'Unrealised', 'warning': text} for text in unrealised.warnings()]
 
@@ -449,14 +465,21 @@ def cgt_schedule_workbook(account: Account, output_path: str | Path, fiscal_year
         events, table_name='Events', add_hyperlinks=False,
         description='Every capital gains event, with how it was characterised and why.')
     generator.add_table(
+        changes, table_name='ChangesSinceSnapshot', add_hyperlinks=False,
+        description=("What has moved since each year's capital gains snapshot: the latest one marked "
+                     'lodged, or else the latest. A year total, or one event and one field, per row. '
+                     'Empty if nothing moved or no snapshot has been taken.'))
+    generator.add_table(
         _flattened(unrealised.generate()), table_name='UnrealisedGains', add_hyperlinks=False,
         description=(f'Every parcel still held, as if sold on {unrealised.as_at.isoformat()} at the latest '
-                     'price with no brokerage, and characterised as that sale would be. A guide to '
-                     'planning a sale; nothing here goes on a return.'))
+                     'price with no brokerage, and characterised as that sale would be, split at 1 July '
+                     '2027 where a real sale would be. A guide to planning a sale; nothing here goes on '
+                     'a return.'))
     generator.add_table(
         unrealised.summary(), table_name='UnrealisedSummary', add_hyperlinks=False,
         description=('The unrealised gains by asset category. Losses are not netted against gains, so '
-                     'the discount shown is the most a sale of everything could get.'))
+                     'the discount shown is the most a sale of everything could get. A parcel with no '
+                     'price or exchange rate is left out, and listed on Warnings.'))
     generator.add_table(
         pd.DataFrame(warnings, columns=['fiscal_year', 'warning']),
         table_name='Warnings', add_hyperlinks=False,

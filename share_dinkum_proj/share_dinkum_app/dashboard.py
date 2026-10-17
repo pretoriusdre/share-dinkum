@@ -659,7 +659,7 @@ def export_data_view(request: HttpRequest) -> HttpResponseBase:
 
 @require_POST
 def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
-    """Take a capital gains snapshot for every fiscal year with a sale.
+    """Take a capital gains snapshot for every fiscal year with a sale or a trust statement.
 
     Snapshots are not marked lodged; the user ticks that themselves.
     """
@@ -672,20 +672,13 @@ def capture_snapshot_view(request: HttpRequest) -> HttpResponse:
             'No portfolio is associated with your user, so there is nothing to record.')
         return redirect(dashboard_url)
 
-    year_ids = (
-        Sell.objects.filter(account=account, is_active=True)
-        .values_list('calculated_fiscal_year', flat=True)
-        .distinct()
-    )
-    fiscal_years = list(
-        FiscalYear.objects.filter(id__in=[y for y in year_ids if y]).order_by('start_year')
-    )
+    fiscal_years = cgt.years_with_events(account)
 
     if not fiscal_years:
         messages.info(
             request,
-            f'{account.description} has no sales yet, so there are no capital gains figures '
-            f'to record.')
+            f'{account.description} has no sales or trust statements yet, so there are no '
+            f'capital gains figures to record.')
         return redirect(dashboard_url)
 
     basis = cgt.residency_basis(account)

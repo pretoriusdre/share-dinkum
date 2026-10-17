@@ -61,7 +61,6 @@ from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
 from share_dinkum_app.decorators import safe_property
 from share_dinkum_app.reports import (
-    RealisedCapitalGainReport,
     UnrealisedGainReport,
     CGTBasisChangeReport,
     CGTEventReport,
@@ -1924,51 +1923,6 @@ class ZeroCostParcelTests(TestCase):
 # =============================================================================
 
 
-class RealisedCapitalGainReportTests(TestCase):
-    """Tests for RealisedCapitalGainReport."""
-
-    def test_generate_empty_account(self):
-        acc = create_account()
-        report = RealisedCapitalGainReport(account=acc)
-        df = report.generate()
-        self.assertTrue(df.empty)
-        self.assertEqual(
-            list(df.columns),
-            [
-                'sell_date', 'instrument', 'quantity_sold', 'buy_id', 'parcel_id', 'sell_id',
-                'sell_allocation_id', 'buy_date', 'days_held', 'proceeds', 'cost_base',
-                'capital_gain', 'fiscal_year',
-            ],
-        )
-
-    def test_generate_with_one_sale_allocation(self):
-        acc = create_account()
-        inst = create_instrument(account=acc)
-        buy = Buy.objects.create(
-            account=acc,
-            instrument=inst,
-            date=date(2023, 1, 5),
-            quantity=Decimal('100'),
-            unit_price=Money(50, 'AUD'),
-            total_brokerage=Money(0, 'AUD'),
-        )
-        sell = Sell.objects.create(
-            account=acc,
-            instrument=inst,
-            date=date(2024, 2, 1),
-            quantity=Decimal('50'),
-            unit_price=Money(60, 'AUD'),
-            total_brokerage=Money(0, 'AUD'),
-            strategy='FIFO',
-        )
-        report = RealisedCapitalGainReport(account=acc)
-        df = report.generate()
-        self.assertEqual(len(df), 1)
-        self.assertEqual(df.iloc[0]['instrument'], inst.name)
-        self.assertEqual(df.iloc[0]['quantity_sold'], Decimal('50'))
-        self.assertIn('capital_gain', df.columns)
-
-
 # =============================================================================
 # Reports: golden master
 # =============================================================================
@@ -2111,9 +2065,9 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertAlmostEqual(
             float(per_unit_part / per_unit_full), 61 / 366, places=4)
 
-    def test_realised_capital_gain_report(self):
-        df = RealisedCapitalGainReport(account=self.account).generate()
-        self.assertEqual(len(df), 3)
+    def test_disposal_figures(self):
+        events = cgt.disposal_events(self.account)
+        self.assertEqual(len(events), 3)
 
         expected = [
             # sell date,       qty,    days, proceeds,   cost base,              gain,                    fiscal year
@@ -2121,23 +2075,22 @@ class CGTGoldenMasterTests(TransactionTestCase):
             (date(2024, 11, 5), '500',  813, '1995.25',  '2534.1214', '-538.8714',  'FY2024/25'),
             (date(2024, 11, 5), '500',  624, '1995.25',  '3033.8840', '-1038.6340', 'FY2024/25'),
         ]
-        for (_, row), (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(df.iterrows(), expected):
-            self.assertEqual(row['sell_date'], sell_date)
-            self.assertEqual(row['quantity_sold'], Decimal(qty))
-            self.assertEqual(row['days_held'], days)
-            self.assertEqual(row['proceeds'].amount, Decimal(proceeds))
-            self.assertEqual(row['cost_base'].amount, Decimal(cost_base))
-            self.assertEqual(row['capital_gain'].amount, Decimal(gain))
-            self.assertEqual(str(row['fiscal_year']), fy)
+        for event, (sell_date, qty, days, proceeds, cost_base, gain, fy) in zip(events, expected):
+            self.assertEqual(event.event_date, sell_date)
+            self.assertEqual(event.quantity, Decimal(qty))
+            self.assertEqual(event.days_held, days)
+            self.assertEqual(event.net_proceeds.amount, Decimal(proceeds))
+            self.assertEqual(event.cost_base.amount, Decimal(cost_base))
+            self.assertEqual(event.capital_gain.amount, Decimal(gain))
+            self.assertEqual(event.fiscal_year, fy)
 
         # Both a gain and a loss are represented, so sign handling is exercised.
-        gains = [row['capital_gain'].amount for _, row in df.iterrows()]
+        gains = [event.capital_gain.amount for event in events]
         self.assertTrue(any(g > 0 for g in gains))
         self.assertTrue(any(g < 0 for g in gains))
 
-    @override_settings(REPORTING_DATE=date(2025, 3, 1))
     def test_unrealised_gain_report(self):
-        df = UnrealisedGainReport(account=self.account).generate()
+        df = UnrealisedGainReport(account=self.account, as_at=date(2025, 3, 1)).generate()
         self.assertEqual(len(df), 2)
 
         expected = [
@@ -2162,10 +2115,15 @@ class CGTGoldenMasterTests(TransactionTestCase):
         self.assertAlmostEqual(df.iloc[0]['unrealised_gain_pct'], -0.09357111522955773, places=12)
         self.assertAlmostEqual(df.iloc[1]['unrealised_gain_pct'], -0.22065535374701467, places=12)
 
-    @override_settings(REPORTING_DATE=date(2025, 3, 1))
     def test_unrealised_events_are_not_capital_gains_events(self):
         """A held parcel is a guide only: it is in no schedule and no snapshot."""
         self.assertNotIn('unrealised', {event.source for event in cgt.all_events(self.account)})
+
+    @override_settings(REPORTING_DATE=date(2025, 3, 1))
+    def test_unrealised_gains_are_as_at_today_whatever_the_reporting_date(self):
+        """The holding and price are today's, so the sale is today's too."""
+        self.assertEqual({e.event_date for e in cgt.unrealised_events(self.account)}, {date.today()})
+        self.assertEqual(UnrealisedGainReport(account=self.account).as_at, date.today())
 
     def test_quantities_reconcile(self):
         """Every unit bought is either held or allocated to a sale."""
@@ -2203,7 +2161,7 @@ class UnrealisedEventTests(TransactionTestCase):
         self.assertEqual(event.discount_percentage, Decimal('0'))
         self.assertEqual(event.method, 'other')
         self.assertEqual(event.capital_gain.amount, Decimal('200.00'))
-        self.assertEqual(cgt.discount_eligible_from(event.purchase_date), date(2025, 6, 2))
+        self.assertEqual(cgt.discount_eligible_from(event), date(2025, 6, 2))
 
     def test_a_foreign_resident_disregards_a_non_tap_gain(self):
         declare(self.account, 'FOREIGN', date(2010, 1, 1))
@@ -2222,6 +2180,37 @@ class UnrealisedEventTests(TransactionTestCase):
         self.assertIsNone(event.capital_gain)
         self.assertEqual(event.cost_base.amount, Decimal('1000.00'))
         self.assertIn('No current price for XYZ', event.pending_reason)
+
+    def test_the_summary_leaves_out_a_parcel_with_no_price(self):
+        self._buy(date(2020, 1, 1))
+        other = create_instrument(account=self.account, market=self.instrument.market, name='NOP')
+        Buy.objects.create(
+            account=self.account, instrument=other, date=date(2020, 1, 1),
+            quantity=Decimal('10'), unit_price=Money(Decimal('5.00'), 'AUD'),
+            total_brokerage=Money(Decimal('0'), 'AUD'))
+        report = UnrealisedGainReport(account=self.account, as_at=self.AS_AT)
+        total = report.summary().set_index('asset_category').loc['Total']
+        self.assertEqual(total['cost_base'], 1000.0)
+        self.assertEqual(total['market_value'], 1200.0)
+        self.assertEqual(len(report.warnings()), 1)
+        self.assertIn('NOP', report.warnings()[0])
+
+    def test_a_foreign_price_uses_the_stored_rate_and_never_fetches_one(self):
+        self._buy(date(2020, 1, 1))
+        # Quoted in USD from here on; the parcel's cost base stays the AUD it was bought for.
+        Instrument.objects.filter(pk=self.instrument.pk).update(currency='USD')
+        with patch.object(CurrentExchangeRate, 'get_or_create', side_effect=AssertionError('fetched')), \
+                patch('share_dinkum_app.yfinanceinterface.get_exchange_rate',
+                      side_effect=AssertionError('fetched')):
+            [unrated] = self._events()
+            self.assertIsNone(unrated.net_proceeds)
+            self.assertIn('No exchange rate from USD to AUD', unrated.pending_reason)
+
+            CurrentExchangeRate.objects.create(
+                account=self.account, convert_from='USD', convert_to='AUD',
+                exchange_rate_multiplier=Decimal('1.5'))
+            [rated] = self._events()
+        self.assertEqual(rated.net_proceeds.amount, Decimal('1800.00'))
 
     def test_a_parcel_bought_after_the_day_is_left_out(self):
         self._buy(date(2020, 1, 1))
@@ -2247,26 +2236,6 @@ class CGTEventTests(TransactionTestCase):
     def setUp(self):
         self.data = create_golden_master_portfolio()
         self.account = self.data['account']
-
-    def test_events_match_the_realised_capital_gain_report(self):
-        """Disposal events match RealisedCapitalGainReport row for row."""
-        events = cgt.disposal_events(self.account)
-        df = RealisedCapitalGainReport(account=self.account).generate()
-
-        self.assertEqual(len(events), len(df))
-
-        by_allocation = {str(row['sell_allocation_id']): row for _, row in df.iterrows()}
-        for event in events:
-            row = by_allocation[str(event.sell_allocation_id)]
-            self.assertEqual(event.instrument, row['instrument'])
-            self.assertEqual(event.quantity, row['quantity_sold'])
-            self.assertEqual(event.days_held, row['days_held'])
-            self.assertEqual(event.purchase_date, row['buy_date'])
-            self.assertEqual(event.event_date, row['sell_date'])
-            self.assertEqual(event.fiscal_year, row['fiscal_year'])
-            self.assertEqual(event.cost_base.amount, row['cost_base'].amount)
-            self.assertEqual(event.net_proceeds.amount, row['proceeds'].amount)
-            self.assertEqual(event.capital_gain.amount, row['capital_gain'].amount)
 
     def test_cost_base_components_sum_to_the_cost_base(self):
         """Purchase, brokerage and adjustments sum to the cost base."""
@@ -2997,7 +2966,7 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertEqual(
             list(df.columns),
             ['fiscal_year', 'taken_at', 'snapshot_basis', 'current_basis',
-             'snapshot_engine_version', 'sell_allocation_id', 'status', 'field',
+             'snapshot_engine_version', 'event', 'sell_allocation_id', 'slice', 'status', 'field',
              'snapshot_value', 'current_value', 'difference'],
         )
 
@@ -3064,6 +3033,171 @@ class CGTBasisChangeReportTests(TransactionTestCase):
         self.assertFalse(CGTBasisChangeReport(account=self.account).generate().empty)
         self.assertTrue(
             CGTBasisChangeReport(account=self.account, lodged_only=True).generate().empty)
+
+
+class SnapshotOfEventsAndTotalsTests(TransactionTestCase):
+    """A snapshot holds the year's totals and how each gain is taxed, and the report compares them."""
+
+    def setUp(self):
+        self.data = create_golden_master_portfolio()
+        self.account = self.data['account']
+        self.fy2024 = FiscalYear.objects.get(name='FY2023/24')
+
+    def _changes(self, **kwargs):
+        return CGTBasisChangeReport(account=self.account, **kwargs).generate()
+
+    def _trust_gain(self, amount='100.00'):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.data['instrument'],
+            financial_year_end_date=date(2024, 6, 30))
+        return AttributionComponent.objects.create(
+            account=self.account, statement=statement, component='DISCOUNTED_NTAP',
+            amount=Money(Decimal(amount), 'AUD'))
+
+    def test_the_year_totals_are_those_of_the_schedule(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        schedule = cgt.build_schedule(self.account, self.fy2024)
+        self.assertEqual(snapshot.net_capital_gain, schedule.net_capital_gain)
+        self.assertEqual(snapshot.cgt_discount_applied, schedule.total_discount)
+        self.assertEqual(snapshot.is_draft, schedule.is_draft)
+
+    def test_each_row_records_how_its_gain_is_taxed(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        [event] = cgt.disposal_events(self.account, fiscal_year='FY2023/24')
+        row = snapshot.captured_rows.get()
+        self.assertEqual(row.source, cgt.events.SOURCE_DISPOSAL)
+        self.assertEqual(row.slice, cgt.events.SLICE_WHOLE)
+        self.assertEqual(row.method, event.method)
+        self.assertEqual(row.discount_percentage, event.discount_percentage)
+        self.assertIs(row.is_disregarded, False)
+
+    def test_a_snapshot_taken_now_reports_no_change(self):
+        self._trust_gain()
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        self.assertTrue(self._changes().empty)
+
+    def test_a_trust_gain_is_captured_and_its_change_reported(self):
+        component = self._trust_gain()
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        self.assertEqual(
+            sorted(snapshot.captured_rows.values_list('source', flat=True)),
+            [cgt.events.SOURCE_DISPOSAL, cgt.events.SOURCE_ATTRIBUTION])
+
+        component.amount = Money(Decimal('150.00'), 'AUD')
+        component.save()
+
+        df = self._changes()
+        gain = df[(df['field'] == 'capital_gain') & df['event'].str.contains('trust gain')]
+        self.assertEqual(list(gain['status']), ['CHANGED'])
+        self.assertEqual(gain.iloc[0]['difference'], Decimal('100.0000'))  # grossed up, 50 x 2
+
+    def test_declaring_foreign_residency_shows_the_tax_moving_though_the_gain_does_not(self):
+        """The reason a snapshot is taken before declaring residency."""
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        declare(self.account, 'FOREIGN', date(2000, 1, 1))
+
+        df = self._changes()
+        fields = set(df['field'])
+        self.assertNotIn('capital_gain', fields)
+        self.assertIn('is_disregarded', fields)
+        self.assertIn('tap_status', fields)
+        net = df[(df['event'] == CGTBasisChangeReport.YEAR_TOTAL) & (df['field'] == 'net_capital_gain')]
+        self.assertEqual(len(net), 1)
+        self.assertEqual(net.iloc[0]['current_value'], Decimal('0.0000'))
+
+    def test_an_older_snapshot_is_compared_on_its_figures_alone(self):
+        snapshot = CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024)
+        # As one taken before snapshots recorded totals, trust gains or characterisation.
+        CGTReturnSnapshotRow.objects.filter(snapshot=snapshot).update(
+            source='', slice='', method='', tap_status='', discount_percentage=None,
+            is_disregarded=None)
+        CGTReturnSnapshot.objects.filter(pk=snapshot.pk).update(
+            is_draft=None, **{name: None for name in CGTReturnSnapshot.SCHEDULE_FIELDS if name != 'is_draft'})
+        self._trust_gain()
+        declare(self.account, 'FOREIGN', date(2000, 1, 1))
+
+        self.assertTrue(self._changes().empty)
+
+        CGTReturnSnapshotRow.objects.filter(snapshot=snapshot).update(capital_gain=Decimal('1'))
+        self.assertEqual(set(self._changes()['field']), {'capital_gain'})
+
+    def test_one_snapshot_a_year_prefers_the_lodged_one(self):
+        lodged = CGTReturnSnapshot.capture(
+            account=self.account, fiscal_year=self.fy2024, taken_at=date(2026, 8, 1), is_lodged=True)
+        CGTReturnSnapshotRow.objects.filter(snapshot=lodged).update(capital_gain=Decimal('1'))
+        CGTReturnSnapshot.capture(account=self.account, fiscal_year=self.fy2024, taken_at=date(2026, 9, 1))
+
+        df = self._changes(latest_per_year=True)
+        self.assertEqual(set(df['taken_at']), {date(2026, 8, 1)})
+        self.assertEqual(len(self._changes()), len(df), 'the later snapshot matches today')
+
+
+class CutoverInSnapshotsAndUnrealisedTests(TransactionTestCase):
+    """The 2027 split, in the snapshots and in unrealised gains."""
+
+    def test_a_snapshot_captures_and_compares_both_parts_of_a_split_sale(self):
+        data = create_cutover_portfolio()
+        account = data['account']
+        declare(account, 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, account)
+        fiscal_year = data['sell'].fiscal_year
+
+        snapshot = CGTReturnSnapshot.capture(account=account, fiscal_year=fiscal_year)
+        self.assertEqual(
+            sorted(snapshot.captured_rows.values_list('slice', flat=True)),
+            [cgt.events.SLICE_POST_CUTOVER, cgt.events.SLICE_PRE_CUTOVER])
+        self.assertTrue(CGTBasisChangeReport(account=account).generate().empty)
+
+        # A higher 30 June 2027 value moves gain from the part before the cutover to the part after.
+        InstrumentValuation.objects.filter(account=account).update(unit_value=Decimal('16.00'))
+        df = CGTBasisChangeReport(account=account).generate()
+        moved = df[df['field'] == 'capital_gain']
+        self.assertEqual(set(moved['slice']), {cgt.events.SLICE_PRE_CUTOVER, cgt.events.SLICE_POST_CUTOVER})
+
+    def _held_across_the_cutover(self):
+        account = create_account(
+            owner=create_user(username='heldacross'), description='Held across',
+            fy_type=create_fiscal_year_type(description='AU Tax Year Held'))
+        instrument = create_instrument(account=account, name='HLD')
+        Buy.objects.create(
+            account=account, instrument=instrument, date=date(2020, 1, 15),
+            quantity=Decimal('1000'), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(Decimal('19.95'), 'AUD'))
+        InstrumentValuation.objects.create(
+            account=account, instrument=instrument, valuation_date=date(2027, 6, 30),
+            unit_value=Money(Decimal('15.00'), 'AUD'), purpose='CUTOVER_2027', source='USER')
+        instrument.current_unit_price = Decimal('20.0000')
+        instrument.save()
+        load_test_cpi()
+        declare(account, 'RESIDENT', date(2010, 1, 1))
+        return enable_2027_regime(self, account)
+
+    def test_a_holding_after_the_cutover_is_split_as_a_sale_would_be(self):
+        account = self._held_across_the_cutover()
+        deferred, post = cgt.unrealised_events(account, as_at=date(2028, 8, 20))
+
+        self.assertEqual(deferred.slice, cgt.events.SLICE_PRE_CUTOVER)
+        self.assertEqual(deferred.capital_gain.amount, Decimal('4980.05'))
+        self.assertEqual(deferred.discount_percentage, Decimal('0.5'))
+        self.assertEqual(cgt.discount_eligible_from(deferred), date(2021, 1, 16))
+
+        self.assertEqual(post.slice, cgt.events.SLICE_POST_CUTOVER)
+        self.assertEqual(post.net_proceeds.amount, Decimal('20000.00'))
+        self.assertIsNotNone(post.indexation_factor)
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+        self.assertIsNone(cgt.discount_eligible_from(post))
+
+    def test_the_summary_counts_a_split_holding_once(self):
+        account = self._held_across_the_cutover()
+        report = UnrealisedGainReport(account=account, as_at=date(2028, 8, 20))
+        total = report.summary().set_index('asset_category').loc['Total']
+        self.assertAlmostEqual(total['cost_base'], 10019.95, places=4)
+        self.assertAlmostEqual(total['market_value'], 20000.00, places=4)
+
+    def test_before_the_cutover_a_holding_is_one_row(self):
+        account = self._held_across_the_cutover()
+        [event] = cgt.unrealised_events(account, as_at=date(2027, 6, 1))
+        self.assertEqual(event.slice, cgt.events.SLICE_WHOLE)
 
 
 # =============================================================================
@@ -6327,7 +6461,7 @@ class StatutoryLossOrderingTests(TransactionTestCase):
 
 
 class CGTReportTests(TransactionTestCase):
-    """The CGT event and schedule reports, and the unchanged realised gain report."""
+    """The CGT event and schedule reports."""
 
     def setUp(self):
         self.data = create_golden_master_portfolio()
@@ -6337,15 +6471,6 @@ class CGTReportTests(TransactionTestCase):
         df = CGTEventReport(account=self.account).generate()
         self.assertEqual(list(df.columns), cgt.event_fields())
         self.assertEqual(len(df), 3)
-
-    def test_the_realised_gain_report_did_not_grow_a_column(self):
-        """RealisedCapitalGainReport's columns are unchanged."""
-        df = RealisedCapitalGainReport(account=self.account).generate()
-        self.assertEqual(list(df.columns), [
-            'sell_date', 'instrument', 'quantity_sold', 'buy_id', 'parcel_id', 'sell_id',
-            'sell_allocation_id', 'buy_date', 'days_held', 'proceeds', 'cost_base',
-            'capital_gain', 'fiscal_year',
-        ])
 
     def test_the_schedule_report_refuses_to_call_itself_final(self):
         report = CGTScheduleReport(account=self.account, fiscal_year='FY2023/24')
@@ -6846,7 +6971,6 @@ class UpgradeIsInertUntilDataIsTouchedTests(TransactionTestCase):
         before = self._allocation_state()
         self.assertTrue(before)
 
-        RealisedCapitalGainReport(account=self.account).generate()
         UnrealisedGainReport(account=self.account).generate()
         CGTEventReport(account=self.account).generate()
         CGTScheduleReport(account=self.account, fiscal_year='FY2023/24').generate()
@@ -7214,7 +7338,7 @@ class CaptureSnapshotButtonTests(TransactionTestCase):
         self.client.force_login(empty.owner)
 
         response = self.client.post(self.url, follow=True)
-        self.assertContains(response, 'no sales yet')
+        self.assertContains(response, 'no sales or trust statements yet')
         self.assertEqual(CGTReturnSnapshot.objects.filter(account=empty).count(), 0)
 
     def test_a_get_records_nothing(self):
@@ -8474,10 +8598,9 @@ class CGTScheduleExportTests(TransactionTestCase):
     def test_the_workbook_has_a_sheet_for_each_part_of_the_answer(self):
         tables = set(pd.read_excel(self._workbook(), sheet_name='Index')['table_name'])
         self.assertEqual(
-            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'UnrealisedGains',
-                     'UnrealisedSummary', 'Warnings'})
+            tables, {'ReturnSchedule', 'Summary', 'ScheduleLines', 'Events', 'ChangesSinceSnapshot',
+                     'UnrealisedGains', 'UnrealisedSummary', 'Warnings'})
 
-    @override_settings(REPORTING_DATE=date(2025, 3, 1))
     def test_the_unrealised_sheets_hold_the_open_parcels_and_their_total(self):
         tables = excelinterface.get_all_tables_in_excel(self._workbook())
         parcels = tables['UnrealisedGains']

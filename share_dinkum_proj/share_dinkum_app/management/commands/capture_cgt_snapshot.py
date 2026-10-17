@@ -1,4 +1,4 @@
-"""Snapshot today's capital gains figures, per fiscal year with a sale.
+"""Snapshot today's capital gains figures, per fiscal year with a sale or a trust statement.
 
 Gains are recomputed on every report, so take a snapshot of lodged years before upgrading
 or changing tax settings. `CGTBasisChangeReport` then shows what moved.
@@ -10,7 +10,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from share_dinkum_app import cgt
 from share_dinkum_app.models import (
-    Account, CGTReturnSnapshot, FiscalYear, LodgedSnapshotError, Sell)
+    Account, CGTReturnSnapshot, FiscalYear, LodgedSnapshotError)
 
 
 class Command(BaseCommand):
@@ -20,7 +20,8 @@ class Command(BaseCommand):
         parser.add_argument('--account', help='Portfolio name. Omit for every portfolio.')
         parser.add_argument(
             '--fiscal-year',
-            help='A single year, such as "FY2024/25". Omit for every year that has a sale.')
+            help='A single year, such as "FY2024/25". Omit for every year with a sale or a '
+                 'trust statement.')
         parser.add_argument(
             '--lodged', action='store_true',
             help='Mark these as the figures actually lodged with the ATO. Use it when you '
@@ -42,7 +43,7 @@ class Command(BaseCommand):
 
         years = self._years(account, options['fiscal_year'])
         if not years:
-            self.stdout.write('  No sales, so there are no capital gains to record.')
+            self.stdout.write('  No sales or trust statements, so there are no capital gains to record.')
             return
 
         basis = cgt.residency_basis(account)
@@ -70,14 +71,14 @@ class Command(BaseCommand):
                 continue
             recorded += 1
             self.stdout.write(
-                f'  {fiscal_year.name}: {len(snapshot.rows)} disposal(s), '
-                f'net {snapshot.totals.get("total_capital_gain")}')
+                f'  {fiscal_year.name}: {len(snapshot.rows)} event(s), '
+                f'net capital gain {snapshot.net_capital_gain}')
 
         verb = 'would record' if options['dry_run'] else 'recorded'
         self.stdout.write(self.style.SUCCESS(f'  {verb} {recorded} year(s).'))
 
     def _years(self, account: Account, wanted: str | None) -> list[FiscalYear]:
-        """The named fiscal year, or every year with a sale."""
+        """The named fiscal year, or every year with a sale or a trust statement."""
         if wanted:
             fiscal_year = FiscalYear.objects.filter(name=wanted).first()
             if fiscal_year is None:
@@ -85,12 +86,4 @@ class Command(BaseCommand):
                     f'No fiscal year named "{wanted}". Names look like "FY2024/25".')
             return [fiscal_year]
 
-        year_ids = (
-            Sell.objects.filter(account=account, is_active=True)
-            .values_list('calculated_fiscal_year', flat=True)
-            .distinct()
-        )
-        return list(
-            FiscalYear.objects.filter(id__in=[y for y in year_ids if y])
-            .order_by('start_year')
-        )
+        return cgt.years_with_events(account)

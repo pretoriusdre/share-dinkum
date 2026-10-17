@@ -127,18 +127,27 @@ There is a **Take capital gains snapshot** button on the dashboard, or from a te
 
     uv run dev capture_cgt_snapshot --account "Your portfolio" --lodged
 
-Either captures every year that has a sale. The button never marks anything as lodged, since
+Either captures every year that has a sale or a trust's annual statement. The button never marks anything as lodged, since
 the application cannot know what you filed; tick `is lodged` on the rows yourself, or use the
 command flag.
 
-Then, after you change something:
+A snapshot records the year's totals as the CGT report's Summary sheet shows them (net capital
+gain, discount, losses applied and carried forward, whether the year was a draft), and one row
+per capital gains event: each sale, each half of a sale split at 1 July 2027, and each trust
+gain, with how it was taxed (discount, indexation, TAP status, whether it was disregarded).
 
-    CGTBasisChangeReport
+Then, after you change something, export the Australian CGT report. Its ChangesSinceSnapshot
+sheet compares each year's latest lodged snapshot, or else its latest, with the figures today,
+and lists every total and every event that moved, was added, or disappeared. Declaring
+residency moves no gain, but it can move the discount, the disregarded flag and the net capital
+gain, and those show. (`CGTBasisChangeReport` builds the sheet, and compares every snapshot when
+called directly.)
 
-recomputes the year and reports every line that moved, was added, or disappeared.
+A snapshot taken before these were recorded holds only each sale's figures, so it is compared on
+those alone.
 
 **You cannot type a snapshot in by hand.** The figures come from the report, and each
-disposal is stored as its own `CGTReturnSnapshotRow`. A snapshot you can adjust afterwards is
+event is stored as its own `CGTReturnSnapshotRow`. A snapshot you can adjust afterwards is
 not evidence of anything.
 
 The allocation each row came from is kept as a plain identifier, not a link. A snapshot has
@@ -208,12 +217,10 @@ calculation uses them yet.
    not work out
 5. Enter any `CapitalLossCarryForward` opening balance
 6. Enter your `AttributionStatement` rows from the annual tax statements
-7. Look at `CGTBasisChangeReport` to see what moved, and `CGTScheduleReport` for the year
+7. Export the Australian CGT report: ChangesSinceSnapshot shows what moved, and the
+   ReturnSchedule and Summary sheets show the year
 
-`CGTBasisChangeReport` compares by sell allocation, so for a sale split at 1 July 2027 it shows
-only the post-cutover half.
-
-`CGTScheduleReport` refuses to call itself final while anything is unconfirmed — an
+The schedule refuses to call itself final while anything is unconfirmed — an
 unclassified instrument, an undeclared residency, a statement that does not reconcile — and
 tells you which. A draft schedule is not a broken one, but it must not be mistaken for a
 finished one.
