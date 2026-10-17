@@ -291,6 +291,21 @@ parts of your data: the database `share_dinkum_proj/db.sqlite3`, and `share_dink
 holds documents attached to transactions. To roll back, stop the server and copy both back. Neither,
 nor your `.env`, is part of the repository, so an update never changes them.
 
+To keep backups on another drive, add a line to `share_dinkum_proj/.env`, for example
+`BACKUP_LOCATION=D:\`. The backups then go in `D:\share-dinkum-backups`. The update, the dashboard and
+the notebook all use it. Existing backups are not moved, so move the old `share-dinkum-backups` folder
+there yourself. Every backup includes a copy of `media`, which holds past exports, so clear old
+exports out of it if space is tight.
+`MEDIA_LOCATION=D:\share-dinkum-data` keeps `media` in `D:\share-dinkum-data\media`.
+
+Both settings name the folder that should *hold* the `share-dinkum-backups` or `media` folder, not that
+folder itself. It can be your Documents folder, your home folder or a whole drive (`D:` means `D:\`),
+because Share Dinkum only ever writes to, prunes, copies, empties or restores the folder it names
+inside it. Stop the server and move the existing `media` folder there first, since attached
+documents are found by their path inside it. If a folder called `media` is already there with other
+files in it, a restore or clear-all leaves those files alone, but every backup copies them, and the
+start-up check says so.
+
 If you have edited any of the project's own files, the update stops before changing anything and
 lists them, so your edits cannot be lost in a merge. Commit or discard them and run it again.
 

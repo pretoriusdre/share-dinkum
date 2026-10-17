@@ -9,6 +9,7 @@ import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from unittest import skipUnless
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
 from django.utils.html import escape
@@ -7948,6 +7949,89 @@ class FullBackupTests(TransactionTestCase):
             (project / '.env').write_text('DB_ENGINE=django.db.backends.postgresql\nDB_NAME=dinkum\n')
             self.assertIsNone(self.backup.configured_database(project))
 
+    def test_the_backup_folder_is_a_share_dinkum_backups_in_the_location_env_names(self):
+        project = Path(tempfile.mkdtemp())
+        with patch.dict(os.environ):
+            os.environ.pop('BACKUP_LOCATION', None)
+            self.assertEqual(self.backup.configured_backup_root(project), self.backup.DEFAULT_BACKUP_ROOT)
+            self.assertEqual(self.backup.DEFAULT_BACKUP_ROOT, Path.home() / 'share-dinkum-backups')
+
+            chosen = self.root / 'bigger-drive'
+            (project / '.env').write_text(f'BACKUP_LOCATION={chosen}\n')
+            self.assertEqual(self.backup.configured_backup_root(project), chosen / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=~/Documents\n')
+            self.assertEqual(
+                self.backup.configured_backup_root(project), Path.home() / 'Documents' / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=relative\n')
+            self.assertEqual(
+                self.backup.configured_backup_root(project), project / 'relative' / 'share-dinkum-backups')
+
+            (project / '.env').write_text('BACKUP_LOCATION=\n')
+            self.assertEqual(self.backup.configured_backup_root(project), self.backup.DEFAULT_BACKUP_ROOT)
+
+            os.environ['BACKUP_LOCATION'] = str(chosen)
+            (project / '.env').write_text('BACKUP_LOCATION=ignored\n')
+            self.assertEqual(self.backup.configured_backup_root(project), chosen / 'share-dinkum-backups')
+
+    def test_pruning_never_deletes_a_folder_that_is_not_a_backup(self):
+        """Someone's own folder called `main` in the backup folder keeps all of its contents."""
+        for name in ('Holiday photos', '2026 tax', 'Invoices', 'Projects', 'Receipts', 'Scans', 'Taxes'):
+            (self.destination / 'main' / name).mkdir(parents=True)
+        for index in range(7):
+            (self.destination / 'main' / f'2026-01-0{index + 1}T090000').mkdir()
+
+        removed = self.backup.cleanup_old_backups(self.destination, 'main', keep=5)
+
+        self.assertEqual(removed, ['2026-01-02T090000', '2026-01-01T090000'])
+        for name in ('Holiday photos', '2026 tax', 'Invoices', 'Projects', 'Receipts', 'Scans', 'Taxes'):
+            self.assertTrue((self.destination / 'main' / name).is_dir(), name)
+        self.assertEqual(len(self.backup.list_backups(self.destination)), 5)
+
+    def test_the_media_folder_is_a_media_folder_in_the_location_env_names(self):
+        project = Path(tempfile.mkdtemp())
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            self.assertEqual(self.backup.configured_media_root(project), project / 'media')
+
+            chosen = self.root / 'documents'
+            (project / '.env').write_text(f'MEDIA_LOCATION={chosen}\n')
+            self.assertEqual(self.backup.configured_media_root(project), chosen / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=\n')
+            self.assertEqual(self.backup.configured_media_root(project), project / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=~/dinkum\n')
+            self.assertEqual(self.backup.configured_media_root(project), Path.home() / 'dinkum' / 'media')
+
+            (project / '.env').write_text('MEDIA_LOCATION=relative\n')
+            self.assertEqual(self.backup.configured_media_root(project), project / 'relative' / 'media')
+
+            os.environ['MEDIA_LOCATION'] = str(chosen)
+            (project / '.env').write_text('MEDIA_LOCATION=ignored\n')
+            self.assertEqual(self.backup.configured_media_root(project), chosen / 'media')
+
+    def test_the_copy_is_called_media_whatever_the_folder_is_called(self):
+        """A restore looks for `media`, so the media folder's own name must not change it."""
+        renamed = self.root / 'share-dinkum-media'
+        self.media.rename(renamed)
+
+        result = self.backup.make_backup(self.database, renamed, self.destination)
+
+        self.assertTrue((result['path'] / 'media' / 'AFI' / 'statement.pdf').exists())
+        self.assertFalse((result['path'] / 'share-dinkum-media').exists())
+
+    def test_the_pre_restore_copy_names_the_media_folder_as_a_backup_does(self):
+        from share_dinkum_app import loading
+
+        renamed = self.root / 'share-dinkum-media'
+        self.media.rename(renamed)
+        with override_settings(MEDIA_ROOT=str(renamed)):
+            snapshot = loading.DataBackupManager(self.destination).snapshot_current_data()
+
+        self.assertTrue((snapshot / 'media' / 'AFI' / 'statement.pdf').exists())
+
     def test_media_alone_is_backed_up_without_a_sqlite_database(self):
         result = self.backup.make_backup(None, self.media, self.destination)
         self.assertEqual(result['database_bytes'], 0)
@@ -8003,6 +8087,208 @@ class EnsureEnvTests(SimpleTestCase):
         self.env.write_text('SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
         self.assertEqual(self.ensure_env(self.env), 'mine')
         self.assertEqual(self.env.read_text(), 'SECRET_KEY=mine\nBACKUP_ROOT=D:\\b\n')
+
+
+class MediaRootCheckTests(SimpleTestCase):
+    def setUp(self):
+        from share_dinkum_app import system_checks
+        self.run_check = system_checks.media_root
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+
+    def ids(self, media, base=None):
+        with override_settings(MEDIA_ROOT=str(media), BASE_DIR=base or self.folder):
+            return [message.id for message in self.run_check(None)]
+
+    def test_an_existing_folder_is_quiet(self):
+        (self.folder / 'media').mkdir()
+        self.assertEqual(self.ids(self.folder / 'media'), [])
+
+    def test_a_missing_folder_with_a_parent_is_a_warning(self):
+        self.assertEqual(self.ids(self.folder / 'new'), ['share_dinkum_app.W001'])
+
+    def test_a_missing_parent_is_a_warning(self):
+        self.assertEqual(self.ids(self.folder / 'no_drive' / 'media'), ['share_dinkum_app.W002'])
+
+    def test_other_files_in_the_media_folder_are_a_warning(self):
+        media = self.folder / 'media'
+        (media / 'Documents').mkdir(parents=True)
+        self.assertEqual(self.ids(media), ['share_dinkum_app.W004'])
+
+    def test_account_folders_in_the_media_folder_are_quiet(self):
+        media = self.folder / 'media'
+        (media / '01a04b62-12bb-7200-bde0-80279c5d7e21').mkdir(parents=True)
+        self.assertEqual(self.ids(media), [])
+
+    def test_files_left_in_the_default_folder_are_a_warning(self):
+        (self.folder / 'media').mkdir()
+        (self.folder / 'media' / 'old.pdf').write_text('x')
+        elsewhere = self.folder / 'elsewhere'
+        elsewhere.mkdir()
+        self.assertEqual(self.ids(elsewhere), ['share_dinkum_app.W003'])
+
+
+class MediaFolderTests(SimpleTestCase):
+    """Clearing all data and restoring a backup touch only the account folders in the media folder.
+
+    The media folder is the `media` inside MEDIA_LOCATION, so it is never a documents or home
+    folder itself. But a folder already called `media` can hold someone's files, and they survive.
+    """
+
+    def setUp(self):
+        from share_dinkum_app import backup
+        self.backup = backup
+        self.elsewhere = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.elsewhere, ignore_errors=True)
+        self.backups = self.elsewhere / 'backups'
+
+    def make_media(self, *names, files=()):
+        """A media folder holding an empty folder for each of `names` and a file for each of `files`."""
+        media = self.elsewhere / 'my-media'
+        media.mkdir()
+        for name in names:
+            (media / name).mkdir()
+        for name in files:
+            (media / name).write_text('x')
+        return media
+
+    ACCOUNT = '01a04b62-12bb-7200-bde0-80279c5d7e21'
+
+    def test_a_missing_or_empty_folder_holds_nothing_foreign(self):
+        self.assertEqual(self.backup.foreign_media_entries(self.elsewhere / 'missing'), [])
+        self.assertEqual(self.backup.foreign_media_entries(self.make_media()), [])
+
+    def test_account_folders_are_not_foreign(self):
+        media = self.make_media(self.ACCOUNT, '01A12132-AC55-7696-AB2E-EDE757E6FD44')
+        self.assertEqual(self.backup.foreign_media_entries(media), [])
+
+    def test_anything_else_at_the_top_is_foreign(self):
+        media = self.make_media(self.ACCOUNT, 'Documents', 'AFI', files=['notes.txt', self.ACCOUNT[:-1] + 'z'])
+        # A file named like an account is not an account's folder.
+        (media / 'ffffffff-ffff-ffff-ffff-ffffffffffff').write_text('x')
+
+        self.assertEqual(
+            self.backup.foreign_media_entries(media),
+            sorted(['AFI', 'Documents', 'notes.txt', self.ACCOUNT[:-1] + 'z', 'ffffffff-ffff-ffff-ffff-ffffffffffff']))
+
+    def test_files_an_operating_system_adds_are_not_foreign(self):
+        media = self.make_media(self.ACCOUNT, files=['desktop.ini', 'Thumbs.db', '.DS_Store'])
+        self.assertEqual(self.backup.foreign_media_entries(media), [])
+
+    def test_only_a_few_names_are_shown(self):
+        self.assertEqual(self.backup.describe_names(['a', 'b']), "'a', 'b'")
+        self.assertEqual(self.backup.describe_names(list('abcdefg')), "'a', 'b', 'c', 'd', 'e' and 2 more")
+
+    def make_other_files(self, media):
+        """Files that are not Share Dinkum's, to be found untouched afterwards."""
+        (media / 'Documents').mkdir()
+        (media / 'Documents' / 'tax.pdf').write_text('not ours')
+        (media / 'budget.xlsx').write_text('not ours')
+        (media / 'desktop.ini').write_text('not data')
+
+    def assert_other_files_survive(self, media):
+        self.assertTrue(media.is_dir())
+        self.assertEqual((media / 'Documents' / 'tax.pdf').read_text(), 'not ours')
+        self.assertEqual((media / 'budget.xlsx').read_text(), 'not ours')
+        self.assertTrue((media / 'desktop.ini').exists())
+
+    def test_emptying_removes_the_account_folders_and_nothing_else(self):
+        media = self.make_media(self.ACCOUNT, '01a12132-ac55-7696-ab2e-ede757e6fd44')
+        (media / self.ACCOUNT / 'AFI').mkdir()
+        (media / self.ACCOUNT / 'AFI' / 'statement.pdf').write_text('ours')
+        self.make_other_files(media)
+
+        self.assertEqual(self.backup.empty_media_folder(media), [])
+
+        self.assertEqual(sorted(path.name for path in media.iterdir()), ['Documents', 'budget.xlsx', 'desktop.ini'])
+        self.assert_other_files_survive(media)
+
+    def test_emptying_a_missing_folder_does_nothing(self):
+        self.assertEqual(self.backup.empty_media_folder(self.elsewhere / 'missing'), [])
+
+    def test_a_folder_that_will_not_delete_is_reported_not_raised(self):
+        media = self.make_media(self.ACCOUNT)
+        with patch('share_dinkum_app.backup.shutil.rmtree', side_effect=PermissionError('open in Excel')):
+            self.assertEqual(self.backup.empty_media_folder(media), [self.ACCOUNT])
+        self.assertTrue((media / self.ACCOUNT).is_dir())
+
+    def test_clearing_all_data_removes_only_the_account_folders(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        (media / self.ACCOUNT / 'export.xlsx').write_text('ours')
+        self.make_other_files(media)
+        with override_settings(MEDIA_ROOT=str(media)), patch('builtins.input', return_value='X'), \
+                patch.object(loading, 'call_command'):
+            loading.DataLoader.clear_all_data()
+
+        self.assertFalse((media / self.ACCOUNT).exists())
+        self.assert_other_files_survive(media)
+
+    def test_clearing_all_data_can_be_declined(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        with override_settings(MEDIA_ROOT=str(media)), patch('builtins.input', return_value='n'), \
+                patch.object(loading, 'call_command', side_effect=AssertionError('flushed the database')):
+            loading.DataLoader.clear_all_data()
+
+        self.assertTrue((media / self.ACCOUNT).is_dir())
+
+    def test_a_restore_replaces_the_account_folders_and_leaves_the_rest(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        (media / self.ACCOUNT / 'old.xlsx').write_text('live, to be replaced')
+        self.make_other_files(media)
+        backed_up = self.elsewhere / 'backed-up-media'
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44').mkdir(parents=True)
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44' / 'new.xlsx').write_text('from the backup')
+
+        with override_settings(MEDIA_ROOT=str(media)):
+            loading.DataBackupManager(base_path=self.backups).replace_media(backed_up)
+
+        self.assertFalse((media / self.ACCOUNT).exists())
+        self.assertEqual(
+            (media / '01a12132-ac55-7696-ab2e-ede757e6fd44' / 'new.xlsx').read_text(), 'from the backup')
+        self.assert_other_files_survive(media)
+
+    def test_a_restore_stops_if_the_live_folders_cannot_be_removed(self):
+        from share_dinkum_app import loading
+
+        media = self.make_media(self.ACCOUNT)
+        backed_up = self.elsewhere / 'backed-up-media'
+        (backed_up / '01a12132-ac55-7696-ab2e-ede757e6fd44').mkdir(parents=True)
+
+        with override_settings(MEDIA_ROOT=str(media)), \
+                patch('share_dinkum_app.backup.shutil.rmtree', side_effect=PermissionError('open in Excel')):
+            with self.assertRaisesRegex(OSError, 'Could not remove'):
+                loading.DataBackupManager(base_path=self.backups).replace_media(backed_up)
+
+        self.assertFalse((media / '01a12132-ac55-7696-ab2e-ede757e6fd44').exists(), 'nothing was copied in')
+
+    def test_the_media_folder_is_never_the_location_itself(self):
+        """Whatever place is named, even one full of other files, the media folder is a `media` inside it."""
+        project = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            for place in ('~', '~/Documents', str(Path.home().anchor), str(project)):
+                (project / '.env').write_text(f'MEDIA_LOCATION={place}\n')
+                media = self.backup.configured_media_root(project)
+                self.assertEqual(media.name, 'media', place)
+                self.assertEqual(media.parent, Path(place).expanduser(), place)
+
+    @skipUnless(os.name == 'nt', 'drive letters are a Windows matter')
+    def test_a_drive_letter_alone_means_the_top_of_that_drive(self):
+        project = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        with patch.dict(os.environ):
+            os.environ.pop('MEDIA_LOCATION', None)
+            for written, expected in (('D:', 'D:\\media'), ('c:', 'c:\\media'), ('D:data', 'D:\\data\\media'),
+                                      ('D:\\', 'D:\\media')):
+                (project / '.env').write_text(f'MEDIA_LOCATION={written}\n')
+                self.assertEqual(self.backup.configured_media_root(project), Path(expected), written)
 
 
 class FullBackupButtonTests(TransactionTestCase):

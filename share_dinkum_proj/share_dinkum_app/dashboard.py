@@ -930,7 +930,7 @@ def _backup_root() -> Path:
     """The backup root shared with `uv run update` and the notebook."""
     from share_dinkum_app import backup as backup_module
 
-    return backup_module.DEFAULT_BACKUP_ROOT
+    return backup_module.configured_backup_root(settings.BASE_DIR)
 
 
 def _backup_status(account: Account | None) -> str:

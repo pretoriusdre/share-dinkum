@@ -20,13 +20,13 @@ ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / "share_dinkum_proj"
 MANAGE = PROJECT / "manage.py"
 
-MEDIA = PROJECT / "media"
-
 # The backup itself is shared with the application, so the update path and the dashboard
 # button cannot drift apart. It imports nothing from Django, but it lives inside the project
 # directory, which is not on the path when this script is run from the repository root.
 sys.path.insert(0, str(PROJECT))
 from share_dinkum_app import backup  # noqa: E402
+
+MEDIA = backup.configured_media_root(PROJECT)
 
 
 def _call(command: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
@@ -146,7 +146,7 @@ def _backup() -> Path | None:
     database = backup.configured_database(PROJECT)
     if database is None:
         print("\n==> The database is not a SQLite file, so only media is backed up.")
-    result = backup.make_backup(database, MEDIA)
+    result = backup.make_backup(database, MEDIA, backup.configured_backup_root(PROJECT))
     if result is None:
         print("\n==> No data to back up yet, skipping.")
         return None

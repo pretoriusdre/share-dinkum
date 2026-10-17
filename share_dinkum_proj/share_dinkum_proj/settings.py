@@ -178,7 +178,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+from share_dinkum_app.backup import configured_media_root
+MEDIA_ROOT = str(configured_media_root(BASE_DIR))
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
 # Tests save files too. This keeps them out of MEDIA_ROOT above (see the runner).

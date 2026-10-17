@@ -7,4 +7,5 @@ class ShareTrackerAppConfig(AppConfig):
 
     def ready(self) -> None:
         import share_dinkum_app.signals  # noqa
+        import share_dinkum_app.system_checks  # noqa
 
