@@ -25,7 +25,7 @@ from django.urls import reverse
 from django.db import IntegrityError, transaction
 from djmoney.money import Money
 
-from share_dinkum_app.constants import DEFAULT_CURRENCY, CGT_DISCOUNT_RATE, CGT_DISCOUNT_THRESHOLD_DAYS
+from share_dinkum_app.constants import DEFAULT_CURRENCY
 from share_dinkum_app.models import (
     AppUser,
     FiscalYearType,
@@ -3284,22 +3284,6 @@ class AssignDefaultAccountSignalTests(TransactionTestCase):
 
 
 # =============================================================================
-# Constants
-# =============================================================================
-
-
-class ConstantsTests(TestCase):
-    """Sanity check for constants used in logic."""
-
-    def test_cgt_constants(self):
-        self.assertEqual(CGT_DISCOUNT_RATE, 0.5)
-        self.assertEqual(CGT_DISCOUNT_THRESHOLD_DAYS, 365)
-
-    def test_default_currency(self):
-        self.assertEqual(DEFAULT_CURRENCY, 'AUD')
-
-
-# =============================================================================
 # Loading: importing files into more than one portfolio
 # =============================================================================
 
@@ -5686,6 +5670,36 @@ class IndexationEligibilityTests(TransactionTestCase):
         self.assertTrue(cgt.is_indexation_eligible(
             self.account, date(2020, 1, 15), date(2030, 1, 15)))
 
+    def test_a_hold_under_twelve_months_is_not_indexed(self):
+        """s114-10(1): the anniversary does not qualify, the day after does."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2027, 9, 1)
+        for sold, expected in [
+            (date(2028, 8, 31), False),
+            (date(2028, 9, 1), False),
+            (date(2028, 9, 2), True),
+        ]:
+            self.assertEqual(
+                cgt.is_indexation_eligible(self.account, bought, sold), expected, sold)
+
+    def test_the_twelve_months_are_a_calendar_year_across_a_leap_day(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2028, 2, 29)
+        self.assertFalse(cgt.is_indexation_eligible(self.account, bought, date(2029, 2, 28)))
+        self.assertTrue(cgt.is_indexation_eligible(self.account, bought, date(2029, 3, 1)))
+
+    def test_a_pre_cutover_purchase_is_held_from_its_own_date(self):
+        """s114-10(9): the deemed reacquisition at the cutover does not restart the 12 months."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        bought = date(2027, 3, 1)
+        self.assertFalse(cgt.is_indexation_eligible(self.account, bought, date(2027, 8, 1)))
+        self.assertTrue(cgt.is_indexation_eligible(self.account, bought, date(2028, 3, 2)))
+
+    def test_residency_alone_does_not_test_the_holding_period(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        self.assertTrue(cgt.indexation.residency_allows_indexation(
+            self.account, date(2027, 9, 1), date(2027, 10, 1)))
+
     def test_a_super_fund_keeps_its_third_after_the_cutover(self):
         """s115-100(b) is unchanged, so a complying fund's gain is discounted, not indexed."""
         data = create_cutover_portfolio(suffix='smsf')
@@ -5700,8 +5714,8 @@ class IndexationEligibilityTests(TransactionTestCase):
 
 
 def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', suffix='',
-                             adjustments=()):
-    """A parcel bought well before the cutover and sold well after it.
+                             adjustments=(), buy_date=date(2020, 1, 15)):
+    """A parcel bought well before the cutover (or on `buy_date`) and sold well after it.
 
     Cost base 10,019.95, cutover value 15,000, net proceeds 19,990.05. `suffix` allows a
     second, independent portfolio in the same test. `adjustments` are
@@ -5715,7 +5729,7 @@ def create_cutover_portfolio(sell_date=date(2028, 8, 20), unit_value='15.00', su
     instrument = create_instrument(account=account, name='CUT')
 
     buy = Buy.objects.create(
-        account=account, instrument=instrument, date=date(2020, 1, 15),
+        account=account, instrument=instrument, date=buy_date,
         quantity=Decimal('1000'), unit_price=Money(Decimal('10.00'), 'AUD'),
         total_brokerage=Money(Decimal('19.95'), 'AUD'),
     )
@@ -5996,6 +6010,128 @@ class PostCutoverUndeclaredGapTests(TransactionTestCase):
         self.assertEqual(event.discount_percentage, Decimal('0'))
         self.assertIsNotNone(event.indexation_factor)
         self.assertIsNone(event.pending_reason)
+
+
+class IndexationTwelveMonthRuleTests(TransactionTestCase):
+    """s114-10(1): a hold under 12 months gets neither indexation nor a discount, so the
+    full gain is taxed. A final figure, whatever the residency history."""
+
+    def setUp(self):
+        load_test_cpi()
+        self.account = create_account()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        enable_2027_regime(self)
+        self.instrument = create_instrument(account=self.account, name='TWM')
+
+    def event_for(self, bought, sold):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=bought,
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=sold,
+                            quantity=Decimal('100'), unit_price=Money(Decimal('15'), 'AUD'),
+                            total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO')
+        return cgt.disposal_events(self.account)[0]
+
+    def test_a_short_hold_is_not_indexed_and_the_full_gain_is_taxed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 3, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.cost_base, Money(Decimal('1000'), 'AUD'))
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+        self.assertEqual(event.method, cgt.events.METHOD_OTHER)
+        self.assertIsNone(event.pending_reason)
+
+    def test_a_sale_on_the_anniversary_is_not_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 9, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+
+    def test_a_sale_the_day_after_the_anniversary_is_indexed(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 9, 2))
+        self.assertEqual(event.indexation_factor, Decimal('1.100'))
+        self.assertEqual(event.cost_base, Money(Decimal('1100.000'), 'AUD'))
+        self.assertEqual(event.discount_percentage, Decimal('0'))
+
+    def test_a_short_hold_with_an_undeclared_gap_is_not_flagged(self):
+        """Denied whatever the missing days were, unlike a long hold with the same gap."""
+        declare(self.account, 'RESIDENT', date(2010, 1, 1), date(2027, 12, 31))
+        declare(self.account, 'RESIDENT', date(2028, 2, 1))
+        event = self.event_for(date(2027, 9, 1), date(2028, 3, 1))
+        self.assertIsNone(event.indexation_factor)
+        self.assertIsNone(event.pending_reason)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+
+    def test_a_split_sale_held_under_twelve_months_taxes_the_full_gain(self):
+        data = create_cutover_portfolio(
+            suffix='short', buy_date=date(2027, 3, 1), sell_date=date(2027, 12, 1))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        # The deferred slice is measured from the original purchase (s114-10(9)).
+        self.assertEqual(deferred.method, cgt.events.METHOD_OTHER)
+        self.assertEqual(deferred.discount_percentage, Decimal('0'))
+        self.assertIsNone(post.indexation_factor)
+        self.assertEqual(post.cost_base, Money(Decimal('15000.00'), 'AUD'))
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+        self.assertIsNone(post.pending_reason)
+        self.assertEqual(
+            deferred.capital_gain.amount + post.capital_gain.amount,
+            Decimal('19990.05') - Decimal('10019.95'))
+
+    def test_a_split_sale_with_an_undeclared_gap_is_not_flagged_when_held_under_twelve_months(self):
+        data = create_cutover_portfolio(
+            suffix='shortgap', buy_date=date(2027, 3, 1), sell_date=date(2027, 12, 1))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1), date(2027, 10, 31))
+        declare(data['account'], 'RESIDENT', date(2027, 11, 8))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        self.assertIsNone(post.indexation_factor)
+        self.assertIsNone(post.pending_reason)
+        self.assertIsNone(deferred.pending_reason)
+
+    def test_a_split_sale_held_over_twelve_months_is_indexed_and_keeps_its_deferred_discount(self):
+        data = create_cutover_portfolio(
+            suffix='long', buy_date=date(2027, 3, 1), sell_date=date(2028, 3, 2))
+        declare(data['account'], 'RESIDENT', date(2010, 1, 1))
+        enable_2027_regime(self, data['account'])
+
+        deferred, post = cgt.disposal_events(data['account'])
+
+        self.assertEqual(deferred.method, cgt.events.METHOD_DISCOUNT)
+        self.assertEqual(post.indexation_factor, Decimal('1.050'))
+        self.assertEqual(post.discount_percentage, Decimal('0'))
+
+    def test_an_unrealised_short_hold_is_not_indexed_and_shows_no_discount_date_to_a_resident(self):
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2027, 9, 1),
+                           quantity=Decimal('100'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('0'), 'AUD'))
+        self.instrument.current_unit_price = Decimal('15.0000')
+        self.instrument.save()
+
+        [event] = cgt.unrealised_events(self.account, as_at=date(2028, 3, 1))
+
+        self.assertIsNone(event.indexation_factor)
+        self.assertEqual(event.capital_gain, Money(Decimal('500'), 'AUD'))
+        anniversary_after = date(2028, 9, 2)
+        # Indexed once 12 months pass, and indexation takes the discount (s115-20).
+        self.assertIsNone(cgt.discount_eligible_from(event, account=self.account))
+        # Without the account there is nothing to say the holder is resident.
+        self.assertEqual(cgt.discount_eligible_from(event), anniversary_after)
+
+        # A complying super fund is not indexed and keeps its third.
+        self.account.taxpayer_type = 'SMSF'
+        self.account.save()
+        [event] = cgt.unrealised_events(self.account, as_at=date(2028, 3, 1))
+        self.assertEqual(cgt.discount_eligible_from(event, account=self.account), anniversary_after)
 
 
 class StatementCurrencyTests(TransactionTestCase):
@@ -6604,10 +6740,12 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
         self.market = create_market(account=self.account)
         declare(self.account, 'RESIDENT', date(2010, 1, 1))
         load_test_cpi()
+        # 110.0 x 1.045, for a sale just over 12 months after the 2028-09-01 purchase.
+        CPIIndex.objects.create(quarter_start_date=date(2029, 7, 1), index_number=Decimal('114.95'))
         enable_2027_regime(self)
 
     def _sell_at(self, name, unit_price):
-        """Buy after the cutover for 10,000 and sell when CPI is up 4.5% (indexed: 10,450)."""
+        """Buy after the cutover for 10,000 and sell 12 months on when CPI is up 4.5% (indexed: 10,450)."""
         instrument = create_instrument(
             account=self.account, market=self.market, name=name)
         Buy.objects.create(
@@ -6616,7 +6754,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
             total_brokerage=Money(Decimal('0'), 'AUD'),
         )
         Sell.objects.create(
-            account=self.account, instrument=instrument, date=date(2029, 1, 15),
+            account=self.account, instrument=instrument, date=date(2029, 9, 2),
             quantity=Decimal('1000'), unit_price=Money(Decimal(unit_price), 'AUD'),
             total_brokerage=Money(Decimal('0'), 'AUD'), strategy='FIFO',
         )
@@ -6625,7 +6763,7 @@ class IndexationNeverDeepensALossTests(TransactionTestCase):
 
     def test_the_indexation_factor_is_what_this_rests_on(self):
         self.assertEqual(
-            cgt.indexation_factor(date(2028, 9, 1), date(2029, 1, 15)),
+            cgt.indexation_factor(date(2028, 9, 1), date(2029, 9, 2)),
             Decimal('1.045'))
 
     def test_a_loss_is_measured_against_the_unindexed_cost_base(self):

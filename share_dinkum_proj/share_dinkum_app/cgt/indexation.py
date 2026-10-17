@@ -2,6 +2,8 @@
 
 Where available, indexation is mandatory (s110-36(1A)) and removes the discount (s115-20).
 
+* s114-10(1): only an asset acquired at least 12 months before the event is indexed. A shorter
+  hold gets neither indexation nor a discount, so the full gain is taxed.
 * s114-25: no foreign or temporary residency from the later of 1 July 2027 and acquisition
   to the sale. Earlier residency is irrelevant.
 * s960-275(1B): indexed only from the quarter starting 1 July 2027.
@@ -27,10 +29,10 @@ from share_dinkum_app.constants import (
 )
 from share_dinkum_app import constants
 
-#: s960-275: the factor is worked out to three decimal places, rounding up at five.
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account
 
+#: s960-275: the factor is worked out to three decimal places, rounding up at five.
 _FACTOR_PRECISION = Decimal('0.001')
 
 #: The minimum factor, so deflation never shrinks a cost base (s960-275(4)).
@@ -70,13 +72,33 @@ def index_number(day: date) -> Decimal:
     return entry.index_number
 
 
+def held_twelve_months(acquisition_date: date | None, event_date: date | None) -> bool:
+    """The s114-10(1) test: acquired at least 12 months before the event.
+
+    The same wording as s115-25(1), so it is read the same way: a calendar comparison, with a
+    sale on the 12-month anniversary itself not qualifying. That is the conservative reading,
+    since it leaves the gain unindexed, and it is not confirmed against the text of s114-10(1).
+    Callers pass the original acquisition date: the deemed reacquisition at the cutover is
+    disregarded (s114-10(9)).
+    """
+    return discount.is_discount_eligible(acquisition_date, event_date)
+
+
 def is_indexation_eligible(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
                            declared: residency.Periods | None = None) -> bool:
+    """Whether a cost base is indexed: held 12 months (s114-10(1)) and resident throughout (s114-25)."""
+    return (held_twelve_months(acquisition_date, event_date)
+            and residency_allows_indexation(account, acquisition_date, event_date, declared=declared))
+
+
+def residency_allows_indexation(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
+                                declared: residency.Periods | None = None) -> bool:
     """The s114-25 test: resident every day from the later of 1 July 2027 and acquisition
     to the event.
 
     Any foreign, temporary or undeclared day denies it outright. False for events before
-    the cutover, with no residency declared, or for a company or super fund.
+    the cutover, with no residency declared, or for a company or super fund. It does not
+    test the holding period, which `held_twelve_months` does.
     """
     if event_date is None or event_date < CGT_CUTOVER_DATE:
         return False

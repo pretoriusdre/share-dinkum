@@ -54,7 +54,7 @@ class UnrealisedGainReport(BaseReport):
         for event in self.events:
             row = {name: getattr(event, name) for name in cgt.event_fields()}
             row['asset_category'] = CGTAssetCategory.label_for(row['asset_category'])
-            row['discount_eligible_from'] = cgt.discount_eligible_from(event)
+            row['discount_eligible_from'] = cgt.discount_eligible_from(event, account=self.account)
             cost = getattr(event.cost_base, 'amount', None)
             gain = getattr(event.capital_gain, 'amount', None)
             row['unrealised_gain_pct'] = float(gain / cost) if gain is not None and cost else None

@@ -17,13 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from share_dinkum_app.choices import TaxpayerType
 from share_dinkum_app.cgt import residency
-from share_dinkum_app.constants import CGT_DISCOUNT_RATE
 
-#: `constants.CGT_DISCOUNT_RATE` as a Decimal, to avoid float error.
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account
 
-FULL_DISCOUNT_RATE = Decimal(str(CGT_DISCOUNT_RATE))
+#: s115-100: an individual or trust discounts half.
+FULL_DISCOUNT_RATE = Decimal('0.5')
 
 #: s115-100(b): a complying superannuation entity discounts a third, not a half.
 SUPERANNUATION_DISCOUNT_RATE = Decimal(1) / Decimal(3)

@@ -23,10 +23,10 @@ from share_dinkum_app.choices import TaxpayerType, ValuationPurpose, ValuationSo
 from share_dinkum_app.cgt import discount as discount_module, residency
 from share_dinkum_app.constants import CGT_CUTOVER_DATE
 
-#: s112-155(2): deemed sale on 30 June 2027, reacquisition on 1 July 2027, at one valuation.
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account, Instrument, Parcel
 
+#: s112-155(2): deemed sale on 30 June 2027, reacquisition on 1 July 2027, at one valuation.
 DEEMED_SALE_DATE = CGT_CUTOVER_DATE - timedelta(days=1)
 DEEMED_REACQUISITION_DATE = CGT_CUTOVER_DATE
 

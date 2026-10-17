@@ -4,6 +4,17 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update`.
 
+## Unreleased
+
+### Fixed
+
+- **A parcel held under 12 months is no longer indexed from 1 July 2027.** Indexation applies only to
+  an asset acquired at least 12 months before the sale (s114-10(1)), but the report indexed any
+  parcel the holder had been resident for, so it understated the gain. A shorter hold now gets no
+  indexation and no discount, and the full gain is taxed. A sale on the 12-month anniversary counts as
+  under 12 months, as it already does for the discount. The Unrealised sheet's `discount_eligible_from`
+  is blank for a resident who will be indexed instead.
+
 ## 0.6.0 - 2026-10-17
 
 ### Added
