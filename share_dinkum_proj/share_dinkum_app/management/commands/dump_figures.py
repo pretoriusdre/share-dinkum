@@ -8,10 +8,10 @@ fetches stubbed out. See `figures_dump`.
 from pathlib import Path
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.core.management.base import BaseCommand, CommandParser
 
 from share_dinkum_app import figures_dump
-from share_dinkum_app.models import Account
+from share_dinkum_app.management.commands._portfolios import select_accounts
 
 
 class Command(BaseCommand):
@@ -22,13 +22,9 @@ class Command(BaseCommand):
         parser.add_argument('--out', required=True, help='Folder to write the CSVs to.')
 
     def handle(self, *args: Any, **options: Any) -> None:
-        accounts = list(Account.objects.filter(description=options['account']))
-        if not accounts:
-            raise CommandError(f'No portfolio named "{options["account"]}".')
-        if len(accounts) > 1:
-            raise CommandError(f'More than one portfolio is named "{options["account"]}".')
+        account = select_accounts(options['account']).get()
 
-        tables = figures_dump.dump(accounts[0])
+        tables = figures_dump.dump(account)
         written = figures_dump.write(tables, Path(options['out']))
         for path in written:
             self.stdout.write(f'  {path}  ({max(len(tables[path.stem]) - 1, 0)} rows)')

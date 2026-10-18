@@ -141,6 +141,27 @@ def holdings_differences(account: 'Account') -> int:
         return 1
 
 
+def cross_portfolio_links(account: 'Account') -> list[tuple[Any, str]]:
+    """Records of `account` that refer to another portfolio's record, as (record, field name).
+
+    Saving one is refused now (`BaseModel.foreign_portfolio_links`), but the admin used to offer
+    every portfolio's instruments, buys and sales. One query per such link, not one in all.
+    """
+    from django.apps import apps
+    from share_dinkum_app.models import BaseModel
+
+    found: list[tuple[Any, str]] = []
+    for model in apps.get_app_config('share_dinkum_app').get_models():
+        if not issubclass(model, BaseModel):
+            continue
+        for field in model.portfolio_links():
+            rows = model._default_manager.filter(
+                account=account, **{f'{field.name}__isnull': False}).exclude(
+                **{f'{field.name}__account': F('account')})
+            found.extend((row, field.name) for row in rows)
+    return found
+
+
 def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
@@ -151,6 +172,10 @@ def run(account: 'Account') -> list[Finding]:
     from share_dinkum_app.models import CostBaseAdjustment, Parcel
 
     checks: list[tuple[str, int, str, bool, bool]] = [
+        ('cross_portfolio_links', len(cross_portfolio_links(account)),
+         "record(s) that refer to another portfolio's instrument, trade or parcel, which must "
+         'be deleted and entered again in the right portfolio',
+         False, True),
         ('unallocated_sales', unallocated_sales(account).count(),
          'sale(s) with units allocated to no parcel, whose gain is in no report',
          False, True),

@@ -17,10 +17,11 @@ has gone below zero, and cost base adjustments spread unconverted or at a stand-
 
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.core.management.base import BaseCommand, CommandParser
 from django.db import transaction
 
 from share_dinkum_app import data_checks, recalculate
+from share_dinkum_app.management.commands._portfolios import select_accounts
 from share_dinkum_app.models import Account, CostBaseAdjustment
 
 
@@ -32,11 +33,7 @@ class Command(BaseCommand):
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args: Any, **options: Any) -> None:
-        accounts = Account.objects.all()
-        if options['account']:
-            accounts = accounts.filter(description=options['account'])
-            if not accounts.exists():
-                raise CommandError(f'No portfolio named "{options["account"]}".')
+        accounts = select_accounts(options['account'])
 
         for account in accounts:
             self._handle_account(account, options['dry_run'])
@@ -79,6 +76,16 @@ class Command(BaseCommand):
         self._list_for_a_person(account)
 
     def _list_for_a_person(self, account: Account) -> None:
+        crossed = data_checks.cross_portfolio_links(account)
+        if crossed:
+            self.stdout.write(self.style.WARNING(
+                "  Records that refer to another portfolio's records. Delete each one and enter "
+                "it again in the right portfolio:"))
+            for record, field_name in crossed:
+                self.stdout.write(
+                    f'    {record._meta.verbose_name} {record} ({field_name}: '
+                    f'{getattr(record, field_name)})')
+
         sales = list(data_checks.unallocated_sales(account))
         if sales:
             self.stdout.write(self.style.WARNING(

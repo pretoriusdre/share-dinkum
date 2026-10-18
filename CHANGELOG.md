@@ -4,6 +4,33 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
+## Unreleased
+
+### Added
+
+- **Choose the portfolio you are working on**, from the **Portfolio** list at the top of every page.
+  Only the first portfolio you created could be shown before, so a second one loaded later never
+  appeared on the dashboard. The dashboard, its reports and buttons, and the admin follow the
+  portfolio you choose, and it is remembered. A portfolio you add in the admin is chosen for you.
+
+### Changed
+
+- **The admin shows only the chosen portfolio.** Lists, record pages, actions and the pickers
+  (eg the instrument on a buy) used to show every portfolio's records together. A new record goes
+  into the chosen portfolio. Opening another portfolio's record says which portfolio it is in.
+- **Attached documents and exports need a login.** They are served only to a user who may see
+  their portfolio.
+- **Only a superuser can change the shared tables** (fiscal years, fiscal year types and CPI), which
+  every portfolio uses.
+
+### Fixed
+
+- **A record can no longer refer to another portfolio's record**, eg a buy of an instrument from
+  another portfolio, which the admin allowed. The dashboard warns about any such record already
+  stored, and `uv run dev repair_portfolio_data` lists them to delete and enter again.
+- **`--account` on the commands refuses a name that two users' portfolios share**, rather than
+  running on both. Give it as `owner/name`, or the portfolio's id.
+
 ## 0.6.1 - 2026-10-18
 
 ### Fixed

@@ -10583,3 +10583,234 @@ class ExchangeRateOnADayWithNoQuoteTests(TestCase):
 
         self.assertEqual(rate.quantize(Decimal('0.01')), Decimal('1.52'))
         mock_ticker.history.assert_called_once_with(start='2024-06-23', end='2024-07-01')
+
+
+# =============================================================================
+# Portfolio selection and scoping
+# =============================================================================
+
+
+def _buy(account, instrument, day=date(2024, 1, 5)):
+    return Buy.objects.create(
+        account=account, instrument=instrument, date=day, quantity=Decimal('100'),
+        unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+
+class PortfolioScopingTests(TransactionTestCase):
+    """The dashboard, the admin and new records follow the portfolio selected at the top of the
+    page. Only the first portfolio a user created used to be reachable."""
+
+    def setUp(self):
+        self.fy_type = create_fiscal_year_type()
+        self.owner = AppUser.objects.create_superuser('owner', 'owner@example.com', 'x')
+        self.a = Account.objects.create(
+            owner=self.owner, description='Portfolio A', currency='AUD', fiscal_year_type=self.fy_type)
+        self.b = Account.objects.create(
+            owner=self.owner, description='Portfolio B', currency='AUD', fiscal_year_type=self.fy_type)
+        self.instrument_a = create_instrument(account=self.a, name='BHP')
+        self.instrument_b = create_instrument(account=self.b, name='CBA')
+        self.buy_a = _buy(self.a, self.instrument_a)
+        self.buy_b = _buy(self.b, self.instrument_b)
+        self.owner.refresh_from_db()
+        self.client.force_login(self.owner)
+
+    def _request(self, user=None):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = user or self.owner
+        return request
+
+    def _switch(self, account, next_url=''):
+        return self.client.post(
+            reverse('admin:switch_portfolio'), {'account': str(account.pk), 'next': next_url})
+
+    def _listed_buys(self):
+        response = self.client.get(reverse('admin:share_dinkum_app_buy_changelist'))
+        return {buy.pk for buy in response.context['cl'].result_list}
+
+    def test_the_first_portfolio_is_selected_to_begin_with(self):
+        self.assertEqual(self.owner.visible_account, self.a)
+
+    def test_lists_show_only_the_selected_portfolio(self):
+        self.assertEqual(self._listed_buys(), {self.buy_a.pk})
+        self._switch(self.b)
+        self.assertEqual(self._listed_buys(), {self.buy_b.pk})
+
+    def test_the_dashboard_follows_the_selection(self):
+        self._switch(self.b)
+        response = self.client.get(reverse('admin:index'))
+        self.assertEqual(response.context['dashboard_account'], self.b)
+        self.assertContains(response, 'id="portfolio-select"')
+
+    def test_switching_is_saved_and_goes_back_to_the_list_not_the_old_record(self):
+        change_url = reverse('admin:share_dinkum_app_buy_change', args=[self.buy_a.pk])
+        response = self._switch(self.b, next_url=change_url)
+
+        self.assertRedirects(response, reverse('admin:share_dinkum_app_buy_changelist'),
+                             fetch_redirect_response=False)
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.default_account, self.b)
+
+    def test_a_next_address_on_another_site_is_ignored(self):
+        response = self._switch(self.b, next_url='https://example.com/')
+        self.assertRedirects(response, reverse('admin:dashboard'), fetch_redirect_response=False)
+
+    def test_another_portfolios_record_says_where_it_is(self):
+        url = reverse('admin:share_dinkum_app_buy_change', args=[self.buy_b.pk])
+        response = self.client.get(url, follow=True)
+
+        self.assertRedirects(response, reverse('admin:share_dinkum_app_buy_changelist'))
+        self.assertIn('Portfolio B', ' '.join(str(m) for m in response.context['messages']))
+
+    def test_the_instrument_picker_offers_only_the_selected_portfolio(self):
+        response = self.client.get(reverse('admin:autocomplete'), {
+            'app_label': 'share_dinkum_app', 'model_name': 'buy', 'field_name': 'instrument',
+            'term': ''})
+        ids = {result['id'] for result in json.loads(response.content)['results']}
+        self.assertEqual(ids, {str(self.instrument_a.pk)})
+
+    def test_a_new_record_goes_into_the_selected_portfolio_and_cannot_be_moved(self):
+        form = admin.site._registry[Buy].get_form(self._request())()
+        field = form.fields['account']
+        self.assertTrue(field.disabled)
+        self.assertEqual(field.initial, self.a)
+        self.assertEqual(list(field.queryset), [self.a])
+
+    def test_another_portfolios_instrument_is_refused_by_the_form(self):
+        form_class = admin.site._registry[Buy].get_form(self._request())
+        form = form_class(data={'instrument': str(self.instrument_b.pk)})
+        self.assertIn('instrument', form.errors)
+
+    def test_a_duplicate_instrument_name_is_a_form_error_not_a_crash(self):
+        form_class = admin.site._registry[Instrument].get_form(self._request())
+        form = form_class(data={
+            'name': 'BHP', 'description': 'Again', 'currency': 'AUD',
+            'market': str(self.instrument_a.market.pk)})
+        self.assertFalse(form.is_valid())
+        self.assertIn('already exists', str(form.errors))
+
+    def test_adding_a_portfolio_selects_it(self):
+        admin.site._registry[Account].response_add(
+            self._post_request(), Account.objects.create(
+                owner=self.owner, description='Portfolio C', currency='AUD',
+                fiscal_year_type=self.fy_type))
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.default_account.description, 'Portfolio C')
+
+    def _post_request(self):
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from django.test import RequestFactory
+        request = RequestFactory().post('/', {'_save': 'Save'})
+        request.user = self.owner
+        request.session = self.client.session
+        request._messages = FallbackStorage(request)
+        return request
+
+    def test_a_record_cannot_refer_to_another_portfolios_record(self):
+        with self.assertRaisesMessage(ValueError, 'belongs to another portfolio'):
+            _buy(self.a, self.instrument_b, day=date(2024, 2, 1))
+        self.assertFalse(Buy.objects.filter(account=self.a, instrument=self.instrument_b).exists())
+
+    def test_the_admin_check_says_the_same(self):
+        buy = Buy(account=self.a, instrument=self.instrument_b, date=date(2024, 2, 1),
+                  quantity=Decimal('1'), unit_price=Money(1, 'AUD'), total_brokerage=Money(0, 'AUD'))
+        with self.assertRaisesMessage(ValidationError, 'belongs to another portfolio'):
+            buy.clean()
+
+    def test_an_existing_link_across_portfolios_is_reported(self):
+        # Made as the admin used to allow; the instrument's market is not part of any holding.
+        Instrument.objects.filter(pk=self.instrument_a.pk).update(market=self.instrument_b.market)
+
+        finding = {f.key: f for f in data_checks.run(self.a)}['cross_portfolio_links']
+        self.assertEqual(finding.count, 1)
+        self.assertTrue(finding.affects_gains)
+        self.assertFalse(finding.repairable)
+
+        out = io.StringIO()
+        call_command('repair_portfolio_data', '--account', 'Portfolio A', '--dry-run', stdout=out)
+        self.assertIn("another portfolio's records", out.getvalue())
+        self.assertNotIn('cross_portfolio_links', {f.key for f in data_checks.run(self.b)})
+
+
+class PortfolioVisibilityTests(TransactionTestCase):
+    """A superuser may select any portfolio; anyone else only their own."""
+
+    def setUp(self):
+        fy_type = create_fiscal_year_type()
+        self.root = AppUser.objects.create_superuser('root', 'root@example.com', 'x')
+        self.staff = AppUser.objects.create_user('staff', password='x', is_staff=True)
+        self.mine = Account.objects.create(
+            owner=self.staff, description='Mine', currency='AUD', fiscal_year_type=fy_type)
+        self.theirs = Account.objects.create(
+            owner=self.root, description='Theirs', currency='AUD', fiscal_year_type=fy_type)
+        self.staff.refresh_from_db()
+        self.root.refresh_from_db()
+
+    def test_a_user_sees_their_own_and_a_superuser_every_portfolio(self):
+        self.assertEqual(list(self.staff.portfolios()), [self.mine])
+        self.assertEqual(set(self.root.portfolios()), {self.mine, self.theirs})
+
+    def test_a_selection_the_user_may_not_see_is_passed_over(self):
+        self.staff.default_account = self.theirs
+        self.staff.save()
+        self.assertEqual(self.staff.visible_account, self.mine)
+
+    def test_a_user_cannot_select_someone_elses_portfolio(self):
+        self.client.force_login(self.staff)
+        self.client.post(reverse('admin:switch_portfolio'), {'account': str(self.theirs.pk)})
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.default_account, self.mine)
+
+    def test_a_superuser_can_select_anyones(self):
+        self.client.force_login(self.root)
+        self.client.post(reverse('admin:switch_portfolio'), {'account': str(self.mine.pk)})
+        self.root.refresh_from_db()
+        self.assertEqual(self.root.default_account, self.mine)
+
+    def test_the_portfolio_list_shows_only_what_the_user_may_see(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = self.staff
+        self.assertEqual(list(admin.site._registry[Account].get_queryset(request)), [self.mine])
+
+    def test_only_a_superuser_changes_the_shared_tables(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = self.staff
+        for model in (CPIIndex, FiscalYear, FiscalYearType):
+            self.assertFalse(admin.site._registry[model].has_change_permission(request))
+        request.user = self.root
+        self.assertTrue(admin.site._registry[CPIIndex].has_change_permission(request))
+
+    def test_a_document_is_served_only_to_a_user_who_may_see_its_portfolio(self):
+        from django.conf import settings
+        for account in (self.mine, self.theirs):
+            folder = Path(settings.MEDIA_ROOT) / str(account.pk)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'note.txt').write_text('private', encoding='utf-8')
+            self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get(f'/media/{self.mine.pk}/note.txt').status_code, 200)
+        self.assertEqual(self.client.get(f'/media/{self.theirs.pk}/note.txt').status_code, 404)
+        self.assertEqual(
+            self.client.get(f'/media/{self.mine.pk}/../{self.theirs.pk}/note.txt').status_code, 404)
+
+        # Not staff, so not signed in to the admin: sent to the login page.
+        self.client.force_login(AppUser.objects.create_user('visitor', password='x'))
+        self.assertEqual(self.client.get(f'/media/{self.mine.pk}/note.txt').status_code, 302)
+
+    def test_a_portfolio_name_two_owners_use_must_say_whose(self):
+        from share_dinkum_app.management.commands._portfolios import select_accounts
+        fy_type = self.mine.fiscal_year_type
+        Account.objects.create(owner=self.staff, description='Shared name', currency='AUD',
+                               fiscal_year_type=fy_type)
+        root_one = Account.objects.create(owner=self.root, description='Shared name',
+                                          currency='AUD', fiscal_year_type=fy_type)
+
+        with self.assertRaisesMessage(CommandError, 'staff/Shared name, root/Shared name'):
+            select_accounts('Shared name')
+        self.assertEqual(list(select_accounts('root/Shared name')), [root_one])
+        self.assertEqual(list(select_accounts(str(root_one.pk))), [root_one])
+        with self.assertRaisesMessage(CommandError, 'No portfolio named'):
+            select_accounts('Nobody')

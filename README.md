@@ -37,6 +37,13 @@ update it.
 Each portfolio is an **[Account]**, with a base currency, a fiscal year configuration (Australian by
 default) and tax settings.
 
+With more than one portfolio, choose which one you are working on from the **Portfolio** list at the
+top of every page. The dashboard, its reports and buttons, every admin list, and new records all
+follow it, and a record can only refer to records of its own portfolio. A portfolio you add in the
+admin is selected for you. **Full backup** is the exception: it always covers every portfolio. A
+superuser (every install that signs in automatically) can select any portfolio; any other user only
+their own.
+
 A **[Market]**, eg ASX, contains **[Instrument]** objects, eg BHP or VDHG.
 
 Each purchase is a **[Buy]**: date, quantity, unit price and brokerage, plus an optional file and

@@ -1,10 +1,23 @@
 {% extends "admin/base.html" %}
 {% load i18n %}
 
-{% block title %}{% if title %}{{ title }} | {% endif %}{{ site_title|default:_('Django site admin') }}{% endblock %}
+{# Replaces the admin's own base_site.html (see TEMPLATES in settings), so it keeps its title and branding. #}
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{% if title %}{{ title }} | {% endif %}{{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    #nav-global ul { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 0; padding: 0; list-style: none; }
+    #nav-global form { display: flex; align-items: center; gap: 0.5rem; margin: 0; }
+    #nav-global select { max-width: 20rem; }
+</style>
+{% endblock %}
 
 {% block branding %}
-<h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
+<div id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></div>
+{% if user.is_anonymous %}
+  {% include "admin/color_theme_toggle.html" %}
+{% endif %}
 {% endblock %}
 
 {% block nav-global %}
@@ -12,6 +25,26 @@
 <nav id="nav-global" aria-label="{% trans 'Global navigation' %}">
     <ul>
         <li><a href="{% url 'admin:index' %}">{% trans 'Dashboard' %}</a></li>
+        {% if current_portfolio %}
+        <li id="portfolio-switcher">
+            {% if portfolio_choices|length > 1 %}
+            {# The dashboard, the admin lists and new records all follow the selected portfolio. #}
+            <form method="post" action="{% url 'admin:switch_portfolio' %}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <label for="portfolio-select">{% trans 'Portfolio' %}</label>
+                <select id="portfolio-select" name="account" onchange="this.form.submit()">
+                    {% for portfolio in portfolio_choices %}
+                    <option value="{{ portfolio.pk }}"{% if portfolio.pk == current_portfolio.pk %} selected{% endif %}>{{ portfolio.description }}{% if portfolio.owner_id != user.pk %} ({{ portfolio.owner.get_username }}){% endif %}</option>
+                    {% endfor %}
+                </select>
+                <noscript><button type="submit">{% trans 'Switch' %}</button></noscript>
+            </form>
+            {% else %}
+            {% trans 'Portfolio' %}: {{ current_portfolio.description }}
+            {% endif %}
+        </li>
+        {% endif %}
     </ul>
 </nav>
 {% endif %}

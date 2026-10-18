@@ -90,7 +90,9 @@ ROOT_URLCONF = 'share_dinkum_proj.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # Searched before the apps, so admin/base_site.html here replaces the admin's own: the
+        # admin's app config is listed first in INSTALLED_APPS, so its template would win.
+        'DIRS': [BASE_DIR / 'share_dinkum_app' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

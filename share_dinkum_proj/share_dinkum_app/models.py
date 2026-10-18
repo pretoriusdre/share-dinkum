@@ -80,15 +80,25 @@ class AppUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False,
         help_text='Unique identifier of the user.')
     default_account = models.ForeignKey('Account', on_delete=models.SET_NULL, null=True, blank=True,
-        help_text='The portfolio shown first after signing in.')
+        help_text='The selected portfolio, which the dashboard and the admin lists show. '
+                  'Changed with the portfolio selector at the top of the page.')
+
+    def portfolios(self) -> 'QuerySet[Account]':
+        """The portfolios this user may select: every one for a superuser, else their own."""
+        accounts = Account.objects.order_by('created_at')
+        return accounts if self.is_superuser else accounts.filter(owner=self)
 
     @property
     def visible_account(self) -> 'Account | None':
-        """The user's default portfolio, else the first one they created.
+        """The selected portfolio, else the first one the user owns, else the first they may see.
 
-        Shared by the dashboard and auto-login so both resolve the same portfolio.
+        Shared by the dashboard, the admin and auto-login so all resolve the same portfolio. A
+        selection the user may not see (another user's, after losing superuser) is passed over.
         """
-        return self.default_account or Account.objects.filter(owner=self).order_by('created_at').first()
+        visible = self.portfolios()
+        if self.default_account_id is not None and visible.filter(pk=self.default_account_id).exists():
+            return self.default_account
+        return visible.filter(owner=self).first() or visible.first()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         update_fields = kwargs.get('update_fields', None)
@@ -359,6 +369,10 @@ class Account(models.Model):
         super().save(*args, **kwargs)
 
 
+#: `BaseModel.portfolio_links` of each model.
+_PORTFOLIO_LINKS: dict[type[models.Model], list[Any]] = {}
+
+
 class BaseModel(models.Model):
     MODEL_DESCRIPTION = 'Base Model'
     class Meta:
@@ -469,8 +483,58 @@ class BaseModel(models.Model):
         # A row from an export arrives already handled, with what it derived beside it.
         return self._state.adding and not getattr(self, '_creation_handled', False)
 
+    @classmethod
+    def portfolio_links(cls) -> list[Any]:
+        """The foreign keys to another portfolio-scoped table, such as a buy's instrument.
+
+        Worked out once per model, since every save asks.
+        """
+        links = _PORTFOLIO_LINKS.get(cls)
+        if links is None:
+            links = _PORTFOLIO_LINKS[cls] = [
+                field for field in cls._meta.concrete_fields
+                if isinstance(field, models.ForeignKey) and field.name != 'account'
+                and field.related_model is not Account
+                and any(f.name == 'account' for f in field.related_model._meta.concrete_fields)
+            ]
+        return links
+
+    def foreign_portfolio_links(self, names: 'set[str] | None' = None) -> list[str]:
+        """Names of the fields linking this record to another portfolio's record; [] if none.
+
+        Every figure is worked out within one portfolio, so a buy must be of that portfolio's own
+        instrument. `names` limits the check to those fields.
+        """
+        if self.account_id is None:
+            return []
+        foreign = []
+        for field in self.portfolio_links():
+            if names is not None and field.name not in names and field.attname not in names:
+                continue
+            target_id = getattr(self, field.attname)
+            if target_id is None:
+                continue
+            cached = field.get_cached_value(self, default=None)
+            if cached is not None and cached.pk == target_id:
+                account_id = cached.account_id
+            else:
+                account_id = field.related_model._default_manager.filter(
+                    pk=target_id).values_list('account_id', flat=True).first()
+            if account_id is not None and account_id != self.account_id:
+                foreign.append(field.name)
+        return foreign
+
+    def _foreign_portfolio_message(self, foreign: list[str]) -> str:
+        names = ', '.join(str(cast(Any, self._meta.get_field(name)).verbose_name) for name in foreign)
+        return (
+            f'The {names} of this {self._meta.verbose_name} belongs to another portfolio. A record '
+            f'can only refer to records of its own portfolio, "{self.account.description}".')
+
     def clean(self) -> None:
         super().clean()
+        foreign = self.foreign_portfolio_links()
+        if foreign:
+            raise ValidationError(self._foreign_portfolio_message(foreign))
         changed = self.structural_changes()
         if changed:
             raise ValidationError(self._structural_change_message(changed))
@@ -482,6 +546,10 @@ class BaseModel(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         user = kwargs.pop('user', None)
         update_fields = kwargs.get('update_fields')
+        foreign = self.foreign_portfolio_links(
+            None if update_fields is None or 'account' in update_fields else set(update_fields))
+        if foreign:
+            raise ValueError(self._foreign_portfolio_message(foreign))
         if update_fields is None or set(update_fields) & set(self.structural_fields()):
             changed = self.structural_changes()
             if changed:

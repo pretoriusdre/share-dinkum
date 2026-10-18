@@ -16,17 +16,22 @@ from django.db import transaction
 from django.db.models import Model, ForeignKey, ManyToManyRel, QuerySet
 from django.http import HttpRequest, HttpResponseRedirect
 from django.template.response import TemplateResponse
+from django.urls import reverse
 from django.utils.text import capfirst
 
 import share_dinkum_app
 import share_dinkum_app.models
 
+from share_dinkum_app import portfolio_scope
 from share_dinkum_app.choices import LegalForm, LegalFormSource
 from share_dinkum_app.models import (
     AppUser,
     Account,
     CostBaseAdjustment,
+    CPIIndex,
     ExchangeRate,
+    FiscalYear,
+    FiscalYearType,
     Parcel,
     Instrument,
 )
@@ -39,7 +44,41 @@ logger = logging.getLogger(__name__)
 
 
 
-class BaseInline(admin.TabularInline):
+class PortfolioScopedMixin:
+    """Lists, opens and links only the selected portfolio's records, and puts new ones in it.
+
+    For a model with an `account` field; the shared tables (fiscal years, CPI) pass through.
+    Django's autocomplete asks the linked model's admin for its rows, so pickers follow too.
+    """
+
+    model: Any
+
+    def get_queryset(self, request: HttpRequest) -> QuerySet[Any]:
+        queryset = super().get_queryset(request)  # type: ignore[misc]
+        if not portfolio_scope.is_scoped(self.model):
+            return queryset
+        account = portfolio_scope.current_portfolio(request)
+        return queryset.filter(account=account) if account is not None else queryset.none()
+
+    def formfield_for_foreignkey(self, db_field: Any, request: HttpRequest, **kwargs: Any) -> Any:
+        account = portfolio_scope.current_portfolio(request)
+        related = db_field.related_model
+        if db_field.name == 'account' and related is Account and portfolio_scope.is_scoped(self.model):
+            # Shown, but not chosen: a record goes into the portfolio selected. Kept on the form
+            # (disabled, not excluded) so constraints including it, such as a unique instrument
+            # name, are checked by the form instead of failing as the row is written.
+            kwargs['queryset'] = (Account.objects.filter(pk=account.pk) if account is not None
+                                  else Account.objects.none())
+            kwargs['initial'] = account
+            kwargs['disabled'] = True
+        elif portfolio_scope.is_scoped(related):
+            # The form's own check, so another portfolio's id fails whatever the widget sent.
+            kwargs['queryset'] = related._default_manager.filter(
+                account=account) if account is not None else related._default_manager.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)  # type: ignore[misc]
+
+
+class BaseInline(PortfolioScopedMixin, admin.TabularInline):
     
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -61,9 +100,42 @@ class BaseInline(admin.TabularInline):
 
 
 
-class GenericModelAdmin(admin.ModelAdmin):
+class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
 
     search_fields = ('id',)
+
+    def _in_other_portfolio(self, request: HttpRequest, object_id: str) -> Account | None:
+        """The portfolio `object_id` is in, if the user may see it but it is not the selected one."""
+        if not portfolio_scope.is_scoped(self.model):
+            return None
+        try:
+            account_id = self.model._default_manager.filter(pk=object_id).values_list(
+                'account_id', flat=True).first()
+        except Exception:  # Not an id of this table at all.
+            return None
+        current = portfolio_scope.current_portfolio(request)
+        if account_id is None or (current is not None and account_id == current.pk):
+            return None
+        user: Any = request.user
+        found: Account | None = user.portfolios().filter(pk=account_id).first()
+        return found
+
+    def _other_portfolio_redirect(self, request: HttpRequest, object_id: str) -> HttpResponseRedirect | None:
+        """Back to the list, saying where the record is, if it is in another of the user's portfolios."""
+        elsewhere = self._in_other_portfolio(request, object_id)
+        if elsewhere is None:
+            return None
+        opts = self.model._meta
+        messages.warning(
+            request,
+            f'This {opts.verbose_name} is in the portfolio "{elsewhere.description}". Select it '
+            f'at the top of the page to open it.')
+        return HttpResponseRedirect(reverse(f'admin:{opts.app_label}_{opts.model_name}_changelist'))
+
+    def change_view(self, request: HttpRequest, object_id: str, form_url: str = '',
+                    extra_context: dict[str, Any] | None = None) -> Any:
+        return (self._other_portfolio_redirect(request, object_id)
+                or super().change_view(request, object_id, form_url, extra_context))
 
     def save_model(self, request: HttpRequest, obj: Any, form: Any, change: bool) -> None:
         super().save_model(request, obj, form, change)
@@ -83,8 +155,9 @@ class GenericModelAdmin(admin.ModelAdmin):
     def changeform_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
         return self._refusal_shown(request, super().changeform_view, *args, **kwargs)
 
-    def delete_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
-        return self._refusal_shown(request, super().delete_view, *args, **kwargs)
+    def delete_view(self, request: HttpRequest, object_id: str, *args: Any, **kwargs: Any) -> Any:
+        return (self._other_portfolio_redirect(request, object_id)
+                or self._refusal_shown(request, super().delete_view, object_id, *args, **kwargs))
 
     def changelist_view(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
         return self._refusal_shown(request, super().changelist_view, *args, **kwargs)
@@ -171,9 +244,10 @@ class GenericModelAdmin(admin.ModelAdmin):
 
 
     def get_autocomplete_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
+        # The account is fixed to the selected portfolio, so it needs no search box.
+        return [field.name for field in self.model._meta.get_fields() if isinstance(field, ForeignKey)
+                and not (field.name == 'account' and portfolio_scope.is_scoped(self.model))]
 
-        return [field.name for field in self.model._meta.get_fields() if isinstance(field, ForeignKey)]
-    
 
     def get_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:  # type: ignore[override]
         hidden_fields = ['created_at', 'created_by', 'updated_at', 'updated_by']
@@ -203,6 +277,8 @@ class GenericModelAdmin(admin.ModelAdmin):
 
     def get_list_display_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
         excluded_names = ['created_at', 'created_by', 'updated_at', 'updated_by', 'notes',  'unit_price_currency', 'total_brokerage_currency', '_creation_handled']
+        if portfolio_scope.is_scoped(self.model):
+            excluded_names.append('account')  # Every row is the selected portfolio's.
         fields = [
             field.name
             for field in self.model._meta.get_fields()
@@ -212,7 +288,7 @@ class GenericModelAdmin(admin.ModelAdmin):
         return fields
         
     def get_list_filter_fields(self, request: HttpRequest | None = None, obj: Any = None) -> list[str]:
-        filterable_fields = ['instrument', 'account']
+        filterable_fields = ['instrument'] if portfolio_scope.is_scoped(self.model) else ['instrument', 'account']
         return [field.name for field in self.model._meta.get_fields() if field.name in filterable_fields]
     
     def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
@@ -279,20 +355,8 @@ class GenericModelAdmin(admin.ModelAdmin):
                         #added_inlines.add(related_model)
 
         return inline_instances
-    
-    # Set the default account to the current user's default account if it exists.
-    def get_form(self, request: HttpRequest, obj: Any = None, change: bool = False, **kwargs: Any) -> Any:
-        form = super().get_form(request, obj, change=change, **kwargs)
-        current_user = request.user
-        if current_user and hasattr(current_user, 'default_account'):
-            try:
-                form.base_fields['account'].initial = current_user.default_account
-            except Exception:
-                pass
-            #if hasattr(form.base_fields, 'account'):
-                
-        return form
-    
+
+
 
 class GenericModelAdminWithoutAdd(GenericModelAdmin):
     """For records derived from others (parcels), which are neither added nor deleted by hand.
@@ -327,9 +391,51 @@ class AppUserAdmin(UserAdmin):
             (None, {'fields': ('default_account',)}),
     )  # type: ignore[operator]
 
+    def get_form(self, request: HttpRequest, obj: Any = None, change: bool = False, **kwargs: Any) -> Any:
+        """The selected portfolio can only be one the user being edited may see."""
+        form = super().get_form(request, obj, change=change, **kwargs)
+        if 'default_account' in form.base_fields:
+            field: Any = form.base_fields['default_account']
+            field.queryset = obj.portfolios() if obj is not None else Account.objects.none()
+        return form
+
 
 class AccountAdmin(admin.ModelAdmin):
+    """Portfolios: a superuser's are all of them, anyone else's their own."""
+
     search_fields = ('id', 'description')
+
+    def get_queryset(self, request: HttpRequest) -> QuerySet[Any]:
+        user: Any = request.user
+        portfolios: QuerySet[Any] = user.portfolios()
+        return portfolios
+
+    def formfield_for_foreignkey(self, db_field: Any, request: HttpRequest, **kwargs: Any) -> Any:
+        user: Any = getattr(request, 'user', None)
+        if db_field.name == 'owner' and user is not None:
+            kwargs['initial'] = user.pk
+            if not user.is_superuser:
+                kwargs['queryset'] = AppUser.objects.filter(pk=user.pk)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def response_add(self, request: HttpRequest, obj: Any, post_url_continue: str | None = None) -> Any:
+        """A portfolio added here is selected, so it is the one the dashboard and lists show."""
+        portfolio_scope.select(request, obj)
+        messages.info(request, f'Selected {obj.description}, so the dashboard and lists show it.')
+        return super().response_add(request, obj, post_url_continue)
+
+
+class SharedTableAdmin(GenericModelAdmin):
+    """Reference data every portfolio uses (fiscal years, CPI), so only a superuser changes it."""
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return request.user.is_superuser and super().has_add_permission(request)
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return request.user.is_superuser and super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return request.user.is_superuser and super().has_delete_permission(request, obj)
 
 
 class ExchangeRateAdmin(GenericModelAdmin):
@@ -503,6 +609,9 @@ model_admin_map: "dict[type[Model], type[admin.ModelAdmin[Any]]]" = {
     ExchangeRate : ExchangeRateAdmin,
     Instrument : InstrumentAdmin,
     AppUser : AppUserAdmin,
+    CPIIndex : SharedTableAdmin,
+    FiscalYear : SharedTableAdmin,
+    FiscalYearType : SharedTableAdmin,
     Group : HiddenModelAdmin,
     ContentType : HiddenModelAdmin,
     Parcel : GenericModelAdminWithoutAdd,
