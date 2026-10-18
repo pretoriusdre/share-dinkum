@@ -3950,6 +3950,27 @@ class MakeFakeDataCommandTests(FakeMarketMixin, TestCase):
         pd.testing.assert_frame_equal(first['Buy'], again['Buy'])
         self.assertFalse(first['Buy'].equals(other['Buy']))
 
+    def test_instruments_and_markets_it_does_not_use_are_left_out(self):
+        """The sample carried the whole ASX list, and loading it created all 2,352 instruments."""
+        output = self.folder / 'listed.xlsx'
+        make_import_template.build_template(output, {
+            'Market': pd.DataFrame([{'code': 'LSE'}, {'code': 'ASX', 'suffix': 'AX', 'country': 'AU'}]),
+            'Instrument': pd.DataFrame([
+                {'name': 'ZZZ', 'description': 'Unused', 'currency': 'GBP', 'market__code': 'LSE'},
+                {'name': 'BHP', 'description': 'Kept as listed', 'currency': 'AUD', 'market__code': 'ASX'},
+            ]),
+        })
+        call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache),
+                     force=True)
+        tables = excelinterface.get_all_tables_in_excel(output)
+
+        instruments = tables['Instrument'].set_index('name')
+        self.assertEqual(set(instruments.index), set(make_fake_data.HOLDINGS))
+        self.assertEqual(instruments.loc['BHP', 'description'], 'Kept as listed')
+        markets = tables['Market'].set_index('code')
+        self.assertEqual(set(markets.index), {'ASX', 'NASDAQ'})
+        self.assertEqual(markets.loc['ASX', 'country'], 'AU')
+
     def test_the_portfolio_holds_what_it_should(self):
         _, tables = self._run('fake.xlsx')
         buys, sells = tables['Buy'], tables['Sell']

@@ -17,6 +17,8 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
 
 ### Changed
 
+- **The sample data lists only the 10 instruments it holds**, not the whole ASX list (2,352), so
+  loading it no longer fills that portfolio's instrument list with ones it never trades.
 - **The admin shows only the chosen portfolio.** Lists, record pages, actions and the pickers
   (eg the instrument on a buy) used to show every portfolio's records together. A new record goes
   into the chosen portfolio. Opening another portfolio's record says which portfolio it is in.
