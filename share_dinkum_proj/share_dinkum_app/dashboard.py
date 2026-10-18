@@ -597,6 +597,8 @@ def prepare_dashboard_context(request: HttpRequest, context: dict[str, Any]) -> 
             'latest_version': update_check['latest_version'],
             'release_url': update_check['release_url'],
             'update_available': update_check['update_available'],
+            'project_url': version.PROJECT_URL,
+            'issues_url': version.ISSUES_URL,
         }
     )
 

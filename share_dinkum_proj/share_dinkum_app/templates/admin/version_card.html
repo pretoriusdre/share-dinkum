@@ -17,4 +17,10 @@
         {# Either there is no network, or no release has been published yet. Neither is worth an alarm. #}
         <p><a href="{{ release_url }}" target="_blank" rel="noopener">{% trans "Releases" %}</a></p>
     {% endif %}
+
+    <p class="version-links">
+        <a href="{{ project_url }}" target="_blank" rel="noopener">{% trans "Project page" %}</a>
+        &middot;
+        <a href="{{ issues_url }}" target="_blank" rel="noopener">{% trans "Report a problem" %}</a>
+    </p>
 </div>

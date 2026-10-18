@@ -12,6 +12,8 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   Only the first portfolio you created could be shown before, so a second one loaded later never
   appeared on the dashboard. The dashboard, its reports and buttons, and the admin follow the
   portfolio you choose, and it is remembered. A portfolio you add in the admin is chosen for you.
+- **The dashboard's Version card links to the project page**, and to its issues page for
+  reporting a problem.
 
 ### Changed
 

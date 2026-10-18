@@ -26,8 +26,10 @@ PYPROJECT_PATH = Path(__file__).resolve().parents[2] / 'pyproject.toml'
 # so no update is offered against it.
 UNKNOWN_VERSION = 'unknown'
 
+PROJECT_URL = 'https://github.com/pretoriusdre/share-dinkum'
+ISSUES_URL = f'{PROJECT_URL}/issues'
 RELEASES_API_URL = 'https://api.github.com/repos/pretoriusdre/share-dinkum/releases/latest'
-RELEASES_PAGE_URL = 'https://github.com/pretoriusdre/share-dinkum/releases'
+RELEASES_PAGE_URL = f'{PROJECT_URL}/releases'
 
 # Short enough that a slow or unreachable network is not noticeable on the page which triggers it.
 REQUEST_TIMEOUT_SECONDS = 3

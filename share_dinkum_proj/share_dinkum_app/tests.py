@@ -3690,6 +3690,17 @@ class VersionTests(TestCase):
 
         self.assertFalse(result['update_available'])
 
+    def test_the_card_links_to_the_project_even_when_up_to_date(self):
+        """Up to date, the card had no link at all."""
+        self.client.force_login(AppUser.objects.create_superuser('card', 'card@example.com', 'x'))
+        cached = {'latest_version': version.__version__, 'release_url': 'https://example.invalid/'}
+        with patch.object(version, 'read_cache', return_value=cached):
+            response = self.client.get(reverse('admin:index'))
+
+        self.assertContains(response, 'This is the latest version.')
+        self.assertContains(response, f'href="{version.PROJECT_URL}"')
+        self.assertContains(response, f'href="{version.ISSUES_URL}"')
+
 
 class ImportTemplateCommandTests(TestCase):
     """The generated import template loads without error."""
