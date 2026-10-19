@@ -1,2 +1,0 @@
-cd..
-call runback.bat

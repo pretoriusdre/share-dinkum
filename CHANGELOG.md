@@ -14,6 +14,24 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   portfolio you choose, and it is remembered. A portfolio you add in the admin is chosen for you.
 - **The dashboard's Version card links to the project page**, and to its issues page for
   reporting a problem.
+- **Check a folder of documents against a portfolio (experimental).** `uv run dev check_documents
+  --account NAME FOLDER` reads payment advices, contract notes, annual tax statements and broker exports, in the
+  folder and every folder inside it, and lists each payment, trade or statement line the portfolio
+  holds differently or lacks, with `--out` writing the findings to a workbook. Each document
+  layout is read by a parser written for it: so far CommSec contract notes (2009 to 2018) and
+  SelfWealth contract notes (2018 on). `uv run dev parser_prompt FILE` writes a complete brief for
+  adding one. A file no parser recognises can be read by an AI with
+  `--ai`: a local model through Ollama, or any hosted one, set up in `.env`. It is new and has
+  been tried on few layouts, so it says so each time it runs: check a finding against the document
+  before changing the portfolio.
+- **Redacted copies of your documents, made on your machine.** `uv run dev redact_documents
+  FOLDER --out COPIES` writes a text copy of each document with your own list of names, addresses
+  and other terms (`redact_terms.txt`) taken out, as well as TFNs, HINs, SRNs, bank details and
+  email addresses, and points at any line that still looks personal. Share the copies, never the
+  originals, when asking for a parser for your registry or broker.
+- **Scanned PDFs are read by OCR, on your machine.** Install it with `uv sync --inexact --extra
+  ocr`. Both commands then read a PDF that holds only a picture of the page, and the check's
+  workbook marks each one, since OCR can misread a figure.
 
 ### Changed
 
@@ -26,6 +44,12 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   their portfolio.
 - **Only a superuser can change the shared tables** (fiscal years, fiscal year types and CPI), which
   every portfolio uses.
+
+### Removed
+
+- **`migrate.bat`, `runback.bat` and `runtests.bat`.** Use `uv run dev` to start the app,
+  `uv run dev migrate` to apply database changes and `uv run dev test share_dinkum_app` to run the
+  tests. A shortcut to `runback.bat` should be pointed at `uv run dev` instead.
 
 ### Fixed
 
