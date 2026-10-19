@@ -12,6 +12,7 @@ dependencies = [
     "ipykernel>=6.29.5",
     "openpyxl>=3.1.5",
     "pandas>=2.3.0",
+    "pdfplumber>=0.11.10",
     "python-decouple>=3.8",
     "requests>=2.32.0",
     "tqdm>=4.67.1",
@@ -22,6 +23,16 @@ dependencies = [
 [project.scripts]
 dev = "devserver:main"
 update = "devserver:update_moved"
+
+[project.optional-dependencies]
+anthropic = [
+    "anthropic>=1.15.0",
+]
+ocr = [
+    "onnxruntime>=1.31.0",
+    "pypdfium2>=5.14.0",
+    "rapidocr>=3.10.0",
+]
 
 [build-system]
 requires = ["setuptools>=61"]

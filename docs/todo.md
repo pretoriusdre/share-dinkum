@@ -43,6 +43,17 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 - The all-years schedule (`build(account, None)`) counts a recorded carry-forward twice: as a
   prior-year loss, and again through its own year's events. Nothing calls it with `None` yet.
 
+#### Source documents
+
+- **Loading extracted events is not built** (`documents/`). When it is, round each per-unit figure
+  to its field's decimal places before writing the import template, or the loader refuses the row.
+  A rate printed in cents to 5 or 6 places, as NDQ's distribution advices do (`90.122396 cents`),
+  comes out to 7 or 8 places in dollars, and the per-share fields hold 6. Rounding to 6 costs under
+  half a cent per 10,000 units.
+- **`Trade.unit_price` holds 4 decimal places**, but contract notes print the average price to 6
+  (CommSec `1.234567`), so a cost base can be out by up to half of 0.0001 times the units.
+  Widening it to 6 (with `max_digits` 21) is a migration that changes no stored value.
+
 #### Robustness
 
 - Loading an old export into a live portfolio merges rather than replaces, reactivating
@@ -63,6 +74,23 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
 - Phase 3 step 6 of the holdings refactor: delete the creation signals, `_creation_handled` logic,
   `STRUCTURAL_FIELDS` for buys, most of `chronology_problem`, the repair helpers and `_save_lock`,
   once the replay writer has been in use for a while. `HOLDINGS_WRITER=signals` goes with them.
+
+#### Refactoring
+
+- `dashboard.py: prepare_dashboard_context` is 424 lines. Split it into one builder per dashboard
+  section, each returning its own context dict.
+- `models.py` is 3,100 lines and holds price and exchange-rate fetching (`update_price_history`,
+  `update_exchange_rate_history`). Move the fetching into a service module.
+- `excelinterface.py: add_table` (171 lines) and `loading.py` (`prepare_table`, `load_rows`, about
+  90 lines each) do several jobs. Separate reading, validating and writing into smaller steps.
+- `signals.py` has 24 receivers, and much of the business logic runs inside them. Finish moving the
+  holdings work to explicit calls (`HOLDINGS_WRITER`) rather than adding more receivers.
+- Long CGT and income functions: `cgt/schedule.py: _warnings` (161 lines), `income.py: build`
+  (129), and `cgt/events.py` helpers of about 90 lines each. Refactor only with `FiguresDumpTests`
+  in place, and leave the tax rules unchanged.
+- `tests.py` is 11,700 lines in one file. Split it by module (cgt, holdings, loading, documents,
+  dashboard).
+- 28 broad `except Exception` blocks outside the tests. Narrow each to the exceptions it can raise.
 
 #### Performance
 

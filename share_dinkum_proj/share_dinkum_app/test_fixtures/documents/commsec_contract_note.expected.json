@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Sell",
+      "reference": "70000001",
+      "stated_total": "18044.20",
+      "row": {
+        "instrument__name": "BHP",
+        "date": "2017-03-15",
+        "quantity": "400",
+        "unit_price": "45.110500",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "29.95",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

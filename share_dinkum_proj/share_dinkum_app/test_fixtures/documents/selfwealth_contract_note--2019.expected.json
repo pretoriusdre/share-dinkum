@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Buy",
+      "reference": "T20190701000002-1",
+      "stated_total": "4689.00",
+      "row": {
+        "instrument__name": "CBA",
+        "date": "2019-07-01",
+        "quantity": "60",
+        "unit_price": "78.150000",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "9.50",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

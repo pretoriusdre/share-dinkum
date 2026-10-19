@@ -1,0 +1,43 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+SELL
+Address - Locked Bag 22 Australia Square NSW 1215 TAX INVOICE ORIGINAL
+Telephone - 13 15 19
+Facsimile - 1300 131 519 CONFIRMATION
+Email - redacted@example.com
+Internet - commsec.com.au
+Please retain for taxation purposes
+Trading, Clearing and Settlement of this transaction is undertaken by
+Commonwealth Securities Limited.
+MR REDACTED NAME
+REDACTED ADDRESS ST
+REDACTED SUBURB NSW REDACTED POSTCODE
+WE HAVE SOLD THE FOLLOWING SECURITIES FOR YOU Ex Dividend
+COMPANY BHP GROUP LIMITED
+BHP
+SECURITY ORDINARY FULLY PAID
+DATE: 15/03/2017
+UNITS AT PRICE
+AS AT DATE: 15/03/2017
+CONFIRMATION NO: 70000001 210 45.120000
+ORDER NO: N90000002 190 45.100000
+ACCOUNT NO: 00000000
+TOTAL UNITS: 400 AVERAGE PRICE: 45.110500
+CONSIDERATION (AUD): $18,044.20
+BROKERAGE & COSTS INCL GST: $29.95 PID 1402 HIN REDACTED HIN
+(may include printed confirmation postal fee) ORDER COMPLETED
+APPLICATION MONEY: $0.00
+CONTRACT COMMENTS:
+NET PROCEEDS: $18,014.25
+12345678 REDACTED PHONE
+TOTAL GST: $2.72
+SETTLEMENT DATE: 17/03/2017
+PAYMENT METHOD - DIRECT CREDIT TO NOMINATED
+SETTLEMENT A/C ON SETTLEMENT DAY. FUNDS AVAILABLE
+FOLLOWING DAY.
+If not already provided, Security Document and/or Holder Information to be provided by 17/03/2017
+1. This Confirmation Contract Note is issued by Commonwealth Securities Limited and is issued subject to:
+(a) The current General Conditions of Trade of Commonwealth Securities Limited ("CommSec");
+Commonwealth Securities Limited ABN 60 067 254 399, AFSL 238814 is a wholly owned, but non-guaranteed subsidiary of the Commonwealth Bank of Australia ABN 48 123 123
+124 and a Participant of the ASX Group and Chi-X Australia.
+Your order may have been executed as multiple market transactions across multiple trade execution venues in accordance with our Best Execution policy. This Confirmation
+specifies the volume weighted average price for those market transactions.

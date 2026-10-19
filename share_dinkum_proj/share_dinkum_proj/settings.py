@@ -201,6 +201,17 @@ HOLDINGS_WRITER = config('HOLDINGS_WRITER', default='replay')
 # See share_dinkum_app/clock.py.
 REPORTING_DATE = os.environ.get('REPORTING_DATE') or None
 
+# The AI that reads a document no parser recognises, for `check_documents --ai`. Off unless a
+# provider is named: 'openai_compatible' (OpenAI, most hosted vendors, and local servers such as
+# Ollama at http://localhost:11434/v1) or 'anthropic' (needs `uv sync --extra anthropic`).
+# See share_dinkum_app/documents/ai/.
+DOCUMENT_AI_PROVIDER = config('DOCUMENT_AI_PROVIDER', default='none')
+DOCUMENT_AI_MODEL = config('DOCUMENT_AI_MODEL', default='')
+DOCUMENT_AI_BASE_URL = config('DOCUMENT_AI_BASE_URL', default='')
+DOCUMENT_AI_API_KEY = config('DOCUMENT_AI_API_KEY', default='')
+# Replies are kept here, so a document is sent once per model.
+DOCUMENT_AI_CACHE = BASE_DIR / 'document_ai_cache'
+
 
 # Django's default is 1000, which a change page here passes without trying. The admin
 # builds an inline for every related model, so an instrument held for a decade arrives with

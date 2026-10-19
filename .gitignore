@@ -4,13 +4,13 @@ backups
 notes.txt
 share_dinkum_proj/media/*
 share_dinkum_proj/static/*
+# Replies from the AI that reads documents: they hold figures from your own documents.
+share_dinkum_proj/document_ai_cache/
+# Your own list of personal terms to redact from documents.
+share_dinkum_proj/redact_terms.txt
 
 share_dinkum_proj/share_dinkum_app/logs
 share_dinkum_proj/share_dinkum_app/logs/*
-
-nuke.bat
-
-
 
 # Superseded copies, which may hold real data.
 *.old

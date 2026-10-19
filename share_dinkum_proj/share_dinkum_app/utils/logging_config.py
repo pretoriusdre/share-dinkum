@@ -27,6 +27,8 @@ def setup_logging(level: int = logging.INFO, log_dir: Path | None = None, log_fi
     # Quiet noisy loggers
     logging.getLogger("django.db.backends").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # pdfplumber's PDF reader warns about every flaw in a PDF's fonts, though it reads the text anyway.
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
     # During tests, expected API errors are mocked; suppress INFO/ERROR from yfinanceinterface
     if "test" in sys.argv:
