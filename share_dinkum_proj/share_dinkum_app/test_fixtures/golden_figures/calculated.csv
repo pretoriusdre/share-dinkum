@@ -4705,35 +4705,35 @@ Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_total_brokerage_conver
 Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_unallocated_quantity,0.0000
 Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_unit_brokerage_converted,0.094937 AUD
 Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_unit_price_converted,108.060000 AUD
-Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_unit_proceeds,107.9651 AUD
+Sell,Sell | MSFT | 2024-11-12 | 79.0000 | S005,calculated_unit_proceeds,107.965063 AUD
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_fiscal_year,FY2019/20
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_proceeds,3694.2700 AUD
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_total_brokerage_converted,9.5000 AUD
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_unallocated_quantity,0.0000
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_unit_brokerage_converted,0.150794 AUD
 Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_unit_price_converted,58.790000 AUD
-Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_unit_proceeds,58.6392 AUD
+Sell,Sell | TLS | 2019-10-15 | 63.0000 | S003,calculated_unit_proceeds,58.639206 AUD
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_fiscal_year,FY2018/19
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_proceeds,15851.5200 AUD
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_total_brokerage_converted,9.5000 AUD
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_unallocated_quantity,0.0000
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_unit_brokerage_converted,0.034296 AUD
 Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_unit_price_converted,57.260000 AUD
-Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_unit_proceeds,57.2257 AUD
+Sell,Sell | VAS | 2019-03-14 | 277.0000 | S001,calculated_unit_proceeds,57.225704 AUD
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_fiscal_year,FY2019/20
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_proceeds,10792.6500 AUD
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_total_brokerage_converted,9.5000 AUD
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_unallocated_quantity,0.0000
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_unit_brokerage_converted,0.051351 AUD
 Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_unit_price_converted,58.390000 AUD
-Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_unit_proceeds,58.3386 AUD
+Sell,Sell | VAS | 2019-08-20 | 185.0000 | S002,calculated_unit_proceeds,58.338649 AUD
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_fiscal_year,FY2021/22
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_proceeds,2400.6800 AUD
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_total_brokerage_converted,9.5000 AUD
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_unallocated_quantity,0.0000
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_unit_brokerage_converted,0.256757 AUD
 Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_unit_price_converted,65.140000 AUD
-Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_unit_proceeds,64.8832 AUD
+Sell,Sell | WES | 2022-03-22 | 37.0000 | S004,calculated_unit_proceeds,64.883243 AUD
 SellAllocation,Sell | MSFT | 2024-11-12 | 79.0000 | S005 | Buy | MSFT | 2021-10-05 | 13.0000 | B171 | 2024-11-12 |  | 1.0000 | 2024-11-12 | 1.0000,calculated_days_held,1134
 SellAllocation,Sell | MSFT | 2024-11-12 | 79.0000 | S005 | Buy | MSFT | 2021-10-05 | 13.0000 | B171 | 2024-11-12 |  | 1.0000 | 2024-11-12 | 1.0000,calculated_fiscal_year,FY2024/25
 SellAllocation,Sell | MSFT | 2024-11-12 | 79.0000 | S005 | Buy | MSFT | 2021-10-05 | 13.0000 | B171 | 2024-11-12 |  | 1.0000 | 2024-11-12 | 1.0000,calculated_sale_date,2024-11-12
