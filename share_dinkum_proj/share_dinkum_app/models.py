@@ -313,7 +313,7 @@ class Account(models.Model):
     def update_all_exchange_rate_history(self) -> None:
 
         convert_to = self.currency
-        # Get distinct currencies based on the currency of  unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY) in the Buy model
+        # Every currency the portfolio has bought in
         convert_from_currencies = (
             Buy.objects.filter(account=self)
             .values_list("unit_price_currency", flat=True)
@@ -1289,7 +1289,7 @@ class Trade(BaseModel):
     date = models.DateField(help_text='Date of the trade.')
     quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive],
         help_text='Number of units traded. Must be positive.')
-    unit_price = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
+    unit_price = MoneyField(max_digits=21, decimal_places=6, default_currency=DEFAULT_CURRENCY,
         help_text='Price per unit, in the currency named beside it.')
     total_brokerage = MoneyField(max_digits=19, decimal_places=4, default_currency=DEFAULT_CURRENCY,
         help_text='Brokerage and fees for the whole trade, not per unit.')
@@ -1511,7 +1511,7 @@ class Sell(Trade):
         proceeds = (self.quantity * self.unit_price_converted) - self.total_brokerage_converted
         return proceeds
     
-    calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
+    calculated_unit_proceeds = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text='Proceeds per unit, in the portfolio currency. Set by the app; do not '
                   'edit.')
     

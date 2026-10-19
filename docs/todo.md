@@ -50,9 +50,6 @@ Known gaps and work not yet done. What has been fixed is in `CHANGELOG.md`.
   A rate printed in cents to 5 or 6 places, as NDQ's distribution advices do (`90.122396 cents`),
   comes out to 7 or 8 places in dollars, and the per-share fields hold 6. Rounding to 6 costs under
   half a cent per 10,000 units.
-- **`Trade.unit_price` holds 4 decimal places**, but contract notes print the average price to 6
-  (CommSec `1.234567`), so a cost base can be out by up to half of 0.0001 times the units.
-  Widening it to 6 (with `max_digits` 21) is a migration that changes no stored value.
 
 #### Robustness
 

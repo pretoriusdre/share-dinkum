@@ -7770,6 +7770,41 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
         self.assertTrue((df['status'] == 'CHANGED').any())
 
 
+class SixPlaceUnitPriceTests(ImportWorkbookMixin, TransactionTestCase):
+    """A trade's unit price holds the six places a contract note prints its average price to."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        self.account = Account.objects.create(
+            owner=create_user(username='owner'), description='Portfolio', currency='AUD',
+            fiscal_year_type=create_fiscal_year_type())
+        self.build_workbook(self.workbook, buys=[{
+            'legacy_id': 'buy-1', 'instrument__name': 'BHP', 'date': date(2023, 7, 1),
+            'quantity': Decimal('20000'), 'unit_price': Decimal('1.234567'), 'unit_price_currency': 'AUD',
+            'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}])
+        loading.DataLoader(account=self.account, input_file=self.workbook)
+
+    def test_the_price_loads_and_reaches_the_cost_base(self):
+        buy = Buy.objects.get(account=self.account)
+        self.assertEqual(buy.unit_price.amount, Decimal('1.234567'))
+        # At four places the price was 1.2346, and the cost base 24,692.00.
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('24691.34'), 'AUD'))
+
+    def test_the_price_survives_an_export_and_restore(self):
+        export = DataExport.objects.create(account=self.account)
+        export.refresh_from_db()
+        path = Path(tempfile.mkdtemp()) / Path(export.file.path).name
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        loading.DataLoader(input_file=path)
+
+        self.assertEqual(Buy.objects.get().unit_price.amount, Decimal('1.234567'))
+
+
 class ExportButtonTests(TransactionTestCase):
     """The dashboard's Export portfolio button returns the file itself."""
 
@@ -11291,6 +11326,18 @@ class DocumentCheckTests(TestCase):
         self.assertEqual(result.status, document_check.Status.DIFFERS)
         self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
                          [('distribution_amount_per_share', Decimal('1.436789'), Decimal('1.436788'))])
+
+    def test_a_contract_note_price_is_compared_to_six_places(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('1.2346'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        [result] = self.check(self.event(
+            'Buy', instrument__name='VAS', date=date(2025, 7, 1), quantity=Decimal('1000'),
+            unit_price=Decimal('1.234567'), unit_price_currency='AUD',
+            total_brokerage=Decimal('10'), total_brokerage_currency='AUD')).events()
+        self.assertEqual(result.status, document_check.Status.DIFFERS)
+        self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
+                         [('unit_price', Decimal('1.234567'), Decimal('1.234600'))])
 
     def test_a_payment_the_portfolio_lacks(self):
         self.assertEqual(self.statuses(self.check(self.event(date=date(2025, 10, 16)))), ['Not in app'])

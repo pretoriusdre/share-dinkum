@@ -44,6 +44,12 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   their portfolio.
 - **Only a superuser can change the shared tables** (fiscal years, fiscal year types and CPI), which
   every portfolio uses.
+- **A buy's or sell's unit price holds six decimal places**, up from four, as contract notes print
+  the average price to six (eg `1.234567`). Four places could put a cost base out by up to half a
+  cent per 100 units. Prices already stored are unchanged; enter the full price from the contract
+  note to correct one. The sale's proceeds per unit are kept to six places as well.
+  `check_documents` now compares a trade's price to six places, so a price entered rounded shows
+  as differing from its contract note.
 
 ### Removed
 
