@@ -1,0 +1,16 @@
+{
+  "events": [
+    {
+      "model": "Distribution",
+      "reference": null,
+      "stated_total": "605.49",
+      "row": {
+        "instrument__name": "VGS",
+        "date": "2016-07-19",
+        "quantity": "850",
+        "distribution_amount_per_share": "0.71234567",
+        "distribution_amount_per_share_currency": "AUD"
+      }
+    }
+  ]
+}

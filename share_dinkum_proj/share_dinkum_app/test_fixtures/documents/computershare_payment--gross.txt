@@ -1,0 +1,38 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Update your information:
+: Online:
+www.investorcentre.com/contact
+*By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 7045 Sydney
+NSW 2001 Australia
+Enquiries:
+(within Australia) 1300 855 080
+(international) 61 3 9415 4000
+T 004321 0000000000000000000000000000000000000
+000
+Holder Identification Number (HIN)
+COH
+X0000000000
+ASX Code COH
+TFN/ABN Status Quoted
+Record Date 14 September 2015
+Payment Date 6 October 2015
+Direct Credit Reference No. 811122
+2015 Final Dividend
+Dear Shareholder
+The details below represent a final dividend of $1.05 per share for the year ended 30 June 2015. This dividend is paid on the shares registered
+in your name and entitled to participate as at record date of 14 September 2015. This dividend is 100% franked at the corporate tax rate of 30%.
+REDACTED NAME
+Company Secretary
+Class Description Amount per Security Number of Securities Gross Payment
+FULLY PAID ORDINARY $1.05 240 $252.00
+Net Payment (AUD$) $252.00
+Franking Credit $108.00
+Note: You should retain this statement to assist you in preparing your tax return.
+Your Payment Instruction
+COMMONWEALTH BANK OF AUSTRALIA Amount Deposited
+BSB: 000-000 Account number: 00000000 AUD$252.00
+If payment cannot be made to the above instruction, a cheque will
+be forwarded to your registered address.
+200002_DSS_Low/004321/004321/i

@@ -18,9 +18,13 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   --account NAME FOLDER` reads payment advices, contract notes, annual tax statements and broker exports, in the
   folder and every folder inside it, and lists each payment, trade or statement line the portfolio
   holds differently or lacks, with `--out` writing the findings to a workbook. Each document
-  layout is read by a parser written for it: so far CommSec contract notes (2009 to 2018) and
-  SelfWealth contract notes (2018 on). `uv run dev parser_prompt FILE` writes a complete brief for
-  adding one. A file no parser recognises can be read by an AI with
+  layout is read by a parser written for it: so far CommSec contract notes (2009 to 2018),
+  SelfWealth contract notes (2018 on), Computershare dividend advices (2013 on, including
+  US dollar ones), Vanguard ETF distribution advices (2015 on), Link Market Services
+  dividend and distribution advices (2012 on, and under its new name, MUFG Corporate Markets),
+  Advanced Share Registry dividend advices (2013 to 2021) and Boardroom dividend statements
+  (2012 on).
+  `uv run dev parser_prompt FILE` writes a complete brief for adding one. A file no parser recognises can be read by an AI with
   `--ai`: a local model through Ollama, or any hosted one, set up in `.env`. It is new and has
   been tried on few layouts, so it says so each time it runs: check a finding against the document
   before changing the portfolio.

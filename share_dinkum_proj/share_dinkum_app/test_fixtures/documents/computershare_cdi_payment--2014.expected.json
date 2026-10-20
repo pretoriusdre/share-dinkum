@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": "801234",
+      "stated_total": "22.50",
+      "row": {
+        "instrument__name": "RMD",
+        "date": "2014-03-20",
+        "quantity": "900",
+        "dividend_type": "FOREIGN",
+        "unfranked_amount_per_share": "0.025",
+        "unfranked_amount_per_share_currency": "USD",
+        "franked_amount_per_share": "0",
+        "franked_amount_per_share_currency": "USD",
+        "foreign_tax_credit": "3.38",
+        "foreign_tax_credit_currency": "USD"
+      }
+    }
+  ]
+}

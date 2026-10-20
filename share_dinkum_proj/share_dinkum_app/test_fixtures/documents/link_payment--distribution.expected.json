@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Distribution",
+      "reference": "1208364519",
+      "stated_total": "639.45",
+      "row": {
+        "instrument__name": "HPI",
+        "date": "2019-03-14",
+        "quantity": "7350",
+        "distribution_amount_per_share": "0.087",
+        "distribution_amount_per_share_currency": "AUD",
+        "total_withholding_tax": "52.00",
+        "total_withholding_tax_currency": "AUD"
+      }
+    }
+  ]
+}

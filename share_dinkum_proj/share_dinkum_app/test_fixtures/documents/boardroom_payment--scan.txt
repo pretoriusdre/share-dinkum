@@ -1,0 +1,43 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Metcash Limited
+ABN 32 112 073 480
+Metcash  All correspondence to:
+BoardRoom
+Smart Business Solutions
+Boardroom Pty Limited
+ABN 14 003 209 836
+GPO Box 3993
+049 52817  Sydney NSW 2001
+Tel: 1800 655 325 (within Australia)
+REDACTED NAME  Tel: +61 2 9290 9600 (outside Australia)
+REDACTED ADDRESS  Fax: +61 2 9279 0664
+www.boardroomlimited.com.au
+redacted@example.com
+Reference Number:  X0000000000
+TFN/ABN Status:  Not Quoted
+Subregister:  CHESS
+Record Date:  14-06-2011
+Payment Date:  11-07-2011
+Dividend Statement
+Payment Description:  Final dividend for the period ended 30-04-2011
+Security Class:  Fully Paid Ordinary Shares  ASX Code:  MTS
+Number of  Dlvldend  Withholding  Net Dlvidend  Franked  Unfranked  Franking
+shares held at  Rate per  Gross Dividend  Credited  Amount  Credit3
+Record Date  share  Tax1  Amount²
+3,000  12.5 cents  $375.00  $69.75  $305.25  $225.00  $150.00  $96.43
+1. This withholding tax applies to you if you are a:
+a) resident of Australia and your TFN or ABN has not been recorded by the share registry. TFN withholding tax is deducted at 46.5% of the
+gross unfranked portion of the dividend.
+b) non-resident of Australia. Non-resident withholding tax is deducted at 30% of the gross unfranked portion of the dividend. If you are a
+rosd   in o    y i ii o di    a in   o dsdliyy
+(generally 15%).
+2. This dividend is 60% franked.
+3. The franking credit has been calculated at the rate of 30%.
+Direct Credit Instruction
+The total net payment has been paid in accordance with your instructions as shown below:
+BSB  000-000  Amount Deposited
+Account No  00000000
+AUD$305.25
+Account Name  REDACTED NAME
+Please check the above details are correct and the payment has been credited to your account.
+Please retain this statement for taxation purposes

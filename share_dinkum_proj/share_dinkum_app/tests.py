@@ -11576,13 +11576,17 @@ class RedactionTests(SimpleTestCase):
     def test_holder_numbers_are_masked_however_they_are_printed(self):
         text = ('SIN/APN/SBN 1402 HIN 12345678\nHolder Number: I0098765432\nReference Number: S00012345678\n'
                 'Payment Reference Number: 001234\nACC: 12345678\nAcc No:  12345678  $1,000.00\n'
-                'Customer Ref No:98765432\nCONTRACT NOTE: 10203040')
+                'Customer Ref No:98765432\nCONTRACT NOTE: 10203040\njane@example.org')
         self.assertEqual(redaction.mask(text)[0], (
             'SIN/APN/SBN 1402 HIN X0000000000\nHolder Number: X0000000000\nReference Number: X0000000000\n'
             'Payment Reference Number: 001234\nACC: 00000000\nAcc No:  00000000  $1,000.00\n'
-            'Customer Ref No:00000000\nCONTRACT NOTE: 10203040'))
+            'Customer Ref No:00000000\nCONTRACT NOTE: 10203040\nredacted@example.com'))
         # Masking a masked text changes nothing, and counts nothing.
         self.assertEqual(redaction.mask(redaction.mask(text)[0])[1], 0)
+
+    def test_an_account_label_broken_by_a_space_is_still_masked(self):
+        self.assertEqual(redaction.mask('A ccount Number: 12345678\nAcc ount No. 87654321')[0],
+                         'A ccount Number: 00000000\nAcc ount No. 00000000')
 
     def test_identifiers_are_taken_out_of_file_names(self):
         self.assertEqual(redaction.redact_path(Path('NDQ') / 'PRD_1_20171231_X00012345678_BETA_NDQ.pdf', []),

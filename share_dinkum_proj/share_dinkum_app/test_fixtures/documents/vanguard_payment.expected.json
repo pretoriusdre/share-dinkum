@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "model": "Distribution",
+      "reference": null,
+      "stated_total": "215.44",
+      "row": {
+        "instrument__name": "VAE",
+        "date": "2025-04-17",
+        "quantity": "1000",
+        "distribution_amount_per_share": "0.21543876",
+        "distribution_amount_per_share_currency": "AUD"
+      }
+    },
+    {
+      "model": "Distribution",
+      "reference": null,
+      "stated_total": "824.69",
+      "row": {
+        "instrument__name": "VGS",
+        "date": "2025-04-17",
+        "quantity": "2000",
+        "distribution_amount_per_share": "0.41234567",
+        "distribution_amount_per_share_currency": "AUD",
+        "total_withholding_tax": "3.00",
+        "total_withholding_tax_currency": "AUD"
+      }
+    },
+    {
+      "model": "Distribution",
+      "reference": null,
+      "stated_total": "493.83",
+      "row": {
+        "instrument__name": "VAS",
+        "date": "2025-04-17",
+        "quantity": "500",
+        "distribution_amount_per_share": "0.98765432",
+        "distribution_amount_per_share_currency": "AUD"
+      }
+    }
+  ]
+}

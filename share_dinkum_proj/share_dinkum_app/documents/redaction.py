@@ -23,14 +23,16 @@ HOLDER_LABEL = (r'(?<!payment )\b(?:HIN|SRN|holder (?:identification )?number|se
 # (pattern, replacement): the identifiers a statement is known to carry. The label is kept. A number
 # already all zeros is left alone, so it is not counted twice.
 MASKS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+'), 'redacted@example.com'),
+    (re.compile(r'(?<![\w.+-])(?!redacted@example\.com)[\w.+-]+@[\w-]+(?:\.[\w-]+)+'), 'redacted@example.com'),
     (re.compile(r'(?i)((?:tax file number|\bTFN)\b[^\n\d]{0,30})\d{3}\s?\d{3}\s?\d{3}'), r'\g<1>000 000 000'),
     # With or without its letter and leading zeros: CommSec prints `HIN 12345678`.
     (re.compile(rf'(?i)({HOLDER_LABEL}\W{{0,5}})[A-Z]?(?!0+(?!\d))\d{{6,12}}(?!\d)'), r'\g<1>X0000000000'),
     # Anywhere, as in a file name such as `PRD_1_X0012345678_NDQ`.
     (re.compile(r'(?<![A-Za-z0-9])[XI](?!0+(?!\d))\d{7,11}(?!\d)'), 'X0000000000'),
     (re.compile(r'\b(?!000-000)\d{3}-\d{3}\b'), '000-000'),
-    (re.compile(r'(?i)((?:account\s*(?:number|no\.?)|\bacc(?:\s*no\.?)?\s*:|\bacc\s*no\.?)[^\n\d]{0,10})'
+    # A text layer can break the label with a space: Boardroom prints `A ccount Number:`.
+    (re.compile(r'(?i)((?:a\s?c\s?c\s?o\s?u\s?n\s?t\s*(?:n\s?u\s?m\s?b\s?e\s?r|no\.?)|\bacc(?:\s*no\.?)?\s*:|'
+                r'\bacc\s*no\.?)[^\n\d]{0,10})'
                 r'(?!0+(?!\d))\d[\d ]{4,}\d'), r'\g<1>00000000'),
     (re.compile(r'(?i)(customer\s*ref(?:erence)?\.?\s*(?:no|number)\.?\s*:?\s*)(?!0+(?!\d))\d{5,}'), r'\g<1>00000000'),
 ]

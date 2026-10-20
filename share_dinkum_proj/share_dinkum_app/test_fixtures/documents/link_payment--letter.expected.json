@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Distribution",
+      "reference": "001196305482",
+      "stated_total": "80.90",
+      "row": {
+        "instrument__name": "NDQ",
+        "date": "2017-01-19",
+        "quantity": "1960",
+        "distribution_amount_per_share": "0.04127305",
+        "distribution_amount_per_share_currency": "AUD",
+        "total_withholding_tax": "38.00",
+        "total_withholding_tax_currency": "AUD"
+      }
+    }
+  ]
+}
