@@ -12,24 +12,24 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   Only the first portfolio you created could be shown before, so a second one loaded later never
   appeared on the dashboard. The dashboard, its reports and buttons, and the admin follow the
   portfolio you choose, and it is remembered. A portfolio you add in the admin is chosen for you.
-- **The dashboard's Version card links to the project page**, and to its issues page for
-  reporting a problem.
+
 - **Check a folder of documents against a portfolio (experimental).** `uv run dev check_documents
-  --account NAME FOLDER` reads payment advices, contract notes, annual tax statements and broker exports, in the
-  folder and every folder inside it, and lists each payment, trade or statement line the portfolio
-  holds differently or lacks, with `--out` writing the findings to a workbook. Each document
-  layout is read by a parser written for it: so far CommSec contract notes (2009 to 2018),
-  SelfWealth contract notes (2018 on), Computershare dividend advices (2013 on, including
-  US dollar ones), Vanguard ETF distribution advices (2015 on), Link Market Services
-  dividend and distribution advices (2012 on, and under its new name, MUFG Corporate Markets),
-  Advanced Share Registry dividend advices (2013 to 2021), Boardroom dividend statements
-  (2012 on), and annual tax statements from Computershare for Vanguard's ETFs (2015 on) and
-  from Link Market Services and MUFG Corporate Markets (BetaShares, and trusts such as HPI,
-  2016 on), each read into the statement, its components and the cost base adjustment.
-  `uv run dev parser_prompt FILE` writes a complete brief for adding one. A file no parser recognises can be read by an AI with
-  `--ai`: a local model through Ollama, or any hosted one, set up in `.env`. It is new and has
-  been tried on few layouts, so it says so each time it runs: check a finding against the document
-  before changing the portfolio.
+  --account NAME FOLDER` lists each payment, trade or statement line the portfolio holds
+  differently or lacks; `--out` writes the findings to a workbook. Added deterministic parsers for:
+  - CommSec contract notes
+  - SelfWealth contract notes
+  - Computershare dividend advices, including dividend reinvestment advices
+  - Vanguard ETF distribution advices
+  - Link Market Services / MUFG Corporate Markets dividend and distribution advices
+  - Advanced Share Registry dividend advices
+  - Boardroom dividend statements
+  - Computershare annual tax statements (Vanguard ETFs)
+  - Link Market Services / MUFG Corporate Markets annual tax statements (BetaShares)
+
+  `uv run dev parser_prompt FILE` writes a brief for adding a parser. A file no parser
+  recognises can be read by an AI with `--ai` (Ollama locally, or a hosted model set up in
+  `.env`). Each document is redacted before it is sent, and a hosted AI is refused without a
+  `redact_terms.txt`. It is new, so check its findings against the document.
 - **Redacted copies of your documents, made on your machine.** `uv run dev redact_documents
   FOLDER --out COPIES` writes a text copy of each document with your own list of names, addresses
   and other terms (`redact_terms.txt`) taken out, as well as TFNs, HINs, SRNs, bank details and

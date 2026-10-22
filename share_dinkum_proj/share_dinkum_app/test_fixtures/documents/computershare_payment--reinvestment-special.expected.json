@@ -1,0 +1,34 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": null,
+      "stated_total": "795.00",
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-03-18",
+        "quantity": "5300",
+        "dividend_type": "LOCAL",
+        "unfranked_amount_per_share": "0",
+        "unfranked_amount_per_share_currency": "AUD",
+        "franked_amount_per_share": "0.15",
+        "franked_amount_per_share_currency": "AUD",
+        "corporate_tax_rate_percentage": "30"
+      }
+    },
+    {
+      "model": "Buy",
+      "reference": null,
+      "stated_total": "792.55",
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-03-18",
+        "quantity": "131",
+        "unit_price": "6.05",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "0",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

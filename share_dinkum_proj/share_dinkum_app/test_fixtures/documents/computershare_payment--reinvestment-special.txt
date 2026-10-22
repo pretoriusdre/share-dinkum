@@ -1,0 +1,38 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+ABN 56 004 147 120
+The issue of these DRP shares will be shown on your next CHESS Statement.
+CM1520_100003
+Need help?
+Contact Computershare Investor Services
+GPO Box 2975, Melbourne VIC 3001
+Phone (AUS) 1300 662 270 or +61 3 9415 4373
+Internet www.investorcentre.com/au/contact
+T 001113 000 AFI Your security holding
+REDACTED HIN ASX Code AFI
+Security class Ordinary shares
+MR REDACTED NAME
+Holder Number HIN WITHHELD
+REDACTED ADDRESS ST
+REDACTED SUBURB WA REDACTED POSTCODE TFN or ABN Quoted
+Record date 4 March 2019
+Payment date 18 March 2019
+Allotment date 18 March 2019
+You must keep this document for
+your tax records.
+Australian Foundation Investment Company Limited
+Interim and special dividend payment statement and advice of reinvestment
+Dividend type Number of shares Dividend rate Dividend paid Franked amount Franking credit
+Ordinary 5,300 X A$0.10 = A$530.00 A$530.00 A$227.14
+Special 5,300 X A$0.05 = A$265.00 A$265.00 A$113.57
+Total A$795.00 A$795.00 A$340.71
+These dividends were franked in Australia at 100% and the corporate tax rate used to determine the franking credit is 30%.
+No NZ imputation credits are applicable to this dividend.
+Dividend reinvestment
+Dividend amount: A$795.00
+Cash balance in your Dividend Reinvestment Plan (the Plan) account brought forward: A$1.40
+Amount available for reinvestment: A$796.40
+Less the amount applied to issue to you 131 shares at A$6.05 per share (including 2.5% discount): A$792.55
+Your cash balance carried forward in your Plan account: A$3.85
+Number of shares participating in the Plan: 5,300
+Number of shares allotted for the reinvestment of this dividend: 131
+100003_BC_/001113/001113

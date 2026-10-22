@@ -95,6 +95,12 @@ def parse(doc: Document) -> list[Extracted]:
   `total_withholding_tax` if any was taken.
 - A contract note → `Buy` or `Sell`. `date` is the trade date, not the settlement date.
   `total_brokerage` is brokerage, GST and every other fee on the trade added together.
+- A dividend reinvestment advice → the `Dividend`, then a `Buy` for the shares allotted: dated the
+  allotment date, at the issue price, with `total_brokerage` `0`, as the shares are issued for the
+  whole amount applied. An ordinary and a special dividend paid together on the same shares are
+  one `Dividend`, their rates added. Check the plan's cash account (brought forward plus the
+  dividend, less the amount applied, is the balance carried forward) and raise `ParseError` if it
+  does not add up.
 - An annual tax statement (AMMA, or a trust's annual taxation statement from before AMIT) → one
   `AttributionStatement`, then one `AttributionComponent` for each component the statement gives
   an amount other than nil for, in the order shown. A component is linked to the
