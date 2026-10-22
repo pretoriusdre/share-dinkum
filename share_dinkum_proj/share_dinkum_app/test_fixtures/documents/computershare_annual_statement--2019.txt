@@ -1,0 +1,114 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Contact Us:
+ Online:
+www-au.computershare.com/Investor/Contact
+By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 757 905
+(international) +61 3 9415 4813
+The following tax return items are valid for Australian resident individual unitholders only.
+PART A – SUMMARY OF 2019 TAX RETURN (SUPPLEMENTARY SECTION) ITEMS
+Item Tax Return Label Amount
+Share of net income from trusts, less net capital gains, foreign income and franked distributions 13U
+Other deductions relating to non-primary production income 13Y
+Franked distributions from trusts 13C
+Share of franking credits from franked dividends 13Q
+Share of credit for TFN amounts withheld 13R
+Share of credit for foreign resident withholding amounts 13A
+Share of credit for tax paid by trustee 13S
+Net capital gain 18A
+Total current year capital gains 18H
+Assessable foreign source income 20E
+Australian franking credits from a New Zealand company 20F
+Other net foreign source income 20M
+Foreign income tax offset 20O
+PART B – COMPONENTS OF ATTRIBUTION
+Item Cash Distribution Tax Paid/Offsets Attribution
+Australian Income
+Unfranked distributions
+Unfranked CFI distributions
+Interest - subject to non resident WHT
+Interest - not subject to non resident WHT
+Other income
+Non primary production income
+Franked distributions
+Capital Gains
+Discounted capital gains TAP
+Discounted capital gains NTAP
+Capital gains – other method TAP
+Capital gains – other method NTAP
+Net capital gain
+AMIT CGT gross up amount
+Other capital gains distribution
+Total current year capital gains
+Foreign Income
+Assessable foreign source income
+Other Non-assessable Amounts
+Non-assessable non-exempt amount
+Net exempt income
+Other non-attributable amounts
+Gross Amount
+AMIT cost base net amount - excess (Reduce cost base)
+AMIT cost base net amount - shortfall (Increase cost base)
+Less TFN amounts withheld
+Less non-resident withholding tax
+- Interest / dividend amounts withheld
+- Fund payment amounts withheld
+Less other expenses
+Net Cash Distribution
+PLEASE RETAIN THIS STATEMENT FOR INCOME TAX PURPOSES
+1V_10_904127
+T 562039 000 VAS
+X0000000000
+Holder Identification Number (HIN)
+MR REDACTED NAME
+REDACTED ADDRESS
+X0000000000
+REDACTED ADDRESS
+ATTRIBUTION MANAGED INVESTMENT TRUST MEMBER ANNUAL TAX STATEMENT FOR YEAR ENDED 30 JUNE 2019
+$40.00
+$0.00
+$500.00
+$200.00
+$0.00
+$0.00
+$0.00
+$10.00
+$20.00
+$30.00
+$0.00
+$30.00
+$3.00
+$8.00 $8.00
+$2.00 $2.00
+$5.00 $5.00
+$0.00 $0.00
+$27.00 $25.00
+$42.00 $40.00
+$520.00 $200.00 $500.00
+$0.00 $0.00
+$10.00 $10.00
+$0.00 $0.00
+$0.00 $0.00
+$10.00 $10.00
+$10.00
+$10.00
+$20.00 $20.00
+$27.00 $3.00 $30.00
+$0.00 $0.00
+$0.00
+$1.00
+$610.00 $590.00
+$223.00
+$0.00
+$0.00
+$0.00
+$0.00
+$0.00
+$610.00
+If you are a complying Superannuation Fund, your net capital gain is $6.67
+If you are a company or a non complying Superannuation Fund, your net capital gain is $20.00
+197COST_EMA_4/562039/310856

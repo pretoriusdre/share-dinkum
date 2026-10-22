@@ -1,0 +1,129 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South, NSW, 1235
+Telephone: +61 1300 420 094
+ASX Code: NDQ
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+ARSN 169 907 564
+Part A: Your details
+050 739162
+Date: 31 July 2021
+MR REDACTED NAME Reference No.: X0000000000
+REDACTED ADDRESS
+REDACTED ADDRESS
+BETASHARES NASDAQ 100 ETF
+Attribution Managed Investment Trust Member Annual Statement
+for the year ended 30 June 2021
+Part B: Summary of 2021 tax return (supplementary section) items for a resident individual
+Non Australian residents should seek independent Australian tax advice.
+Tax return (supplementary section) Amount Tax return label
+Share of net income from trusts, less net capital gains, foreign income $0.00 13U
+and franked distributions
+Franked distribution from trusts $0.00 13C
+Other deductions relating to non-primary production income $0.00 13Y
+Share of franking credits from franked dividends $0.00 13Q
+Share of credit for foreign resident withholding amounts (excluding $0.00 13A
+capital gains)
+Share of credit for tax amounts withheld $0.00 13R
+Net capital gain $500.00 18A
+Total current year capital gains $1,000.00 18H
+Credit for foreign resident capital gains withholding amounts $0.00 18X
+Assessable foreign source income $100.00 20E
+Other net foreign source income $100.00 20M
+Australian franking credits from a New Zealand franking company $0.00 20F
+Foreign income tax offset * $15.00 20O
+Early stage venture capital limited partnership: current year tax offset $0.00 T7K
+Early stage investor: current year tax offset $0.00 T8L
+Other refundable tax offsets: Exploration credits $0.00 T9P
+*To work out your foreign income tax offset (FITO) entitlement, see 20 Foreign source income and foreign assets or property or the Guide to
+foreign tax offset rules 2021.
+Part B: Capital gains tax information – Additional information for item 18
+Amount
+Capital gains - discounted method $1,000.00 (gross amount)
+Capital gains - indexation method $0.00
+Capital gains - other method $0.00
+Total current year capital gains $1,000.00
+Page 1 of 3 125842000016
+*730415L*
+
+Part C: Components of attribution
+Cash Tax paid or Attributable
+distributions Franking credit amount
+(grossed up)
+Australian Income
+Dividends - unfranked amount declared to be CFI $0.00 $0.00
+Dividends - unfranked amount not declared to be CFI $0.00 $0.00
+Dividends - less LIC capital gain deduction $0.00 $0.00
+Interest (subject to non - resident withholding tax) $0.00 $0.00
+Interest (not subject to non - resident withholding tax) $0.00 $0.00
+Other assessable Australian income $0.00 $0.00
+Clean Building MIT Income $0.00 $0.00
+Less other allowable trust deductions $0.00 $0.00
+NCMI – Non-primary production $0.00 $0.00
+Excluded from NCMI – Non-primary production $0.00 $0.00
+Non-primary production income $0.00 $0.00
+Dividends - Franked amount $0.00 $0.00 $0.00
+Capital Gains
+Capital gains - discounted method - TAP $0.00 $0.00
+Capital gains - discounted method - TAP - NCMI $0.00 $0.00
+Capital gains - discounted method - TAP - Excluded from NCMI $0.00 $0.00
+Capital gains - discounted method - NTAP $500.00 $0.00 $500.00
+Capital gains - discounted method - NTAP - NCMI $0.00 $0.00
+Capital gains - discounted method - NTAP - Excluded from NCMI $0.00 $0.00
+Capital gains - discounted method - TAP - Clean building MIT $0.00 $0.00
+Capital gains - indexation method - TAP $0.00 $0.00
+Capital gains - indexation method - NTAP $0.00 $0.00
+Capital gains - other method - TAP $0.00 $0.00
+Capital gains - other method - TAP - NCMI $0.00 $0.00
+Capital gains - other method - TAP - Excluded from NCMI $0.00 $0.00
+Capital gains - other method - NTAP $0.00 $0.00 $0.00
+Capital gains - other method - NTAP - NCMI $0.00 $0.00
+Capital gains - other method - NTAP - Excluded from NCMI $0.00 $0.00
+Capital gains - other method - TAP - Clean building MIT $0.00 $0.00
+Net capital gains $500.00 $500.00
+AMIT CGT gross up amount $500.00
+Other capital gains distribution $500.00
+Total current year capital gains $1,000.00 $0.00 $1,000.00
+Foreign Income
+Other net foreign source income $85.00 $15.00 $100.00
+Australian franking credit from a New Zealand franking company $0.00 $0.00
+CFC income $0.00 $0.00
+Transferor trust income $0.00 $0.00
+Total foreign income $85.00 $15.00 $100.00
+Other Non-assessable Amounts
+Net exempt income $0.00
+Non-assessable non-exempt amount $0.00
+Other non-attributable amounts $0.00
+Total Non-assessable amounts $0.00
+Gross Cash Distribution $1,085.00
+Other deductions from Distribution
+Less: Other Withholding Tax $0.00
+Less: TFN/ABN Withholding Tax $0.00
+Net Cash Distribution $1,085.00
+Under the AMIT tax rules, a fund may distribute a cash amount that is different to the taxable income attributed by the fund to investors. This can give rise to a cost base adjustment
+disclosed in Part E of this statement.
+Page 2 of 3
+
+Part D : Tax offsets
+Tax offsets Amount
+Franking credit tax offset $0.00
+Foreign income tax offsets - excluding capital gains $15.00
+Foreign income tax offsets - foreign capital gains (discounted method) $0.00
+Foreign income tax offsets - foreign capital gains (other method) $0.00
+Australian franking credits from a New Zealand franking company $0.00
+Total tax offsets $15.00
+Part E: Attribution Managed Investment Trust ('AMIT') cost base adjustments
+AMIT cost base net increase amount $0.00
+AMIT cost base net decrease amount $0.00
+Part F: Payment summary information for the year ended 30 June 2021
+Attribution/Amount Tax paid
+Total fund payment $0.00 $0.00
+Interest Income $0.00 $0.00
+Unfranked dividend not declared to be CFI $0.00 $0.00
+Tax Guide
+The Annual Tax Guide contains general information about how to use this statement when you complete your 2021 Tax Return.
+To view or change your Unitholder details, please visit our investor website at www.linkmarketservices.com.au
+Page 3 of 3
+*20Q730415M*

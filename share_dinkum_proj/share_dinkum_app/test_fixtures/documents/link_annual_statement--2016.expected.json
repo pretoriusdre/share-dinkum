@@ -1,0 +1,54 @@
+{
+  "events": [
+    {
+      "model": "AttributionStatement",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "HPI",
+        "financial_year_end_date": "2016-06-30"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "INTEREST",
+        "amount": "1.50",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_INCOME",
+        "amount": "498.50",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "TAX_DEFERRED",
+        "amount": "300.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "CostBaseAdjustment",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "HPI",
+        "financial_year_end_date": "2016-06-30",
+        "cost_base_increase": "-300.00",
+        "cost_base_increase_currency": "AUD"
+      }
+    }
+  ]
+}

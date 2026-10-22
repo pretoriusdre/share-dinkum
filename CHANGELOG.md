@@ -22,8 +22,10 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   SelfWealth contract notes (2018 on), Computershare dividend advices (2013 on, including
   US dollar ones), Vanguard ETF distribution advices (2015 on), Link Market Services
   dividend and distribution advices (2012 on, and under its new name, MUFG Corporate Markets),
-  Advanced Share Registry dividend advices (2013 to 2021) and Boardroom dividend statements
-  (2012 on).
+  Advanced Share Registry dividend advices (2013 to 2021), Boardroom dividend statements
+  (2012 on), and annual tax statements from Computershare for Vanguard's ETFs (2015 on) and
+  from Link Market Services and MUFG Corporate Markets (BetaShares, and trusts such as HPI,
+  2016 on), each read into the statement, its components and the cost base adjustment.
   `uv run dev parser_prompt FILE` writes a complete brief for adding one. A file no parser recognises can be read by an AI with
   `--ai`: a local model through Ollama, or any hosted one, set up in `.env`. It is new and has
   been tried on few layouts, so it says so each time it runs: check a finding against the document

@@ -1,0 +1,104 @@
+{
+  "events": [
+    {
+      "model": "AttributionStatement",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "NDQ",
+        "financial_year_end_date": "2023-06-30"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_INCOME_TAX_OFFSET",
+        "amount": "60.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_INCOME",
+        "amount": "0.50",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "DISCOUNTED_NTAP",
+        "amount": "1000.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NET_CAPITAL_GAIN",
+        "amount": "1000.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "AMIT_GROSS_UP",
+        "amount": "1000.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "TOTAL_CY_CG",
+        "amount": "2000.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_SOURCE_INCOME",
+        "amount": "400.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "COSTBASE_INCREASE",
+        "amount": "240.50",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "CostBaseAdjustment",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "NDQ",
+        "financial_year_end_date": "2023-06-30",
+        "cost_base_increase": "240.50",
+        "cost_base_increase_currency": "AUD"
+      }
+    }
+  ]
+}

@@ -11588,6 +11588,10 @@ class RedactionTests(SimpleTestCase):
         self.assertEqual(redaction.mask('A ccount Number: 12345678\nAcc ount No. 87654321')[0],
                          'A ccount Number: 00000000\nAcc ount No. 00000000')
 
+    def test_the_last_digits_a_bank_prints_of_an_account_are_masked(self):
+        self.assertEqual(redaction.mask('BSB: 000-000 ACC: ****4321\nAccount ending xxxx987')[0],
+                         'BSB: 000-000 ACC: ****0000\nAccount ending xxxx0000')
+
     def test_identifiers_are_taken_out_of_file_names(self):
         self.assertEqual(redaction.redact_path(Path('NDQ') / 'PRD_1_20171231_X00012345678_BETA_NDQ.pdf', []),
                          Path('NDQ') / 'PRD_1_20171231_X0000000000_BETA_NDQ.pdf')

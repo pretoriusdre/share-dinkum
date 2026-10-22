@@ -95,18 +95,31 @@ def parse(doc: Document) -> list[Extracted]:
   `total_withholding_tax` if any was taken.
 - A contract note → `Buy` or `Sell`. `date` is the trade date, not the settlement date.
   `total_brokerage` is brokerage, GST and every other fee on the trade added together.
-- An annual (AMMA) tax statement → one `AttributionStatement`, then one `AttributionComponent` for
-  each line the statement shows an amount on, in the order shown. Add a `CostBaseAdjustment` if
-  the statement states an AMIT cost base net amount: positive for an increase, negative for a
-  decrease. A component is linked to the `AttributionStatement` before it, so give none of the
-  link columns.
+- An annual tax statement (AMMA, or a trust's annual taxation statement from before AMIT) → one
+  `AttributionStatement`, then one `AttributionComponent` for each component the statement gives
+  an amount other than nil for, in the order shown. A component is linked to the
+  `AttributionStatement` before it, so give none of the link columns.
+  - Income and gains come from the attribution column (before AMIT, taxable income). An amount
+    printed only as cash (CGT concession, tax-free, tax-deferred, tax-exempt, other capital gains
+    distribution, other non-attributable amounts) comes from the cash column.
+  - The credits (franking, foreign resident withholding, foreign income tax offset) come from the
+    tax return summary (Part A, labels 13Q, 13A and 20O) where the statement has one, as the
+    columns of Part B do not always say which figure is which.
+  - Where the statement splits one component over several lines, such as NCMI and clean building
+    MIT income, or interest subject and not subject to withholding, give the lines' sum.
+  - Then a `CostBaseAdjustment`, even when nil: the AMIT cost base net amount, the increase less
+    the decrease; before AMIT, minus the tax-deferred amount. Give none if the statement states
+    neither.
+  - Where the statement prints a subtotal or gross amount, check the lines against it and raise
+    `ParseError` if they do not agree, so a line read from the wrong column shows.
 - An export of several events → one event per row, using the models above.
 
 ## Values
 
 - Give only the columns listed for the model under "Columns", and only those the document states.
-  Never fill in a default or a value worked out from other values. Every column marked
-  "required" must be given.
+  Never fill in a default or a value worked out from other values, beyond the sums and the cost
+  base adjustment an annual statement's rules above ask for. Every column marked "required" must
+  be given.
 - Money and units are `Decimal`, made from the printed text with `_common.money` or
   `_common.units`. Keep every printed decimal place. Never use `float` and never round.
 - A rate printed in cents becomes dollars with `_common.cents_to_dollars`, which is exact:

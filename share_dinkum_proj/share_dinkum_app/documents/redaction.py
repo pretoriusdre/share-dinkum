@@ -34,6 +34,9 @@ MASKS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r'(?i)((?:a\s?c\s?c\s?o\s?u\s?n\s?t\s*(?:n\s?u\s?m\s?b\s?e\s?r|no\.?)|\bacc(?:\s*no\.?)?\s*:|'
                 r'\bacc\s*no\.?)[^\n\d]{0,10})'
                 r'(?!0+(?!\d))\d[\d ]{4,}\d'), r'\g<1>00000000'),
+    # A bank prints only the account's last digits: `ACC: ****1234`.
+    (re.compile(r'(?i)((?:a\s?c\s?c\s?o\s?u\s?n\s?t|\bacc)\b[^\n\d*]{0,20}[*xX•]{2,}\s?)(?!0+(?!\d))\d{2,6}\b'),
+     r'\g<1>0000'),
     (re.compile(r'(?i)(customer\s*ref(?:erence)?\.?\s*(?:no|number)\.?\s*:?\s*)(?!0+(?!\d))\d{5,}'), r'\g<1>00000000'),
 ]
 

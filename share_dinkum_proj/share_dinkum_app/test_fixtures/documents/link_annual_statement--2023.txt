@@ -1,0 +1,113 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South NSW 1235
+Telephone: +61 1300 554 474
+ASX Code: HPI
+Outside Australia: +61 2 8767 1000
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+ABN 25 010 330 515
+X0000000000
+053 662810 Statement date: 4 September 2023
+MR REDACTED NAME Reference no.: X0000000000
+REDACTED ADDRESS
+REDACTED ADDRESS
+Hotel Property Investments Limited
+Annual Tax Statement for the year ended 30 June 2023
+Part B: Summary of 2023 tax return (supplementary section) items for a resident individual
+Non Australian residents should seek independent Australian tax advice.
+Tax return (supplementary section) Amount Tax return label
+Share of net income from trusts, less net capital gains, foreign income $800.00 13U
+and franked distributions
+Franked distribution from trusts $0.00 13C
+Other deductions relating to non-primary production income $0.00 13Y
+Share of franking credits from franked dividends
+$0.00 13Q
+Share of credit for foreign resident withholding amounts (excluding
+$0.00 13A
+capital gains)
+Share of credit for tax amounts withheld
+$0.00 13R
+Net capital gain
+$0.00 18A
+Total current year capital gains
+$0.00 18H
+Assessable foreign source income
+$0.00 20E
+Other net foreign source income
+$0.00 20M
+Foreign income tax offset *
+$0.00 20O
+*To work out your foreign income tax offset (FITO) entitlement, see 20 Foreign source income and foreign assets or property or the Guide to
+foreign tax offset rules 2023.
+Part B: Capital gains tax information – Additional information for item 18
+Amount
+Capital gains - discounted method $0.00 (gross amount)
+Capital gains - indexation method $0.00
+Capital gains - other method
+$0.00
+Total current year capital gains
+$0.00
+125842000016
+*662810L*
+
+Part C: Components of distribution
+Cash Tax paid/ Taxable
+distributions Offsets amount
+Australian Income
+Dividends - unfranked amount declared to be CFI $0.00 $0.00
+Dividends - unfranked amount not declared to be CFI $0.00 $0.00
+Dividends - less LIC capital gain deduction $0.00 $0.00
+Interest (subject to non - resident withholding tax) $0.20 $0.20
+Interest (not subject to non - resident withholding tax) $0.00 $0.00
+Other assessable Australian income $799.80 $799.80
+Less other allowable trust deductions $0.00 $0.00
+NCMI – Non-primary production $0.00 $0.00
+Excluded from NCMI – Non-primary production $0.00 $0.00
+Non-primary production income $800.00 $800.00
+Dividends - Franked amount $0.00 $0.00 $0.00
+Capital Gains
+Capital gains - discounted method TAP $0.00 $0.00
+Capital gains - discounted method NTAP $0.00 $0.00 $0.00
+Capital gains - indexation method TAP $0.00 $0.00
+Capital gains - indexation method NTAP $0.00 $0.00 $0.00
+Capital gains - other method TAP $0.00 $0.00
+Capital gains - other method NTAP $0.00 $0.00 $0.00
+Net capital gains $0.00 $0.00 $0.00
+CGT concession amount - TAP $0.00 $0.00
+CGT concession amount - NTAP $0.00
+Total current year capital gains $0.00 $0.00 $0.00
+NCMI capital gains $0.00 $0.00
+Excluded from NCMI capital gains $0.00 $0.00
+Foreign Income
+Other net foreign source income $0.00 $0.00 $0.00
+Assessable foreign source income $0.00 $0.00 $0.00
+Australian franking credit from a New Zealand franking company $0.00 $0.00
+CFC income $0.00 $0.00
+Transferor trust income $0.00 $0.00
+Total foreign income $0.00 $0.00 $0.00
+Other Non-assessable Amounts
+Net exempt income
+$0.00
+Non-assessable non-exempt amount $0.00
+Other Tax-free amounts $0.00
+Tax deferred amounts
+$700.00
+Total Non-assessable amounts
+$700.00
+Gross Cash Distribution $1,500.00
+Other deductions from Distribution
+Less: withholding tax $0.00
+Net Cash Distribution $1,500.00
+
+Subdivision 12-H fund payment summary information for the year ended 30 June 2023
+Details noted below constitute a Notice in accordance with Section 12-395 of Schedule 1 of the Taxation Administration Act 1953.
+Fund payment breakdown Amount
+Other Australian income
+$0.00
+Capital gains - Discounted method TAP $0.00 (gross amount)
+Total 12-H fund payment $0.00
+Total Amounts withheld from 12-H fund payment $0.00
+Please retain this statement for income tax purposes.
+*20Q662810M*

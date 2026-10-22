@@ -1,0 +1,75 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+3V_10_715208
+Contact Us:
+: Online:
+www.investorcentre.com/au/contact
+*By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 757 905
+T 318274 000 VAE (international) +61 3 9415 4813
+X0000000000
+Holder Identification Number (HIN)
+MR REDACTED NAME
+REDACTED ADDRESS
+X0000000000
+REDACTED ADDRESS
+ATTRIBUTION MANAGED INVESTMENT TRUST MEMBER ANNUAL TAX STATEMENT FOR YEAR ENDED 30 JUNE 2024
+The following tax return items are valid for Australian resident individual unitholders only.
+PART A – SUMMARY OF 2024 TAX RETURN (SUPPLEMENTARY SECTION) ITEMS
+Item Tax Return Label Amount
+Share of net income from trusts, less net capital gains, foreign income and franked distributions 13U $15.00
+Franked distributions from trusts 13C $0.00
+Share of franking credits from franked dividends 13Q $0.00
+Share of credit for TFN amounts withheld 13R $0.00
+Share of credit for foreign resident withholding amounts 13A $2.00
+Net capital gain 18A $60.00
+Total current year capital gains 18H $120.00
+Assessable foreign source income 20E $1,300.00
+Other net foreign source income 20M $1,300.00
+Foreign income tax offset 20O $130.00
+PART B – COMPONENTS OF ATTRIBUTION
+Item Cash Distribution Tax Paid/Offsets Attribution
+Australian Income
+Unfranked distributions $0.00
+Unfranked CFI distributions $0.00
+Interest - subject to non resident WHT $10.00
+Interest - not subject to non resident WHT $0.00
+Other income - clean building MIT income $0.00
+Other income - excluded from NCMI $0.00
+Other income - NCMI $0.00
+Other income $5.00
+Non primary production income $15.00
+Franked Distributions $0.00 $0.00
+Capital Gains
+Discounted capital gains TAP - clean building MIT income $0.00
+Discounted capital gains TAP - excluded from NCMI $0.00
+Discounted capital gains TAP - NCMI $0.00
+Discounted capital gains TAP $0.00
+Discounted capital gains NTAP $60.00
+Capital gains – other method TAP - clean building MIT income $0.00
+Capital gains – other method TAP - excluded from NCMI $0.00
+Capital gains – other method TAP - NCMI $0.00
+Capital gains – other method TAP $0.00
+Capital gains – other method NTAP $0.00
+Net capital gain $60.00
+AMIT CGT gross up amount $60.00
+Total current year capital gains $120.00
+Foreign Income
+Assessable foreign source income $130.00 $1,300.00
+Other Non-Assessable Amounts
+Non-assessable non-exempt amount $0.00
+Gross Amount $1,200.00 $1,435.00
+AMIT cost base net amount - excess (reduce cost base) $0.00
+AMIT cost base net amount - shortfall (increase cost base) $105.00
+Less TFN amounts withheld $0.00
+Less non-resident withholding tax
+- Interest / dividend amounts withheld $0.30
+- Fund payment amounts withheld $1.70
+Net Cash Distribution $1,198.00
+To assist you in completing your tax return, you may refer to the Vanguard tax hub:
+https://www.vanguard.com.au/personal/support/tax-hub
+PLEASE RETAIN THIS STATEMENT FOR INCOME TAX PURPOSES
+197COST_EMA_39/318274/318274/i

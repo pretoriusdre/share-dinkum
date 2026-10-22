@@ -1,0 +1,87 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South NSW 1235
+Telephone: +61 1300 554 474
+ASX Code: HPI
+Email: redacted@example.com
+ACN 010 330 515 Website: www.linkmarketservices.com.au
+049 5173
+MR REDACTED NAME
+Statement date: 9 September 2016
+REDACTED ADDRESS
+Reference no.: X0000000000
+REDACTED ADDRESS
+Hotel Property Investments Limited
+Annual Tax Statements for the year ended 30 June 2016
+Part A: Summary of 2016 tax return (supplementary section) items for a resident/non-resident individual
+Non Australian residents should seek independent Australian tax advice.
+Tax return (supplementary section) Amount Tax return label
+Non-Primary Production income $500.00 13U
+Franked distribution from trusts $0.00 13C
+Other deductions relating to distributions $0.00 13Y
+Franking credits $0.00 13Q
+Credit for tax amounts withheld $0.00 13R
+Total current year capital gains $0.00 18H
+Net capital gain $0.00 18A
+Assessable foreign source income $0.00 20E
+Other net foreign source income $0.00 20M
+Foreign income Tax Offsets * $0.00 20O
+*If your total foreign income tax offset from all sources for the year do not exceed $1,000 then you can claim this amount in full. Otherwise, you
+will need to refer to the publication Guide to foreign income tax offset rules (NAT 72923) to work out your entitlements.
+Part B: Capital gains tax information – Additional information for item 18 Amount
+Amount
+Capital gains – discounted method $0.00 (grossed up amount)
+Capital gains – indexation method $0.00
+Capital gains – other method $0.00
+Total current year capital gains $0.00
+Capital gains tax (CGT) concession amount $0.00
+Tax free amounts $0.00
+Tax deferred amounts $300.00
+Return of capital $0.00
+Part C: Components of distribution
+Cash Tax Taxable
+Distributions Paid/offsets Amount
+Australian Income
+Dividends – Unfranked amount $0.00 $0.00
+Dividends – Unfranked CFI amount $0.00 $0.00
+Interest (subject to non-resident withholding tax) $1.50 $1.50
+Interest (not subject to non-resident withholding tax) $0.00 $0.00
+Other income $498.50 $498.50
+Less other allowable trust deductions $0.00 $0.00
+Non-primary production income (A) $500.00 $500.00
+Dividends – Franked amount (X) $0.00 $0.00 $0.00
+Capital Gains
+Capital gains – Discounted method TARP $0.00 $0.00
+Capital gains – Discounted method NTARP $0.00 $0.00
+CGT concession amount TARP $0.00 $0.00
+CGT concession amount NTARP $0.00 $0.00
+Capital gains - indexation method TARP $0.00 $0.00
+(cid:0)(cid:4)(cid:5)(cid:3)(cid:4)(cid:3)(cid:3)(cid:2)(cid:0)
+
+Capital gains - indexation method NTARP $0.00 $0.00
+Capital gains - Other method TARP $0.00 $0.00
+Capital gains - Other method NTARP $0.00 $0.00
+Distributed capital gains (B) $0.00 $0.00
+Net capital gains
+Foreign Income
+Assessable foreign income $0.00 $0.00 $0.00
+Total foreign income (C) $0.00 $0.00 $0.00
+Cash distribution sub-total (A+X+B+C) $500.00
+Other Non-Assessable amounts
+Tax-exempted amounts $0.00
+Tax-free amounts $0.00
+Tax-deferred amounts $300.00
+Return of Capital $0.00
+Total Non-Assessable amounts (D) $300.00
+Gross Cash Distribution (A+B+C+D) $800.00
+Other deductions from Distribution
+Less: Non-resident fund amounts withheld $0.00
+Less: TFN amounts withheld $0.00
+Net Cash Distribution $800.00
+Subdivision 12-H fund payment summary information for the year ended 30 June 2016
+Fund payment breakdown Amount
+Other Australian income $0.00
+Total 12-H fund payment $0.00
+Total Amounts withheld from 12-H fund payment $0.00
+Please retain this statement for income tax purposes.

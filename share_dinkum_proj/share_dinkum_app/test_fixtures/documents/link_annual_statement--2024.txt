@@ -1,0 +1,107 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South NSW 1235
+Telephone: +61 1300 554 474
+ASX Code: HPI
+Outside Australia: +61 2 8767 1000
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+ABN 25 010 330 515
+X0000000000
+053 914027 Statement date: 6 September 2024
+MR REDACTED NAME Reference no.: X0000000000
+REDACTED ADDRESS
+REDACTED ADDRESS
+Attribution Managed Investment Trust Member Annual Statement
+for the year ended 30 June 2024
+Part B: Summary of 2024 tax return (supplementary section) items for a resident individual
+Item Amount Tax return label
+Share of net income from trusts, less net capital gains, foreign income and franked distributions $110.00 13U
+Franked distribution from trusts $0.00 13C
+Share of franking credits from franked dividends $0.00 13Q
+Share of credit for tax file number amounts withheld from interest, dividends and unit trust distributions $0.00 13R
+Share of credit for foreign resident withholding amounts (excluding capital gains) $150.00 13A
+Net capital gain $400.00 18A
+Total current year capital gains $800.00 18H
+CFC Income $0.00 19K
+Assessable foreign source income $0.00 20E
+Other net foreign source income $0.00 20M
+Australian franking credits from a New Zealand franking company $0.00 20F
+Foreign income tax offset * $0.00 20O
+*To work out your foreign income tax offset (FITO) entitlement, see 20 Foreign source income and foreign assets or property or the Guide to foreign tax
+offset rules 2024.
+Part B: Capital gains tax information - Additional information for item 18
+Amount
+Capital gains - discounted method $800.00 (gross amount)
+Capital gains - other method $0.00
+Total current year capital gains $800.00
+Page 1 of 2
+125842000016
+*10Q914027S*
+
+Tax paid or
+Cash Attributable
+Part C: Components of attribution Franking credit
+Distributions amount
+(gross up)
+Australian Income
+Interest (subject to non - resident withholding tax) $10.00
+Interest (not subject to non - resident withholding tax) $0.00
+Dividends - unfranked amount declared to be CFI $0.00
+Dividends - unfranked amount not declared to be CFI $0.00
+Other assessable Australian income (Other) $100.00
+Other assessable Australian income (NCMI) $0.00
+Other assessable Australian income (Excluded from NCMI) $0.00
+Other assessable Australian income (CBMI) $0.00
+Non-primary production income $110.00
+Dividends - Franked amount $0.00 $0.00
+Capital Gains
+Capital gains – Discounted method TAP (Other) $400.00
+Capital gains – Discounted method TAP (NCMI) $0.00
+Capital gains – Discounted method TAP (Excluded from NCMI) $0.00
+Capital gains – Discounted method TAP (CBMI) $0.00
+Capital gains - Discounted method NTAP $0.00
+Taxable foreign capital gains - Discounted method $0.00 $0.00
+Capital gains – Other method TAP (Other) $0.00
+Capital gains – Other method TAP (NCMI) $0.00
+Capital gains – Other method TAP (Excluded from NCMI) $0.00
+Capital gains – Other method TAP (CBMI) $0.00
+Capital gains - Other method NTAP $0.00
+Taxable foreign capital gains - Other method $0.00 $0.00
+Net Capital Gains $0.00 $400.00
+AMIT CGT gross up amount $400.00
+Other capital gains distribution
+Total current year capital gains $0.00 $800.00
+Foreign Income
+Other net foreign source income $0.00 $0.00
+Assessable foreign source income $0.00 $0.00
+Australian franking credit from a New Zealand franking company $0.00 $0.00
+CFC income $0.00
+Total foreign income $0.00 $0.00
+Other Non-assessable Amounts Amount
+Net exempt income $0.00
+Non-assessable non-exempt amount $0.00
+Other non-attributable amounts $90.00
+Total Non-Assessable amounts $90.00
+Gross Cash Distribution $1,000.00
+Less: TFN amounts withheld $0.00
+$0.40
+Less: Non-resident tax withheld on interest and dividends
+Less: Non-resident tax withheld on fund payments $149.60
+Net Cash Distribution $850.00
+Part D: Tax offsets
+Tax offsets Amount
+Franking credit tax offset from Australian resident companies $0.00
+Foreign income tax offset - Other net foreign source income $0.00
+Foreign income tax offset - Taxable foreign capital gains - Discounted method $0.00
+Foreign income tax offset - Taxable foreign capital gains - Other method $0.00
+Australian franking credit from a New Zealand franking company $0.00
+Total tax offsets $0.00
+Part E: Attribution Managed Investment Trust ('AMIT') cost base adjustments Amount
+AMIT cost base net amount - excess (decrease cost base) $90.00
+AMIT cost base net amount - shortfall (increase cost base) $0.00
+To view or change your details, please visit our investor website at www.linkmarketservices.com.au
+Link Group is now known as MUFG Pension & Market Services. Over the coming months,
+Link Market Services will progressively rebrand to its new name MUFG Corporate Markets,
+a division of MUFG Pension & Market Services.

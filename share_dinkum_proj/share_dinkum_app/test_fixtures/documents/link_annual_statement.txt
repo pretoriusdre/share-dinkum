@@ -1,0 +1,105 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South, NSW, 1235
+Telephone: +61 1300 420 094
+ASX Code: NDQ
+Email: redacted@example.com
+ARSN 169 907 564 Website: www.linkmarketservices.com.au
+X0000000000
+053 718204
+Date: 31 July 2023
+MR REDACTED NAME
+Reference No.: X0000000000
+REDACTED ADDRESS
+REDACTED ADDRESS
+BETASHARES NASDAQ 100 ETF
+Attribution Managed Investment Trust Member Annual Statement
+for the year ended 30 June 2023
+Part A : Summary of 2023 tax return (supplementary section) items for a resident individual
+Tax return (supplementary section) Amount Tax return label
+Share of net income from trusts, less net capital gains, foreign income and $0.50 13U
+franked distributions
+Franked distribution from trusts $0.00 13C
+Share of franking credits from franked dividends $0.00 13Q
+Share of credit for tax file number amounts withheld from interest, dividends and $0.00 13R
+unit trust
+Share of credit for foreign resident withholding amounts (excluding capital gains) $0.00 13A
+Net capital gain $1,000.00 18A
+Total current year capital gains $2,000.00 18H
+CFC Income $0.00 19K
+Assessable foreign source income $400.00 20E
+Other net foreign source income $400.00 20M
+Australian franking credits from a New Zealand franking company $0.00 20F
+Foreign income tax offset * $60.00 20O
+*To work out your foreign income tax offset (FITO) entitlement, see the '20 Foreign source income and foreign assets or property' section of the instructions for the 2023 Tax Return
+for Individuals (Supplementary Section) or the Guide to foreign tax offset rules 2023.
+Capital gains tax information - Additional information for item 18 Amount
+Capital gains - Discounted method $2,000.00 (grossed up amount)
+Capital gains - Other method $0.00
+Total current year capital gains $2,000.00
+125842000016
+*10Q480213S*
+
+Part B: Components of attribution Tax paid or franking
+credit gross up Attributable amount
+Australian Income
+Interest (subject to non - resident withholding tax) $0.00 $0.00
+Interest (not subject to non - resident withholding tax) $0.00 $0.00
+Dividends - unfranked amount declared to be CFI $0.00 $0.00
+Dividends - unfranked amount not declared to be CFI $0.00 $0.00
+Other assessable Australian income (Other) $0.00 $0.50
+Other assessable Australian income (NCMI) $0.00 $0.00
+Other assessable Australian income (Excluded from NCMI) $0.00 $0.00
+Other assessable Australian income (CBMI) $0.00 $0.00
+Non-primary production income $0.00 $0.50
+Dividends - Franked amount (Franked distributions) $0.00 $0.00 $0.00
+Capital Gains
+Capital gains – Discounted method TAP (Other) $0.00 $0.00
+Capital gains – Discounted method TAP (NCMI) $0.00 $0.00
+Capital gains – Discounted method TAP (Excluded from NCMI) $0.00 $0.00
+Capital gains – Discounted method TAP (CBMI) $0.00 $0.00
+Capital gains - Discounted method NTAP $0.00 $1,000.00
+Taxable foreign capital gains - Discounted method $0.00 $0.00 $0.00
+Capital gains – Other method TAP (Other) $0.00 $0.00
+Capital gains – Other method TAP (NCMI) $0.00 $0.00
+Capital gains – Other method TAP (Excluded from NCMI) $0.00 $0.00
+Capital gains – Other method TAP (CBMI) $0.00 $0.00
+Capital gains - Other method NTAP $0.00 $0.00
+Taxable foreign capital gains - Other method $0.00 $0.00 $0.00
+Net capital gains $0.00 $0.00 $1,000.00
+AMIT CGT gross up amount $1,000.00
+Other capital gains distribution $0.00
+Total current year capital gains $0.00 $0.00 $2,000.00
+Foreign income
+Other net foreign source income $0.00 $60.00 $400.00
+Assessable foreign source income $0.00 $60.00 $400.00
+Australian franking credit from a New Zealand franking company $0.00 $0.00
+CFC income $0.00 $0.00
+Total foreign income $0.00 $60.00 $400.00
+Non-assessable amounts Amount
+Net exempt income $0.00 $0.00
+Non-assessable non-exempt amount $0.00 $0.00
+Other non-attributable amounts $0.00 $0.00
+Total Non-assessable amounts $0.00 $0.00
+Cash distribution Cash amounts
+Gross cash distribution $2,100.00
+Less: TFN amounts withheld $0.00
+Less: Non-resident tax withheld on interest and dividends $0.00
+Less: Non-resident tax withheld on fund payments $0.00
+Net cash distribution $2,100.00
+Tax offsets Amount
+Franking credit tax offset from Australian resident companies $0.00
+Foreign income tax offset - Other net foreign source income $60.00
+Foreign income tax offset - Taxable foreign capital gains - Discounted method $0.00
+Foreign income tax offset - Taxable foreign capital gains - Other method $0.00
+Australian franking credit from a New Zealand franking company $0.00
+Total tax offsets $60.00
+Attributed Managed Investment Trust ('AMIT') cost base Amount
+AMIT cost base net amount - excess (decrease cost base) $0.00
+AMIT cost base net amount - shortfall (increase cost base) $240.50
+Tax Guide
+The Annual Tax Guide contains general information about how to use this statement when you prepare your 2023 Tax Return.
+To view the 2023 Tax Guide, please visit: http://www.betashares.com.au/TaxGuide
+This statement contains important information. Please retain it for taxation purposes as a charge may be levied for
+replacement. To view or change your Unitholder details, please visit our investor website at www.linkmarketservices.com.au
