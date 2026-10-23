@@ -445,6 +445,51 @@ first created; you can also set them in the app.
 
 ---
 
+## Optional: Check your documents against a portfolio (experimental)
+
+Share Dinkum can read your statements and list where a portfolio differs from them: a payment, trade
+or statement line it holds differently, or lacks. It only reads; nothing in the portfolio is changed.
+
+```bash
+cd share_dinkum_proj
+uv run dev check_documents --account "Default Portfolio" path/to/documents --out findings.xlsx
+```
+
+Every folder inside the one you give is read too. It reads:
+
+- contract notes from CommSec and SelfWealth
+- dividend and distribution advices from Computershare, Link Market Services / MUFG Corporate
+  Markets, Advanced Share Registry, Boardroom and Vanguard, including dividend reinvestment advices
+- annual tax statements from Computershare (Vanguard's ETFs) and Link / MUFG (BetaShares and trusts)
+- CHESS holding statements, whose balances are checked against the units your trades give
+- Interactive Brokers activity statements, saved as CSV
+
+A scanned PDF needs OCR, which runs on your computer: install it with `uv sync --inexact --extra ocr`.
+OCR can misread a figure, so the workbook marks each scanned file. Check a finding against the
+document before changing the portfolio.
+
+### Keeping your documents private
+
+`uv run dev redact_documents path/to/documents --out path/to/copies` writes a text copy of each
+document with your personal details taken out: the terms you list in
+`share_dinkum_proj/redact_terms.txt` (your name, addresses and phone numbers, one per line), and
+every TFN, HIN, SRN, bank account and email address. It prints only counts and line numbers, and
+points at any line that still looks personal. Read the copies before sharing them, and share only
+the copies.
+
+`check_documents --ai` reads a layout no parser knows with an AI model, local (Ollama) or hosted,
+set up in `.env`. Every document is redacted before it is sent, and a hosted AI is refused until
+you have a terms list.
+
+### Adding a parser for your registry or broker
+
+Each layout is read by one file in `share_dinkum_proj/share_dinkum_app/documents/parsers/`, with a
+made-up example document and the events it should give. `uv run dev parser_prompt path/to/copy.txt`
+writes a brief for a new one from a redacted copy; `PARSER_SPEC.md` in that folder is the contract
+the tests check every parser against. Never put a real document in the repository.
+
+---
+
 ## Contributing
 
 Contributions are welcome. To contribute:
