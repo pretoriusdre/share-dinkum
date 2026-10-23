@@ -3,6 +3,7 @@
 Files are only ever opened for reading.
 """
 
+import csv
 import hashlib
 from pathlib import Path
 
@@ -58,11 +59,34 @@ def scanned_pdf(path: Path) -> Document | Unreadable:
 def table(path: Path) -> pd.DataFrame:
     """The first sheet of a spreadsheet, or a CSV, with every cell as text and blanks as ''."""
     if path.suffix.lower() == '.csv':
-        frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+        frame = csv_table(path)
     else:
         frame = pd.read_excel(path, dtype=str, keep_default_na=False)
     frame.columns = [str(column).strip() for column in frame.columns]
     return frame
+
+
+def csv_table(path: Path) -> pd.DataFrame:
+    """A CSV's cells as text.
+
+    A file of several tables one under another, each with its own columns (an Interactive Brokers statement), has
+    rows of different lengths: each row is padded with blanks to the longest, the extra columns named ''. A file
+    that is not UTF-8 is read as Windows-1252, as Excel saves a CSV.
+    """
+    try:
+        path.read_text(encoding='utf-8-sig')
+        encoding = 'utf-8-sig'
+    except UnicodeDecodeError:
+        encoding = 'cp1252'
+    try:
+        return pd.read_csv(path, dtype=str, keep_default_na=False, encoding=encoding)
+    except pd.errors.ParserError:
+        with path.open(newline='', encoding=encoding) as file:
+            rows = list(csv.reader(file))
+        width = max(len(row) for row in rows)
+        header, body = rows[0], rows[1:]
+        return pd.DataFrame([row + [''] * (width - len(row)) for row in body],
+                            columns=header + [''] * (width - len(header)), dtype=str)
 
 
 def as_text(doc: Document) -> str:

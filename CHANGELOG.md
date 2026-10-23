@@ -26,6 +26,7 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   - Computershare annual tax statements (Vanguard ETFs)
   - Link Market Services / MUFG Corporate Markets annual tax statements (BetaShares)
   - CHESS holding statements, each balance checked against the units the trades give that day
+  - Interactive Brokers activity statements (CSV): trades, dividends and distributions, and holdings
 
   `uv run dev parser_prompt FILE` writes a brief for adding a parser. A file no parser
   recognises can be read by an AI with `--ai` (Ollama locally, or a hosted model set up in

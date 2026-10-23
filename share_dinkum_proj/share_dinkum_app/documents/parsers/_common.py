@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 from datetime import date as Date, datetime
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -61,6 +62,23 @@ def date(text: str) -> Date:
         except ValueError:
             continue
     raise ParseError(f'{text!r} is not a date.')
+
+
+# The time zone a trade on each exchange is dated in, by the exchange's code as brokers print it.
+EXCHANGE_ZONES = {'ASX': 'Australia/Sydney', 'LSE': 'Europe/London', 'LSEETF': 'Europe/London',
+                  'NASDAQ': 'America/New_York', 'NYSE': 'America/New_York', 'ARCA': 'America/New_York',
+                  'BATS': 'America/New_York', 'SGX': 'Asia/Singapore'}
+
+
+def exchange_date(when: datetime, zone: str, exchange: str) -> Date:
+    """The date on `exchange` of `when`, a time printed in the time zone `zone` (`America/New_York`).
+
+    A broker abroad prints a trade's time in its own zone: an ASX trade at 22:11 New York time was made the
+    next morning in Sydney, and that is its date.
+    """
+    if exchange not in EXCHANGE_ZONES:
+        raise ParseError(f'No time zone is known for the exchange {exchange!r}.')
+    return when.replace(tzinfo=ZoneInfo(zone)).astimezone(ZoneInfo(EXCHANGE_ZONES[exchange])).date()
 
 
 def _label_pattern(label: str) -> str:

@@ -6,7 +6,7 @@ import shutil
 import sqlite3
 import pickle
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest import skipUnless
@@ -11037,6 +11037,13 @@ class DocumentCommonHelperTests(SimpleTestCase):
         with self.assertRaises(_common.ParseError):
             _common.money('n/a')
 
+    def test_a_trade_is_dated_on_its_exchange(self):
+        evening = datetime(2022, 10, 2, 22, 11)
+        self.assertEqual(_common.exchange_date(evening, 'America/New_York', 'ASX'), date(2022, 10, 3))
+        self.assertEqual(_common.exchange_date(evening, 'America/New_York', 'NASDAQ'), date(2022, 10, 2))
+        with self.assertRaises(_common.ParseError):
+            _common.exchange_date(evening, 'America/New_York', 'MOON')
+
     def test_cents_become_dollars_exactly(self):
         self.assertEqual(str(_common.cents_to_dollars(Decimal('143.6788'))), '1.436788')
         self.assertEqual(str(_common.cents_to_dollars(_common.money('20'))), '0.20')
@@ -11281,6 +11288,22 @@ class DocumentExtractionTests(SampleParsersMixin, SimpleTestCase):
         self.assertEqual(doc.kind, 'table')
         self.assertEqual(doc.table.iloc[0].tolist(), ['VAS', '1000', '0.436700'])
         self.assertTrue(_common.header_is(doc.table, ['Code', 'Units', 'Rate']))
+
+    def test_a_csv_of_several_tables_is_read_with_its_rows_padded(self):
+        # An Interactive Brokers statement: each section has its own columns, and the file a byte order mark.
+        path = self.write_document('activity.csv', '﻿Statement,Header,Field Name,Field Value\n'
+                                                   'Statement,Data,Period,"January 1, 2025"\n'
+                                                   'Trades,Header,DataDiscriminator,Symbol,Quantity\n'
+                                                   'Trades,Data,Order,VAS,100\n')
+        doc = document_readers.read(path)
+        self.assertEqual(list(doc.table.columns), ['Statement', 'Header', 'Field Name', 'Field Value', ''])
+        self.assertEqual(doc.table.iloc[0].tolist(), ['Statement', 'Data', 'Period', 'January 1, 2025', ''])
+        self.assertEqual(doc.table.iloc[2].tolist(), ['Trades', 'Data', 'Order', 'VAS', '100'])
+
+    def test_a_csv_saved_by_excel_in_windows_1252_is_read(self):
+        path = self.write_document('records.csv', '')
+        path.write_bytes('Code,Paid\nSOL,A$1.00 – final\n'.encode('cp1252'))
+        self.assertEqual(document_readers.read(path).table.iloc[0].tolist(), ['SOL', 'A$1.00 – final'])
 
 
 class DocumentOCRTests(SimpleTestCase):

@@ -125,6 +125,13 @@ def parse(doc: Document) -> list[Extracted]:
   each movement against the balance before it (on or off) and raise `ParseError` if it does not
   follow.
 - An export of several events → one event per row, using the models above.
+  - A trade is dated in its exchange's time zone where the export prints times in another (an
+    Interactive Brokers statement is in US Eastern time, so an ASX trade at 22:11 was made the
+    next day in Sydney).
+  - A payment whose units the export does not print takes them from the amount over the rate:
+    the whole number that gives the amount within a cent, or else that amount over the rate to 4
+    places. Tax withheld is added up over every row naming the payment, reversals included.
+  - Holdings at the end of the period → a `HoldingBalance` each, as a holding statement gives.
 
 ## Values
 
