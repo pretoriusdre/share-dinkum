@@ -1,0 +1,114 @@
+{
+  "events": [
+    {
+      "model": "AttributionStatement",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "HPI",
+        "financial_year_end_date": "2024-06-30"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "WITHHOLDING_CREDIT",
+        "amount": "150.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "INTEREST",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_INCOME",
+        "amount": "100.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "DISCOUNTED_TAP",
+        "amount": "400.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NET_CAPITAL_GAIN",
+        "amount": "400.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "AMIT_GROSS_UP",
+        "amount": "400.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "TOTAL_CY_CG",
+        "amount": "800.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NON_ATTRIBUTABLE",
+        "amount": "90.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "COSTBASE_DECREASE",
+        "amount": "90.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "CostBaseAdjustment",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "HPI",
+        "financial_year_end_date": "2024-06-30",
+        "cost_base_increase": "-90.00",
+        "cost_base_increase_currency": "AUD"
+      }
+    }
+  ]
+}

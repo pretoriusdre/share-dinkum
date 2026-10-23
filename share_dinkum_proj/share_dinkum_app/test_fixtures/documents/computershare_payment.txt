@@ -1,0 +1,41 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Update your information:
+Online:
+www.investorcentre.com/au
+By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+VIC 3001 Australia
+ACN 004 044 937
+Enquiries:
+(within Australia) 1300 300 300
+(international) +61 3 9415 4000
+T 001234 000 NAB
+REDACTED HIN
+Holder Identification Number (HIN)
+MR REDACTED NAME
+REDACTED ADDRESS HIN WITHHELD
+REDACTED SUBURB WA REDACTED POSTCODE
+ASX Code NAB
+TFN/ABN Status Non-Resident
+Record Date 10 November 2025
+Payment Date 12 December 2025
+Direct Credit Reference No. 807311
+2025 Final Dividend
+Dear Shareholder,
+This payment represents a final dividend of 50 cents per share for the year ended 30 September 2025 and is paid on the shares registered in your name
+and entitled to participate as at the record date of 10 November 2025. This dividend is 60% franked at the corporate tax rate of 30%.
+Please register at www.investorcentre.com/au in order to update your TFN, bank account and other details online.
+REDACTED NAME
+Company Secretary
+Class Amount per Number of Franked Unfranked Gross
+Description Share Shares Amount Amount Payment
+Ordinary Shares 50 cents 1,234 $370.20 $246.80 $617.00
+Less non resident withholding tax $37.02
+Net Payment $579.98
+Franking Credit $158.66
+Note: You should retain this statement to assist you in preparing your tax return.
+Your Payment Instruction
+REDACTED BANK LTD Amount Deposited
+BSB: 000-000 Account number: 00000000 AUD$579.98
+300001_Broadcast/001234/001234/i

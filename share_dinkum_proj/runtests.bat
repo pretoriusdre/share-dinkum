@@ -1,2 +1,0 @@
-cd..
-call runtests.bat

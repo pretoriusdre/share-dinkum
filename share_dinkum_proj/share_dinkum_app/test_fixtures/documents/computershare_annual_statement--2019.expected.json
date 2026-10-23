@@ -1,0 +1,164 @@
+{
+  "events": [
+    {
+      "model": "AttributionStatement",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAS",
+        "financial_year_end_date": "2019-06-30"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FRANKING_CREDIT",
+        "amount": "200.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_INCOME_TAX_OFFSET",
+        "amount": "3.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "UNFRANKED_DISTRIBUTION",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "INTEREST",
+        "amount": "5.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_INCOME",
+        "amount": "25.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FRANKED_DISTRIBUTION",
+        "amount": "500.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "DISCOUNTED_NTAP",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NET_CAPITAL_GAIN",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "AMIT_GROSS_UP",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_CG_DISTRIBUTION",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "TOTAL_CY_CG",
+        "amount": "20.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_SOURCE_INCOME",
+        "amount": "30.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NON_ATTRIBUTABLE",
+        "amount": "1.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "COSTBASE_DECREASE",
+        "amount": "223.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "CostBaseAdjustment",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAS",
+        "financial_year_end_date": "2019-06-30",
+        "cost_base_increase": "-223.00",
+        "cost_base_increase_currency": "AUD"
+      }
+    }
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "events": [
+    {
+      "model": "AttributionStatement",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAE",
+        "financial_year_end_date": "2024-06-30"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "WITHHOLDING_CREDIT",
+        "amount": "2.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_INCOME_TAX_OFFSET",
+        "amount": "130.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "INTEREST",
+        "amount": "10.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "OTHER_INCOME",
+        "amount": "5.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "DISCOUNTED_NTAP",
+        "amount": "60.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "NET_CAPITAL_GAIN",
+        "amount": "60.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "AMIT_GROSS_UP",
+        "amount": "60.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "TOTAL_CY_CG",
+        "amount": "120.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "FOREIGN_SOURCE_INCOME",
+        "amount": "1300.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "COSTBASE_INCREASE",
+        "amount": "105.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "CostBaseAdjustment",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAE",
+        "financial_year_end_date": "2024-06-30",
+        "cost_base_increase": "105.00",
+        "cost_base_increase_currency": "AUD"
+      }
+    }
+  ]
+}

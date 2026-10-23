@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "WPL",
+        "date": "2011-10-21",
+        "quantity": "240"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "WPL",
+        "date": "2012-04-04",
+        "quantity": "243"
+      }
+    }
+  ]
+}

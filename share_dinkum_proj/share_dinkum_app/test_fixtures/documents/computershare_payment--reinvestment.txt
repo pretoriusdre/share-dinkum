@@ -1,0 +1,37 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+ABN 56 004 147 120
+The issue of these DRP shares will be shown on your next CHESS Statement.
+EVAQ10_100002
+Need help?
+Contact Computershare Investor Services
+GPO Box 2975, Melbourne VIC 3001
+Phone (AUS) 1300 662 270 or +61 3 9415 4373
+Internet www.investorcentre.com/contact
+T 001112 1301011111112100220110313300020103213
+000 Your security holding
+AFI
+MR REDACTED NAME Security class Ordinary shares
+REDACTED ADDRESS STREET
+Holder Number HIN WITHHELD
+REDACTED SUBURB WA REDACTED POSTCODE
+TFN or ABN Quoted
+Record date 6 March 2014
+Payment date 20 March 2014
+Allotment date 20 March 2014
+You must keep this document for
+your tax records.
+Australian Foundation Investment Company Limited
+Interim dividend payment statement and advice of reinvestment
+Number of shares Dividend rate Dividend paid Franked amount Franking credit
+4,200 X A$0.09 = A$378.00 A$378.00 A$162.00
+This dividend is franked in Australia at 100% and the corporate tax rate used to determine the franking credit is 30%.
+No NZ imputation credits are applicable to this dividend.
+Dividend reinvestment
+Dividend amount: A$378.00
+Cash balance in your Dividend Reinvestment Plan (the Plan) account brought forward: A$2.15
+Amount available for reinvestment: A$380.15
+Less the amount applied to issue to you 64 shares at A$5.88 per share (including 2.5% discount): A$376.32
+Your cash balance carried forward in your Plan account: A$3.83
+Number of shares participating in the Plan: 4,200
+Number of shares allotted for the reinvestment of this dividend: 64
+100002_BC_Payments/001112/001112/i

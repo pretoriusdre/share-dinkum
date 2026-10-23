@@ -1,0 +1,34 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Washington H. Soul Pattinson Advanced Share Registry Limited
+and Company Limited
+All correspondence to:
+ABN 49 000 002 728 PO Box 1156, Nedlands
+Western Australia 6909
+Telephone: +61 8 9389 8033
+Facsimile: +61 8 9262 3723
+Email: redacted@example.com
+Website: www.advancedshare.com.au
+REDACTED NAME
+REDACTED ADDRESS
+ASX Code SOL
+TFN/ABN Status TFN Quoted
+Record Date 19 November 2012
+Payment Date 13 December 2012
+Ref. No. 1
+Final Dividend for the year ended 31 July 2012
+Dear Shareholder,
+T his payment represents a final dividend of 27 cents per share on your shareholding as at 19 November 2012. The dividend is
+1 00 franked at the company tax rate of 30.
+I f you would like to update your TFN, bank account and other details online, please log on to: www.advancedshare.com.au.
+Amount per Number of
+Description Franked Amount Gross Payment
+Security Securities
+Final Dividend 27 cents 2,250 $ 607.50 $ 607.50
+Net Payment $ 607.50
+Franking Credit $ 260.36
+Note: You should retain this statement to assist you in preparing your tax return.
+Your Payment Instruction
+Amount Deposited
+Name of Account : REDACTED NAME $ 607.50
+BSB Number : 000-000
+Account Number : 00000000

@@ -597,6 +597,8 @@ def prepare_dashboard_context(request: HttpRequest, context: dict[str, Any]) -> 
             'latest_version': update_check['latest_version'],
             'release_url': update_check['release_url'],
             'update_available': update_check['update_available'],
+            'project_url': version.PROJECT_URL,
+            'issues_url': version.ISSUES_URL,
         }
     )
 
@@ -1011,7 +1013,7 @@ DASHBOARD_ACTIONS: tuple[DashboardAction, ...] = (
         route='full-backup/',
         group='Data',
         label='Full backup',
-        description='Copies the database, Excel export, and all attached documents to a separate folder. Make sure you replicate the output to another place (eg cloud)',
+        description='Copies the database, an Excel export of each portfolio, and all attached documents to a separate folder. Covers every portfolio, not just the selected one. Make sure you replicate the output to another place (eg cloud)',
         view=full_backup_view,
         status=_backup_status,
         busy_label='Backing up...',

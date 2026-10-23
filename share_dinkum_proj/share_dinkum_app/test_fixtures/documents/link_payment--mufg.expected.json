@@ -1,0 +1,22 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": "001337402685",
+      "stated_total": "1996.80",
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2025-08-20",
+        "quantity": "12480",
+        "dividend_type": "LOCAL",
+        "unfranked_amount_per_share": "0.00",
+        "unfranked_amount_per_share_currency": "AUD",
+        "franked_amount_per_share": "0.16",
+        "franked_amount_per_share_currency": "AUD",
+        "corporate_tax_rate_percentage": "30",
+        "lic_capital_gain": "1640.25",
+        "lic_capital_gain_currency": "AUD"
+      }
+    }
+  ]
+}

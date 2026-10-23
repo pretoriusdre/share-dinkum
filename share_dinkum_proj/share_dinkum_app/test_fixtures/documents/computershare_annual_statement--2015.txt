@@ -1,0 +1,78 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+AASQ10_715340
+All correspondence to:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries (within Australia) 1300 757 905
+(outside Australia) 61 3 9415 4813
+Facsimile 61 2 8235 8209
+www.investorcentre.com/contact
+T 640193 000 VGS www.computershare.com
+2402122222223211331221424411131214324
+MR REDACTED NAME Tax File Number: TFN quoted
+REDACTED ADDRESS
+REDACTED ADDRESS HIN: X0000000000
+ANNUAL TAXATION STATEMENT FOR THE YEAR ENDED 30 JUNE 2015
+This statement has been prepared to assist Australian tax residents with the completion of their individual income tax return.
+PART A – SUMMARY OF 2015 TAX RETURN (SUPPLEMENTARY SECTION) ITEMS
+Item Individual Tax Return Label Amount
+Non-primary production income 13U $20.00
+Franked distributions 13C $0.00
+Franking credits 13Q $0.00
+Credit for TFN amounts withheld 13R $0.00
+Credit for amounts withheld for foreign resident withholding 13A $0.00
+Total current year capital gains 18H $100.00
+Net capital gain 18A $50.00
+Assessable foreign source income 20E $300.00
+Other net foreign source income 20M $300.00
+Foreign income tax offset 20O* $40.00
+* If your total foreign income tax offsets from all sources for the year is $1000 or less then you can claim this amount in full. Otherwise, you will need to refer to the ATO publication “Guide to
+Foreign Income Tax Offset rules 2014-15” (NAT 72923) to work out your entitlement.
+PART B – COMPONENTS OF DISTRIBUTION
+Item Notes Cash Distribution Tax paid/Offsets Taxable income
+Australian income
+Unfranked distributions 1 $0.00 $0.00 $0.00
+Unfranked CFI distributions 2 $0.00 $0.00 $0.00
+Interest 3 $1.00 $0.00 $1.00
+Other income 4 $19.00 $0.00 $19.00
+Non primary production income $20.00 $0.00 $20.00
+Franked distributions 5 $0.00 $0.00 $0.00
+Capital gains
+Discounted capital gains TAP 6 $0.00 $0.00 $0.00
+Discounted capital gains NTAP 7 $50.00 $0.00 $50.00
+CGT concession amount 8 $50.00 $0.00 $0.00
+Capital gains – other method TAP 9 $0.00 $0.00 $0.00
+Capital gains – other method NTAP 10 $0.00 $0.00 $0.00
+Distributed capital gains $100.00 $0.00
+Net capital gain $50.00
+Foreign income
+Assessable foreign source income 11 $260.00 $40.00 $300.00
+Other non-assessable amounts
+Tax-free amounts 12 $0.00
+Tax-deferred amounts 13 $15.00
+Tax-exempt amounts 14 $0.00
+Gross cash distribution $395.00
+Other deductions from distributions
+Less:
+TFN amounts withheld 15 $0.00
+Amounts withheld for foreign resident withholding $0.00
+Other expenses $0.00
+Net cash distribution $395.00
+ADDITIONAL CAPITAL GAINS INFORMATION FOR ITEM 18
+Item Cash Distribution
+Capital gains – discount method (grossed up amount) $100.00
+Capital gains – other method $0.00
+Total current year capital gains $100.00
+PLEASE RETAIN THIS STATEMENT FOR INCOME TAX PURPOSES
+i/528317/528317/liamE_715340
+
+AASQ10_715340
+A GUIDE TO THE INFORMATION PROVIDED IN YOUR ANNUAL TAXATION STATEMENT
+PART A – WHAT DO YOU DO WITH THE AMOUNTS THAT APPEAR IN PART A
+Your annual taxation statement has been designed so that the amounts in Part A correspond to the amounts you are required to enter into your 2015
+Individual Tax Return (Supplementary Section).
+PART B – WHAT INFORMATION MAKES UP THE DISTRIBUTION COMPONENTS
+Part B of your annual tax statement provides information relating to the components of the distributions you have received with respect to the financial
+year. Information relating to each component is provided in the notes below.
+The information set out above relates to the items contained in the taxation statement for the fund which is managed by Vanguard Investments Australia Limited.

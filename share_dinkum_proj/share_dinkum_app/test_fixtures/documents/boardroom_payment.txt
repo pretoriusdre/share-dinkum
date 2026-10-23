@@ -1,0 +1,45 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Ramsay Health Care Limited
+ABN 57 001 288 768
+All correspondence to:
+Boardroom Pty Limited
+ABN 14 003 209 836
+GPO Box 3993
+Sydney NSW 2001
+Tel: 1300 668 019 (within Australia)
+REDACTED NAME
+REDACTED ADDRESS Tel: +61 2 8016 2897 (outside Australia)
+Fax: +61 2 9279 0664
+www.boardroomlimited.com.au
+redacted@example.com
+Reference Number: X0000000000
+TFN/ABN Status: Ov erseas Resident
+Subregister: CHESS
+Record Date: 10/03/201 6
+Payment Date: 30/03/2016
+D ividend Statement
+Payment Description: 2016 Interim Dividend
+Security Class: Fu lly Paid Or dinary Sh ares ASX Code: RHC
+Number of Dividend
+Gross Dividend Withholding Net Dividend Franked Unfranked Franking
+shares held at Rate per
+(AUD) Tax1 (AUD) (AUD) Amount2 (AUD) Amount (AUD) Credit3 (AUD)
+Record Date share
+48 0 62.5 c ents $300 .00 N il $300 .00 $30 0.00 N il $128 .57
+1. This withholding tax applies to you if the dividend amount is partially or totally unfranked and you are a:
+a) resident of Australia and your TFN or ABN has not been recorded by the share registry. TFN withholding tax is deducted from the gross
+unfranked portion of the dividend at the highest marginal tax rate applying to personal income; or
+b) non-resident of Australia. Non-resident withholding tax (30%) is deducted from the gross unfranked portion of the dividend unless you are
+a resident of a country which has entered into a Double Taxation Agreement with Australia. In that case a lower rate (generally 15%) may
+apply.
+2. This dividend is 100% franked
+3. The franking credit has been calculated at the rate of 30%.
+_____D_ir_e_ct_ C_r_ed_i_t I_n_st_ru_c_ti_o_n _______________________________________________
+The total net payment has been paid in accordance with your instructions as shown below:
+B ank Do micile: AUS Rece ipt Currency: AUD
+Bank Account Type: Domestic Amount Deposited: 300.00
+Bank Code: 000-000
+A ccount Number: 00000000
+E xchange Rate: N/A
+Please check the above details are correct and the payment has been credited to your account.
+Please retain this statement for taxation purposes

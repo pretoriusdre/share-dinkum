@@ -90,7 +90,9 @@ ROOT_URLCONF = 'share_dinkum_proj.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # Searched before the apps, so admin/base_site.html here replaces the admin's own: the
+        # admin's app config is listed first in INSTALLED_APPS, so its template would win.
+        'DIRS': [BASE_DIR / 'share_dinkum_app' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -198,6 +200,17 @@ HOLDINGS_WRITER = config('HOLDINGS_WRITER', default='replay')
 # not read from `.env`, where a pinned date would be forgotten. Tests override it.
 # See share_dinkum_app/clock.py.
 REPORTING_DATE = os.environ.get('REPORTING_DATE') or None
+
+# The AI that reads a document no parser recognises, for `check_documents --ai`. Off unless a
+# provider is named: 'openai_compatible' (OpenAI, most hosted vendors, and local servers such as
+# Ollama at http://localhost:11434/v1) or 'anthropic' (needs `uv sync --extra anthropic`).
+# See share_dinkum_app/documents/ai/.
+DOCUMENT_AI_PROVIDER = config('DOCUMENT_AI_PROVIDER', default='none')
+DOCUMENT_AI_MODEL = config('DOCUMENT_AI_MODEL', default='')
+DOCUMENT_AI_BASE_URL = config('DOCUMENT_AI_BASE_URL', default='')
+DOCUMENT_AI_API_KEY = config('DOCUMENT_AI_API_KEY', default='')
+# Replies are kept here, so a document is sent once per model.
+DOCUMENT_AI_CACHE = BASE_DIR / 'document_ai_cache'
 
 
 # Django's default is 1000, which a change page here passes without trying. The admin

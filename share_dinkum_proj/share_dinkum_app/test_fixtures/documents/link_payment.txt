@@ -1,0 +1,43 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Payment Advice
+All Registry communications to:
+Coca-Cola Amatil Limited
+Locked Bag A14, Sydney South, NSW 1235
+Telephone: +61 1300 554 474
+ASX Code: CCL
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+DIVIDEND STATEMENT
+COCA-COLA AMATIL LIMITED
+ABN: 26 004 139 397 Reference No.: X0000000000
+Payment Date: 09 April 2014
+REDACTED NAME
+Record Date: 25 February 2014
+REDACTED ADDRESS
+Security Description Dividend Rate Participating Unfranked Franked Total Franking
+per Share Shares Amount Amount Payment Credit
+CCL - FULLY PAID ORDINARY SHARES $0.24 2,150 $129.00 $387.00 $516.00 $165.86
+Less Withholding Tax $0.00
+Net Amount AUD 516.00
+Represented By:
+Direct Credit amount AUD 516.00
+BANKING INSTRUCTIONS The amount of AUD 516.00 was deposited to the bank account detailed below:
+COMMONWEALTH BANK OF AUSTRALIA
+REDACTED NAME
+BSB: 000-000 ACC: 00000000
+DIRECT CREDIT REFERENCE NO.: 1094827316
+FRANKING INFORMATION Franked Rate per Share $0.18
+Franking Percentage 75%
+Company Tax Rate 30%
+AUSTRALIAN TAX INFORMATION (A$) Income Description Amount
+Conduit Foreign Income (CFI) $129.00
+Nil CFI $0.00
+Total unfranked Income $129.00
+Withholding tax is not payable by non-residents on the Conduit Foreign Income portion of the unfranked dividend amount.
+The total amount together with the franking credit (if any) should be disclosed as assessable income in your Australian tax return.
+The details above relate to the Coca-Cola Amatil Limited final ordinary dividend for the period ended 31 December 2013, payable on ordinary shares entitled to participate in
+the dividend at the record date.
+The final ordinary dividend is franked to 75% at the company tax rate of 30%. Please note that 100% of the unfranked portion of the dividend is declared to be conduit foreign
+income and is therefore free from Australian dividend withholding tax when paid to non resident shareholders.
+Note: You may require this statement for taxation purposes. All investors should seek independent advice relevant to their own particular circumstances.
+Please ensure your details are current by viewing and updating via the online service centre.

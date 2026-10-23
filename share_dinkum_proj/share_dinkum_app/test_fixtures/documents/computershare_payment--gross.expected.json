@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": "811122",
+      "stated_total": "252.00",
+      "row": {
+        "instrument__name": "COH",
+        "date": "2015-10-06",
+        "quantity": "240",
+        "dividend_type": "LOCAL",
+        "unfranked_amount_per_share": "0",
+        "unfranked_amount_per_share_currency": "AUD",
+        "franked_amount_per_share": "1.05",
+        "franked_amount_per_share_currency": "AUD",
+        "corporate_tax_rate_percentage": "30"
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": null,
+      "stated_total": "607.50",
+      "row": {
+        "instrument__name": "SOL",
+        "date": "2012-12-13",
+        "quantity": "2250",
+        "dividend_type": "LOCAL",
+        "unfranked_amount_per_share": "0.00",
+        "unfranked_amount_per_share_currency": "AUD",
+        "franked_amount_per_share": "0.27",
+        "franked_amount_per_share_currency": "AUD",
+        "corporate_tax_rate_percentage": "30"
+      }
+    }
+  ]
+}

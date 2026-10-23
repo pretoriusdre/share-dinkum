@@ -1,0 +1,97 @@
+{
+  "events": [
+    {
+      "model": "Buy",
+      "reference": null,
+      "stated_total": "48020",
+      "row": {
+        "instrument__name": "A200",
+        "date": "2025-03-03",
+        "quantity": "400",
+        "unit_price": "120.05",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "20.25",
+        "total_brokerage_currency": "AUD"
+      }
+    },
+    {
+      "model": "Buy",
+      "reference": null,
+      "stated_total": "16812",
+      "row": {
+        "instrument__name": "VWRA",
+        "date": "2025-05-12",
+        "quantity": "120",
+        "unit_price": "140.1",
+        "unit_price_currency": "USD",
+        "total_brokerage": "6.5",
+        "total_brokerage_currency": "USD"
+      }
+    },
+    {
+      "model": "Sell",
+      "reference": null,
+      "stated_total": "4512",
+      "row": {
+        "instrument__name": "VWRA",
+        "date": "2025-11-20",
+        "quantity": "30",
+        "unit_price": "150.4",
+        "unit_price_currency": "USD",
+        "total_brokerage": "4.25",
+        "total_brokerage_currency": "USD"
+      }
+    },
+    {
+      "model": "Distribution",
+      "reference": null,
+      "stated_total": "493.8",
+      "row": {
+        "instrument__name": "A200",
+        "date": "2025-07-16",
+        "quantity": "400",
+        "distribution_amount_per_share": "1.2345",
+        "distribution_amount_per_share_currency": "AUD",
+        "total_withholding_tax": "2.6",
+        "total_withholding_tax_currency": "AUD"
+      }
+    },
+    {
+      "model": "Dividend",
+      "reference": null,
+      "stated_total": "2.5",
+      "row": {
+        "instrument__name": "XYZ",
+        "date": "2025-09-15",
+        "quantity": "10",
+        "dividend_type": "FOREIGN",
+        "unfranked_amount_per_share": "0.25",
+        "unfranked_amount_per_share_currency": "USD",
+        "franked_amount_per_share": "0",
+        "franked_amount_per_share_currency": "USD",
+        "foreign_tax_credit": "0.38",
+        "foreign_tax_credit_currency": "USD"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "A200",
+        "date": "2025-12-31",
+        "quantity": "400"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VWRA",
+        "date": "2025-12-31",
+        "quantity": "90"
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+2016 Interim Dividend — Payment Statement
+Dear Shareholder,
+This payment represents an interim dividend of 25 cents per share for the half year ended 30 June 2016. This dividend is paid on the shares
+registered in your name and entitled to participate as at the record date of 18 August 2016. This payment is 100% franked at the corporate tax
+rate of 30%.
+To update your TFN, bank account and other details online, please register at www.investorcentre.com
+GAUO10_100001
+Update your information:
+: Online:
+www.investorcentre.com/contact
+*By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 723 487
+(international) 61 3 9415 4840
+T 012345 000 QBE
+0000000000000000000000000000000000000
+Holder Identification Number (HIN)
+X0000000000
+TFN/ABN Status Quoted
+Record Date 18 August 2016
+Payment Date 23 September 2016
+Direct Credit Reference No. 850123
+Class Dividend Participating Franked Unfranked Franking Dividend
+description per share shares amount amount credit payment
+$ $ $ $
+Fully Paid Ordinary 25 cents 412 103.00 0.00 44.14 103.00
+Net Payment $103.00
+Payment instruction Direct Credit
+Commonwealth Bank of Australia
+Amount Deposited
+BSB: 000-000 $103.00
+Account number: 00000000
+Note: Australian tax law requires us to provide your payment details to the Australian Tax Office. You should keep this statement to assist in
+preparing your tax return.
+200001_Email/012345/012345/i

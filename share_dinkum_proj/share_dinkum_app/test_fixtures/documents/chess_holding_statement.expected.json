@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-02-22",
+        "quantity": "5300"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-03-06",
+        "quantity": "6000"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-03-18",
+        "quantity": "6131"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "AFI",
+        "date": "2019-03-27",
+        "quantity": "5100"
+      }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Payment Advice
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South, NSW, 1235
+Telephone: 1300 554 474
+ASX Code: HPI
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+DISTRIBUTION STATEMENT
+HOTEL PROPERTY INVESTMENTS LIMITED
+ABN: 25 010 330 515 Reference No.: X0000000000
+Payment Date: 14 March 2019
+REDACTED NAME
+Record Date: 31 December 2018
+REDACTED ADDRESS
+Security Description Rate Participating Distribution Unfranked Franked Total Franking
+per Unit Units Amount Amount Amount Payment Credit
+HPI - STAPLED SECURITIES $0.087 7,350 $639.45 $0.00 $0.00 $639.45 $0.00
+Less Non-Resident Withholding Tax $52.00
+Net Amount AUD 587.45
+Represented By:
+Direct Credit amount AUD 587.45
+BANKING INSTRUCTIONS The amount of AUD 587.45 was deposited to the bank account detailed below:
+REDACTED BANK
+REDACTED NAME
+BSB: 000-000 ACC: 00000000
+DIRECT CREDIT REFERENCE NO.: 1208364519
+Note: You may require this statement for taxation purposes. All investors should seek independent advice relevant to their own particular circumstances.
+Please ensure your details are current by viewing and updating via the online service centre.

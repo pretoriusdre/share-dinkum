@@ -1,0 +1,39 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Manage your holdings
+www.investorcentre.com/au
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 757 905
+T 001234 000 VAE (outside Australia) +61 3 9415 4813
+MR REDACTED NAME
+REDACTED ADDRESS
+REDACTED SUBURB WA REDACTED POSTCODE
+Record Date: 3 April 2025
+Payment Date: 17 April 2025
+Vanguard Distribution for the Period Ended 31 March 2025
+Distribution Payment
+Cash per Gross Cash Tax Withheld Net Cash
+ASX Fund Name Security ($) Units Amount ($) Amount ($) Amount ($)
+Vanguard FTSE Asia Ex-Japan Shares Index
+VAE 0.21543876 1,000 215.44 0.00 215.44
+ETF
+VGS* Vanguard MSCI Index International Shares ETF 0.41234567 2,000 824.69 3.00 821.69
+VAS Vanguard Australian Shares Index ETF 0.98765432 500 493.83 0.00 493.83
+Total: 1,533.96 3.00 1,530.96
+Your Payment Instruction:
+AUD$1,530.96
+Amount Deposited:
+If payment cannot be made to the above account, the distribution amount will be held as a non-interest bearing deposit pending receipt of your valid
+direct credit instructions. Register your instructions at www.investorcentre.com/au or call Computershare on 1300 757 905.
+*An asterisk next to the ASX code in the payment table indicates that we are yet to receive your TFN/ABN or exception notification (as applicable) for this
+holding and Australian withholding tax has been deducted from your distribution. Please contact Computershare online or by phone to register your
+details.
+Note 1: You should refer to the Vanguard tax booklet for Australian domiciled Vanguard ETFs at www.vanguard.com.au/etf for more tax related
+information. Please retain this statement in a safe place as a charge may be levied for a replacement.
+Note 2: If you require a cash payment to be re-issued, you may be charged an administrative fee which will be deducted from your payment. Fees are
+applicable to certain types of payments valued at over $100 AU.
+Vanguard Investments Australia Ltd
+ABN 72 072 881 086 | AFSL 227263
+197COSC_Email_10/001234/001234/i

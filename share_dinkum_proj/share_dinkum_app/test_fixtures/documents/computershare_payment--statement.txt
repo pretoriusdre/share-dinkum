@@ -1,0 +1,41 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+ABN 56 004 147 120
+2V_90_100001
+Need help?
+Contact Computershare Investor Services
+GPO Box 2975, Melbourne VIC 3001
+Phone (AUS) 1300 662 270 or +61 3 9415 4373
+Internet www.investorcentre.com/au/contact
+T 001111 000 AFI Your security holding
+0000000000000000000000000000000000000000000000000000
+MR REDACTED NAME
+REDACTED ADDRESS
+REDACTED SUBURB WA REDACTED POSTCODE
+ASX Code AFI
+Security class Ordinary shares
+Holder Number HIN WITHHELD
+Record date 9 August 2025
+Payment date 29 August 2025
+You must keep this document for
+your tax records.
+Australian Foundation Investment Company Limited
+Final dividend payment statement
+Number of shares Dividend rate Dividend paid Franked amount Franking credit
+3,200 X A$0.15 = A$480.00 A$480.00 A$205.71
+This dividend is franked in Australia at 100% and the corporate tax rate used to determine the franking credit is 30%.
+No NZ imputation credits are applicable to this dividend.
+If you require your payment to be re-issued, you may be charged an administrative fee which will be deducted from your payment.
+IMPORTANT - LIC CAPITAL GAIN INFORMATION
+The attributable part of the above dividend is A$137.14
+If you are an Australian resident individual, resident trust (except a trust that is a complying superannuation entity) or resident
+partnership for taxation purposes, you may be entitled to a tax deduction of A$68.57 (i.e. 50% of the attributable part). You can claim
+this deduction in your income tax return. Refer to the section on "Dividend deductions".
+If you are a complying superannuation entity or a life insurance company where the shares are complying superannuation assets and
+an Australian resident for taxation purposes, you may be entitled to a tax deduction of A$45.71 (i.e. 1/3rd of the attributable part).
+If you are any other type of entity, you may not be entitled to a tax deduction.
+This LIC capital gains information is for use in the preparation of your 2026 income tax return.
+If you are in any doubt about this information, please consult your tax advisor.
+Payment method We paid your dividend into this account:
+BSB: 000-000
+ACC: 00000000
+200003_BC_Payments/001111/001111/i

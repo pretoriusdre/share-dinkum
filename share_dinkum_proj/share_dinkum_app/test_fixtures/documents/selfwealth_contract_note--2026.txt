@@ -1,0 +1,27 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+Selfwealth Pty Ltd ABN: 52 154 324 428 AFSL 421789 W: www.selfwealth.com.au E: redacted@example.com
+This trade was executed and cleared by FNZ Custodians (Australia) Pty Ltd (trading as "FNZ Securities")
+AFSL 507452 ABN 88 624 689 694
+Sell Confirmation
+MR REDACTED NAME Account Number:S00000000
+REDACTED ADDRESS Reference No: 5000004
+REDACTED SUBURB NSW Trade Date: 2 Sept 2026
+REDACTED POSTCODE, AUS Settlement Date: 4 Sept 2026
+Market: ASX
+WE HAVE SOLD ON YOUR ACCOUNT
+This Day: FNZ Securities has sold for you
+Quantity Security Code Security Description Price +1 Consideration Currency
+500 NAB NATIONAL AUST. BANK 36.42 $18,210.00 AUD
+Brokerage* $9.50 AUD
+Misc Fees & Charges $0.00 AUD
+Adviser Fee* $0.00 AUD
+Total Amount Payable $18,200.50 AUD
+GST included in this invoice is $0.86
+The confirmation is a tax invoice - please retain for tax purposes. If this confirmation does not correspond with your records please contact us immediately at
+redacted@example.com
+Message:
+Complete Order
+* Inclusive of GST
++1 Standard Financial Rounding Applied (if applicable)
+Generated At: 2 Sept 2026 11:47:19 am
+Page: 1 of 1

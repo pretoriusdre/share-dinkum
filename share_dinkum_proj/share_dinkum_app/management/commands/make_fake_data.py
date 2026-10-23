@@ -514,8 +514,13 @@ def with_fake_note(rows: list[dict[str, Any]], table_name: str) -> pd.DataFrame:
 
 
 def instrument_frame(existing: pd.DataFrame | None) -> pd.DataFrame:
-    """The template's instrument list, with any instrument the portfolio uses that it lacks."""
+    """The instruments the portfolio uses: the template's own row for each it lists, else a new one.
+
+    Any other instrument is left out. Loading the sample creates every instrument in the file, and
+    the file once carried the whole ASX list, of which the portfolio uses ten.
+    """
     frame = existing.copy() if existing is not None else pd.DataFrame(columns=['name'])
+    frame = frame[frame['name'].isin(list(HOLDINGS))]
     listed = set(frame['name'])
     missing = [dict(name=name, description=h.description, currency=h.currency, market__code=h.market)
                for name, h in HOLDINGS.items() if name not in listed]
@@ -523,10 +528,12 @@ def instrument_frame(existing: pd.DataFrame | None) -> pd.DataFrame:
 
 
 def market_frame(existing: pd.DataFrame | None) -> pd.DataFrame:
-    """The template's market list, with any market the portfolio's instruments trade on that it lacks."""
+    """The markets the portfolio's instruments trade on: the template's own row for each, else a new one."""
+    used = sorted({h.market for h in HOLDINGS.values()})
     frame = existing.copy() if existing is not None else pd.DataFrame(columns=['code'])
+    frame = frame[frame['code'].isin(used)]
     listed = set(frame['code'])
-    missing = [dict(code=code) for code in sorted({h.market for h in HOLDINGS.values()}) if code not in listed]
+    missing = [dict(code=code) for code in used if code not in listed]
     return pd.concat([frame, pd.DataFrame(missing)], ignore_index=True)
 
 
@@ -534,9 +541,10 @@ def build_fake_data(output_path: Path, as_of: dt.date, seed: int, market: dict[s
     portfolio = FakePortfolio(as_of=as_of, seed=seed, market=market)
     portfolio.generate()
 
-    # The market and instrument lists come from the file being replaced: the instrument list is long
-    # and not something to invent. Everything else is this portfolio's, and the file is rebuilt the way
-    # `make_import_template` builds one, so it has every table and its optional tables marked.
+    # The portfolio's markets and instruments keep their rows from the file being replaced, so an
+    # edited description survives; ones it does not use are left out. Everything else is this
+    # portfolio's, and the file is rebuilt the way `make_import_template` builds one, so it has every
+    # table and its optional tables marked.
     existing = excelinterface.get_all_tables_in_excel(output_path)
     data: dict[str, pd.DataFrame] = {
         'Market': market_frame(existing.get('Market')),

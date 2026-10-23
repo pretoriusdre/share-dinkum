@@ -1,0 +1,40 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+AUSTRALIAN
+FOUNDATION  CHESS HOLDING STATEMENT
+INVESTMENT
+COMPANY  For statement enquiries contact
+your CHESS Sponsor:
+Australian Foundation Investment Company Ltd
+ABN: 56 004 147 120  EXAMPLE BROKING
+Place of Incorporation: VIC  LIMITED
+LEVEL 1
+1 EXAMPLE STREET
+MELBOURNE, VIC 3000
+100001  09999  03 0000 0000
+MR REDACTED NAME
+REDACTED ADDRESS ST
+REDACTED SUBURB WA REDACTED POSTCODE  Holder ID Number (HIN):  REDACTED HIN
+CHESS Sponsor's ID (PID):  09999
+Statement Period:  March 2019
+Page:  1 of 1
+AFI- ORDINARY FULLY PAID
+Date  Transaction Type  Transaction ID  Ex/Cum  Quantity  Holding
+Status  On  Off  Balance
+Balance Brought Forward from 22 Feb 19  5300
+06 Mar 19  Movement of Securities due to  0999900000000100  CUM  700  6000
+Purchase, Sale or Transfer
+18 Mar 19  Allotment of Securities due to  6000000000000200  131  6131
+Dividend Reinvestment Plan
+27 Mar 19  Movement of Securities due to  0999900000000300  1000  5131
+Purchase, Sale or Transfer
+27 Mar 19  Movement of Securities due to  0999900000000400  31  5100
+Purchase, Sale or Transfer
+FOR YOUR INFORMATION
+To obtain full terms and conditions of an Issuer's securities contact the Issuer's Registrar or the Issuer directly.
+ASX Settlement may by law need to disclose information in CHESS Holdings to third parties.
+Refer overleaf for additional important information
+Share Registry Details:
+COMPUTERSHARE INVESTOR SERVICES PTY LTD
+GPO BOX 2975
+MELBOURNE VIC 3001
+ASX  Issued By: ASX Settlement Pty Limited | ABN 49 008 504 532 | PO Box H227, Australia Square, Sydney NSW 1215

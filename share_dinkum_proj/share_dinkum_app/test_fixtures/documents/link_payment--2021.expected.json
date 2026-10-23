@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Distribution",
+      "reference": "001270518364",
+      "stated_total": "749.84",
+      "row": {
+        "instrument__name": "HPI",
+        "date": "2022-03-11",
+        "quantity": "8240",
+        "distribution_amount_per_share": "0.091",
+        "distribution_amount_per_share_currency": "AUD",
+        "total_withholding_tax": "36.00",
+        "total_withholding_tax_currency": "AUD"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "events": [
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAS",
+        "date": "2026-01-12",
+        "quantity": "420"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAS",
+        "date": "2026-03-04",
+        "quantity": "600"
+      }
+    },
+    {
+      "model": "HoldingBalance",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "instrument__name": "VAS",
+        "date": "2026-03-31",
+        "quantity": "600"
+      }
+    }
+  ]
+}

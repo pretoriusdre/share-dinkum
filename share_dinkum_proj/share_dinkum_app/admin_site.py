@@ -25,9 +25,12 @@ class ShareDinkumAdminSite(admin.AdminSite):
         `dashboard` is imported here, as this module loads before the app registry is ready.
         """
         from share_dinkum_app.dashboard import DASHBOARD_ACTIONS, dashboard_view
+        from share_dinkum_app.portfolio_scope import switch_portfolio_view
 
         custom_urls: list[URLPattern | URLResolver] = [
             path('dashboard/', self.admin_view(dashboard_view), name='dashboard'),
+            path('dashboard/switch-portfolio/', self.admin_view(switch_portfolio_view),
+                 name='switch_portfolio'),
         ]
         custom_urls += [
             path(
@@ -39,6 +42,17 @@ class ShareDinkumAdminSite(admin.AdminSite):
         ]
         # Custom URLs first, so a model never named `dashboard` could shadow them.
         return custom_urls + super().get_urls()
+
+    def each_context(self, request: HttpRequest) -> dict[str, Any]:
+        """Every admin page's context, plus the selected portfolio and the ones to switch to."""
+        from share_dinkum_app.portfolio_scope import current_portfolio
+
+        context = super().each_context(request)
+        user: Any = request.user
+        if getattr(user, 'is_authenticated', False) and hasattr(user, 'portfolios'):
+            context['current_portfolio'] = current_portfolio(request)
+            context['portfolio_choices'] = list(user.portfolios().select_related('owner'))
+        return context
 
     def index(self, request: HttpRequest, extra_context: dict[str, Any] | None = None) -> TemplateResponse:
         """The admin index is the dashboard."""

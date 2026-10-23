@@ -1,0 +1,40 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+2014 March Quarter Dividend
+AGEH10_100001
+Update your information:
+: Online:
+www.investorcentre.com/contact
+*By Mail:
+ResMed Inc.
+Computershare Investor Services Pty Limited
+ABN 46 064 514 852 GPO Box 2975 Melbourne
+Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 850 505
+(international) 61 3 9415 4000
+T 004321 0000000000000000000000000000000000000
+000
+Holder Identification Number (HIN)
+RMD
+X0000000000
+ASX Code RMD
+Record Date 13 February 2014
+Payment Date 20 March 2014
+Direct Credit Reference No. 801234
+Dear Shareholder,
+The payment below represents a quarterly dividend and is paid at a rate of US$0.025 per fully paid CDI registered in your name as at the record
+date of 13 February 2014. Holders of CDIs receive an Australian dollar amount equivalent to US$0.25 per US common stock, based on the
+USD : AUD exchange rate on the record date (US$0.9000 = A$1.00) and reflecting the 10:1 ratio between CDIs and US common stock.
+Class Description Amount per Security Number of Securities Total Payment
+CDI US$0.025 900 US$22.50
+Non-Resident Withholding Tax US$3.38
+Net Payment US$19.12
+Converted Net Payment A$21.24
+A reduced withholding tax treaty rate of 15% has been claimed and applied to the dividend payment.
+Note: You should retain this statement to assist you in preparing your tax return.
+Your Payment Instruction
+COMMONWEALTH BANK OF AUSTRALIA Amount Deposited
+BSB: 000-000 Account number: 00000000 A$21.24
+If payment cannot be made to the above instruction, a cheque will
+be forwarded to your registered address.
+100001_DSS_Low/004321/004321/i

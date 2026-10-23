@@ -1,0 +1,39 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+C/- Link Market Services Limited
+Locked Bag A14, Sydney South, NSW, 1235
+Telephone: +61 1300 554 474
+ASX Code: NDQ
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+ARSN 169 907 564
+X0000000000 Distribution Advice
+049 013862
+REDACTED NAME Payment date: 19 January 2017
+REDACTED ADDRESS
+Record date: 05 January 2017
+Reference no.: X0000000000
+TFN/ABN NOT RECEIVED OR RECORDED
+Dear Unitholder,
+BetaShares NASDAQ 100 ETF (ASX Code: NDQ)
+This payment represents a distribution for the period ended 31 December 2016, in respect of the ordinary units entitled to participate
+at the record date. The final details of the distribution components (including any non-assessable amounts) will be advised in
+the Annual Taxation Statement for the year ended 30 June 2017.
+Visit our investor website at www.linkmarketservices.com.au where you can view and change your details, including electing to receive
+distribution notifications by email going forward.
+Class Description Rate per Unit Participating Units Gross Amount
+Ordinary Units 4.127305 cents 1,960 $80.90
+*Less: Resident Withholding Tax: $38.00
+Net Amount: $42.90
+IMPORTANT:
+*WE DO NOT HAVE YOUR TFN/ABN. Resident Withholding Tax has been deducted as your TFN or ABN has not been
+recorded as at the record date. Please visit www.linkmarketservices.com.au to provide your TFN or ABN.
+PAYMENT REMITTED TO:
+COMMONWEALTH BANK OF AUSTRALIA
+1 HARBOUR ST SHOP C4 DARLING W
+SYDNEY NSW 2000
+Account Name: REDACTED NAME
+BSB: 000-000 ACC: ****0000
+Direct Credit Reference No.: 001196305482
+This statement contains important information; Please retain this statement for taxation purposes as a charge may be levied for replacement.
+*10Q431058S*

@@ -16,9 +16,10 @@ and is listed so you know those are still adjusted.
 
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.core.management.base import BaseCommand, CommandParser
 from django.db.models import Min
 
+from share_dinkum_app.management.commands._portfolios import select_accounts
 from share_dinkum_app.choices import ValuationSource
 from share_dinkum_app.models import (
     Account, Buy, Instrument, InstrumentPriceHistory, InstrumentValuation)
@@ -32,11 +33,7 @@ class Command(BaseCommand):
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args: Any, **options: Any) -> None:
-        accounts = Account.objects.all()
-        if options['account']:
-            accounts = accounts.filter(description=options['account'])
-            if not accounts.exists():
-                raise CommandError(f'No portfolio named "{options["account"]}".')
+        accounts = select_accounts(options['account'])
 
         for account in accounts:
             self._handle_account(account, options['dry_run'])

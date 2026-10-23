@@ -1,0 +1,42 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,Notice,"FAKE DATA: made-up names, numbers, units, prices and dates, for testing only."
+Statement,Data,BrokerName,"Interactive Brokers Australia Pty. Ltd., ABN 000000000"
+Statement,Data,BrokerAddress,"1 Example Street, Sydney NSW 2000"
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2025 - December 31, 2025"
+Statement,Data,WhenGenerated,"2026-01-05, 09:00:00 EST"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,REDACTED NAME
+Account Information,Data,Account,REDACTED ACCOUNT
+Account Information,Data,Base Currency,AUD
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
+Open Positions,Data,Summary,Stocks,AUD,A200,400,1,120.1,48040,125,50000,1960,
+Open Positions,Total,,Stocks,AUD,,,,,48040,,50000,1960,
+Open Positions,Data,Summary,Stocks,USD,VWRA,90,1,140.2,12618,150,13500,882,
+Open Positions,Data,Lot,Stocks,USD,VWRA,90,,140.2,12618,150,13500,882,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,AUD,A200,"2025-03-02, 22:15:00",400,120.05,120.1,-48020,-20.25,48040.25,0,20,O
+Trades,SubTotal,,Stocks,AUD,A200,,400,,,-48020,-20.25,48040.25,0,20,
+Trades,Data,Order,Stocks,USD,VWRA.L,"2025-05-12, 04:30:00",120,140.1,140.3,-16812,-6.5,16818.5,0,24,O
+Trades,Data,Order,Stocks,USD,VWRA,"2025-11-20, 05:10:00",-30,150.4,150.2,4512,-4.25,-4204.625,303.125,6,C
+Trades,Total,,Stocks,USD,,,,,,-12300,-10.75,12613.875,303.125,30,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,,Proceeds,Comm in AUD,,,MTM in AUD,Code
+Trades,Data,Order,Forex,AUD,USD.AUD,"2025-05-11, 18:00:00","10,000",1.55,,-15500,-2.9,,,0.5,
+Dividends,Header,Currency,Date,Description,Amount
+Dividends,Data,AUD,2025-07-16,A200 (AU00000A2000) Cash Dividend AUD 1.2345 (Mixed Income),493.8
+Dividends,Data,Total,,,493.8
+Dividends,Data,USD,2025-09-15,XYZ(US0000000001) Cash Dividend USD 0.25 per Share (Ordinary Dividend),2.5
+Dividends,Data,USD,2025-09-15,XYZ(US0000000001) Payment in Lieu of Dividend (Ordinary Dividend),1.25
+Dividends,Data,Total,,,3.75
+Withholding Tax,Header,Currency,Date,Description,Amount,Code
+Withholding Tax,Data,AUD,2025-07-16,A200 (AU00000A2000) Cash Dividend AUD 1.2345 - AU Tax,-3.1,
+Withholding Tax,Data,AUD,2025-08-04,A200 (AU00000A2000) Cash Dividend AUD 1.2345 - AU Tax,3.1,
+Withholding Tax,Data,AUD,2025-08-04,A200 (AU00000A2000) Cash Dividend AUD 1.2345 - AU Tax,-2.6,
+Withholding Tax,Data,USD,2025-09-15,XYZ(US0000000001) Cash Dividend USD 0.25 per Share - US Tax,-0.38,
+Withholding Tax,Data,USD,2025-09-15,XYZ(US0000000001) Payment in Lieu of Dividend - US Tax,-0.19,
+Withholding Tax,Data,USD,2025-10-06,Withholding @ 15% on Credit Interest for Sep-2025,-0.05,
+Withholding Tax,Data,Total,,,-3.22,
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Type,Code
+Financial Instrument Information,Data,Stocks,A200,BETASHARES AUSTRALIA 200 ETF,100000001,AU00000A2000,A200,ASX,1,ETF,
+Financial Instrument Information,Data,Stocks,"VWRA, VWRA.L",VANG FTSE AW USDA,100000002,IE00BK5BQT80,VWRA,LSEETF,1,ETF,
+Financial Instrument Information,Data,Stocks,XYZ,EXAMPLE CORP-CL A,100000003,US0000000001,,NASDAQ,1,COMMON,

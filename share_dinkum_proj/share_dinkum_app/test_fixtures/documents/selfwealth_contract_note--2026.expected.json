@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Sell",
+      "reference": "5000004",
+      "stated_total": "18210.00",
+      "row": {
+        "instrument__name": "NAB",
+        "date": "2026-09-02",
+        "quantity": "500",
+        "unit_price": "36.42",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "9.50",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

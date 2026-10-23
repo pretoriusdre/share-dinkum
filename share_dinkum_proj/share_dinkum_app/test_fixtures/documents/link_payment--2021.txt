@@ -1,0 +1,37 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+Link Market Services Limited
+Locked Bag A14
+Sydney South NSW 1235 Australia
+Telephone: +61 1300 554 474
+Outside Australia: +61 2 8767 1000
+ASX Code: HPI
+Email: redacted@example.com
+Website: www.linkmarketservices.com.au
+X0000000000
+Key Details
+052 004719
+Payment date: 11 March 2022
+REDACTED NAME
+Record date: 31 December 2021
+REDACTED ADDRESS
+SRN/HIN: X0000000000
+TFN/ABN RECEIVED AND RECORDED
+Distribution statement for the period ended 31 December 2021
+The final details of the distribution components (including any non-assessable amounts) is advised in the Annual Taxation
+Statement for the year ending 30 June 2022.
+Class Rate per Participating Gross Withholding Net
+description security securities amount tax amount
+Stapled Securities A$0.091 8,240 $749.84 $36.00 $713.84
+Total net amount: $713.84
+PAYMENT INSTRUCTIONS:
+REDACTED BANK
+BSB: 000-000
+ACC: 00000000 ACCOUNT NAME: REDACTED NAME
+PAYMENT REFERENCE NUMBER: 001270518364
+The payment has been made to the above account. If this account is not valid please turn over for instructions to update your
+details. Once your details have been updated, payment will be made within 4 weeks.
+This Fund is a Managed Investment Trust for the purposes of Subdivision 12-H of the Taxation Administration Act 1953. If you require further details
+as to the estimated components of this distribution, notification of relevant information can be obtained from the HPI website at www.hpitrust.com.au
+Retain this statement to assist in preparing your tax return.
+*10Q236941S*

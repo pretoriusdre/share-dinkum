@@ -6,7 +6,7 @@ import shutil
 import sqlite3
 import pickle
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest import skipUnless
@@ -3690,6 +3690,17 @@ class VersionTests(TestCase):
 
         self.assertFalse(result['update_available'])
 
+    def test_the_card_links_to_the_project_even_when_up_to_date(self):
+        """Up to date, the card had no link at all."""
+        self.client.force_login(AppUser.objects.create_superuser('card', 'card@example.com', 'x'))
+        cached = {'latest_version': version.__version__, 'release_url': 'https://example.invalid/'}
+        with patch.object(version, 'read_cache', return_value=cached):
+            response = self.client.get(reverse('admin:index'))
+
+        self.assertContains(response, 'This is the latest version.')
+        self.assertContains(response, f'href="{version.PROJECT_URL}"')
+        self.assertContains(response, f'href="{version.ISSUES_URL}"')
+
 
 class ImportTemplateCommandTests(TestCase):
     """The generated import template loads without error."""
@@ -3938,6 +3949,27 @@ class MakeFakeDataCommandTests(FakeMarketMixin, TestCase):
 
         pd.testing.assert_frame_equal(first['Buy'], again['Buy'])
         self.assertFalse(first['Buy'].equals(other['Buy']))
+
+    def test_instruments_and_markets_it_does_not_use_are_left_out(self):
+        """The sample carried the whole ASX list, and loading it created all 2,352 instruments."""
+        output = self.folder / 'listed.xlsx'
+        make_import_template.build_template(output, {
+            'Market': pd.DataFrame([{'code': 'LSE'}, {'code': 'ASX', 'suffix': 'AX', 'country': 'AU'}]),
+            'Instrument': pd.DataFrame([
+                {'name': 'ZZZ', 'description': 'Unused', 'currency': 'GBP', 'market__code': 'LSE'},
+                {'name': 'BHP', 'description': 'Kept as listed', 'currency': 'AUD', 'market__code': 'ASX'},
+            ]),
+        })
+        call_command('make_fake_data', output=str(output), as_of=self.AS_OF, cache=str(self.cache),
+                     force=True)
+        tables = excelinterface.get_all_tables_in_excel(output)
+
+        instruments = tables['Instrument'].set_index('name')
+        self.assertEqual(set(instruments.index), set(make_fake_data.HOLDINGS))
+        self.assertEqual(instruments.loc['BHP', 'description'], 'Kept as listed')
+        markets = tables['Market'].set_index('code')
+        self.assertEqual(set(markets.index), {'ASX', 'NASDAQ'})
+        self.assertEqual(markets.loc['ASX', 'country'], 'AU')
 
     def test_the_portfolio_holds_what_it_should(self):
         _, tables = self._run('fake.xlsx')
@@ -7738,6 +7770,41 @@ class InexactAllocationPrecisionTests(TransactionTestCase):
         self.assertTrue((df['status'] == 'CHANGED').any())
 
 
+class SixPlaceUnitPriceTests(ImportWorkbookMixin, TransactionTestCase):
+    """A trade's unit price holds the six places a contract note prints its average price to."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        self.account = Account.objects.create(
+            owner=create_user(username='owner'), description='Portfolio', currency='AUD',
+            fiscal_year_type=create_fiscal_year_type())
+        self.build_workbook(self.workbook, buys=[{
+            'legacy_id': 'buy-1', 'instrument__name': 'BHP', 'date': date(2023, 7, 1),
+            'quantity': Decimal('20000'), 'unit_price': Decimal('1.234567'), 'unit_price_currency': 'AUD',
+            'total_brokerage': Decimal('0'), 'total_brokerage_currency': 'AUD'}])
+        loading.DataLoader(account=self.account, input_file=self.workbook)
+
+    def test_the_price_loads_and_reaches_the_cost_base(self):
+        buy = Buy.objects.get(account=self.account)
+        self.assertEqual(buy.unit_price.amount, Decimal('1.234567'))
+        # At four places the price was 1.2346, and the cost base 24,692.00.
+        parcel = Parcel.objects.get(buy=buy)
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('24691.34'), 'AUD'))
+
+    def test_the_price_survives_an_export_and_restore(self):
+        export = DataExport.objects.create(account=self.account)
+        export.refresh_from_db()
+        path = Path(tempfile.mkdtemp()) / Path(export.file.path).name
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        loading.DataLoader(input_file=path)
+
+        self.assertEqual(Buy.objects.get().unit_price.amount, Decimal('1.234567'))
+
+
 class ExportButtonTests(TransactionTestCase):
     """The dashboard's Export portfolio button returns the file itself."""
 
@@ -10583,3 +10650,1206 @@ class ExchangeRateOnADayWithNoQuoteTests(TestCase):
 
         self.assertEqual(rate.quantize(Decimal('0.01')), Decimal('1.52'))
         mock_ticker.history.assert_called_once_with(start='2024-06-23', end='2024-07-01')
+
+
+# =============================================================================
+# Portfolio selection and scoping
+# =============================================================================
+
+
+def _buy(account, instrument, day=date(2024, 1, 5)):
+    return Buy.objects.create(
+        account=account, instrument=instrument, date=day, quantity=Decimal('100'),
+        unit_price=Money(50, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+
+class PortfolioScopingTests(TransactionTestCase):
+    """The dashboard, the admin and new records follow the portfolio selected at the top of the
+    page. Only the first portfolio a user created used to be reachable."""
+
+    def setUp(self):
+        self.fy_type = create_fiscal_year_type()
+        self.owner = AppUser.objects.create_superuser('owner', 'owner@example.com', 'x')
+        self.a = Account.objects.create(
+            owner=self.owner, description='Portfolio A', currency='AUD', fiscal_year_type=self.fy_type)
+        self.b = Account.objects.create(
+            owner=self.owner, description='Portfolio B', currency='AUD', fiscal_year_type=self.fy_type)
+        self.instrument_a = create_instrument(account=self.a, name='BHP')
+        self.instrument_b = create_instrument(account=self.b, name='CBA')
+        self.buy_a = _buy(self.a, self.instrument_a)
+        self.buy_b = _buy(self.b, self.instrument_b)
+        self.owner.refresh_from_db()
+        self.client.force_login(self.owner)
+
+    def _request(self, user=None):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = user or self.owner
+        return request
+
+    def _switch(self, account, next_url=''):
+        return self.client.post(
+            reverse('admin:switch_portfolio'), {'account': str(account.pk), 'next': next_url})
+
+    def _listed_buys(self):
+        response = self.client.get(reverse('admin:share_dinkum_app_buy_changelist'))
+        return {buy.pk for buy in response.context['cl'].result_list}
+
+    def test_the_first_portfolio_is_selected_to_begin_with(self):
+        self.assertEqual(self.owner.visible_account, self.a)
+
+    def test_lists_show_only_the_selected_portfolio(self):
+        self.assertEqual(self._listed_buys(), {self.buy_a.pk})
+        self._switch(self.b)
+        self.assertEqual(self._listed_buys(), {self.buy_b.pk})
+
+    def test_the_dashboard_follows_the_selection(self):
+        self._switch(self.b)
+        response = self.client.get(reverse('admin:index'))
+        self.assertEqual(response.context['dashboard_account'], self.b)
+        self.assertContains(response, 'id="portfolio-select"')
+
+    def test_switching_is_saved_and_goes_back_to_the_list_not_the_old_record(self):
+        change_url = reverse('admin:share_dinkum_app_buy_change', args=[self.buy_a.pk])
+        response = self._switch(self.b, next_url=change_url)
+
+        self.assertRedirects(response, reverse('admin:share_dinkum_app_buy_changelist'),
+                             fetch_redirect_response=False)
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.default_account, self.b)
+
+    def test_switching_on_a_page_that_is_no_record_goes_back_to_it(self):
+        for next_url in (reverse('admin:password_change'),
+                         reverse('admin:auth_user_password_change', args=[self.owner.pk])):
+            response = self._switch(self.b, next_url=next_url)
+            self.assertRedirects(response, next_url, fetch_redirect_response=False)
+
+    def test_a_next_address_on_another_site_is_ignored(self):
+        response = self._switch(self.b, next_url='https://example.com/')
+        self.assertRedirects(response, reverse('admin:dashboard'), fetch_redirect_response=False)
+
+    def test_another_portfolios_record_says_where_it_is(self):
+        url = reverse('admin:share_dinkum_app_buy_change', args=[self.buy_b.pk])
+        response = self.client.get(url, follow=True)
+
+        self.assertRedirects(response, reverse('admin:share_dinkum_app_buy_changelist'))
+        self.assertIn('Portfolio B', ' '.join(str(m) for m in response.context['messages']))
+
+    def test_the_instrument_picker_offers_only_the_selected_portfolio(self):
+        response = self.client.get(reverse('admin:autocomplete'), {
+            'app_label': 'share_dinkum_app', 'model_name': 'buy', 'field_name': 'instrument',
+            'term': ''})
+        ids = {result['id'] for result in json.loads(response.content)['results']}
+        self.assertEqual(ids, {str(self.instrument_a.pk)})
+
+    def test_a_new_record_goes_into_the_selected_portfolio_and_cannot_be_moved(self):
+        form = admin.site._registry[Buy].get_form(self._request())()
+        field = form.fields['account']
+        self.assertTrue(field.disabled)
+        self.assertEqual(field.initial, self.a)
+        self.assertEqual(list(field.queryset), [self.a])
+
+    def test_another_portfolios_instrument_is_refused_by_the_form(self):
+        form_class = admin.site._registry[Buy].get_form(self._request())
+        form = form_class(data={'instrument': str(self.instrument_b.pk)})
+        self.assertIn('instrument', form.errors)
+
+    def test_a_duplicate_instrument_name_is_a_form_error_not_a_crash(self):
+        form_class = admin.site._registry[Instrument].get_form(self._request())
+        form = form_class(data={
+            'name': 'BHP', 'description': 'Again', 'currency': 'AUD',
+            'market': str(self.instrument_a.market.pk)})
+        self.assertFalse(form.is_valid())
+        self.assertIn('already exists', str(form.errors))
+
+    def test_adding_a_portfolio_selects_it(self):
+        admin.site._registry[Account].response_add(
+            self._post_request(), Account.objects.create(
+                owner=self.owner, description='Portfolio C', currency='AUD',
+                fiscal_year_type=self.fy_type))
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.default_account.description, 'Portfolio C')
+
+    def _post_request(self):
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from django.test import RequestFactory
+        request = RequestFactory().post('/', {'_save': 'Save'})
+        request.user = self.owner
+        request.session = self.client.session
+        request._messages = FallbackStorage(request)
+        return request
+
+    def test_a_record_cannot_refer_to_another_portfolios_record(self):
+        with self.assertRaisesMessage(ValueError, 'belongs to another portfolio'):
+            _buy(self.a, self.instrument_b, day=date(2024, 2, 1))
+        self.assertFalse(Buy.objects.filter(account=self.a, instrument=self.instrument_b).exists())
+
+    def test_the_admin_check_says_the_same(self):
+        buy = Buy(account=self.a, instrument=self.instrument_b, date=date(2024, 2, 1),
+                  quantity=Decimal('1'), unit_price=Money(1, 'AUD'), total_brokerage=Money(0, 'AUD'))
+        with self.assertRaisesMessage(ValidationError, 'belongs to another portfolio'):
+            buy.clean()
+
+    def test_an_existing_link_across_portfolios_is_reported(self):
+        # Made as the admin used to allow; the instrument's market is not part of any holding.
+        Instrument.objects.filter(pk=self.instrument_a.pk).update(market=self.instrument_b.market)
+
+        finding = {f.key: f for f in data_checks.run(self.a)}['cross_portfolio_links']
+        self.assertEqual(finding.count, 1)
+        self.assertTrue(finding.affects_gains)
+        self.assertFalse(finding.repairable)
+
+        out = io.StringIO()
+        call_command('repair_portfolio_data', '--account', 'Portfolio A', '--dry-run', stdout=out)
+        self.assertIn("another portfolio's records", out.getvalue())
+        self.assertNotIn('cross_portfolio_links', {f.key for f in data_checks.run(self.b)})
+
+
+class PortfolioVisibilityTests(TransactionTestCase):
+    """A superuser may select any portfolio; anyone else only their own."""
+
+    def setUp(self):
+        fy_type = create_fiscal_year_type()
+        self.root = AppUser.objects.create_superuser('root', 'root@example.com', 'x')
+        self.staff = AppUser.objects.create_user('staff', password='x', is_staff=True)
+        self.mine = Account.objects.create(
+            owner=self.staff, description='Mine', currency='AUD', fiscal_year_type=fy_type)
+        self.theirs = Account.objects.create(
+            owner=self.root, description='Theirs', currency='AUD', fiscal_year_type=fy_type)
+        self.staff.refresh_from_db()
+        self.root.refresh_from_db()
+
+    def test_a_user_sees_their_own_and_a_superuser_every_portfolio(self):
+        self.assertEqual(list(self.staff.portfolios()), [self.mine])
+        self.assertEqual(set(self.root.portfolios()), {self.mine, self.theirs})
+
+    def test_a_selection_the_user_may_not_see_is_passed_over(self):
+        self.staff.default_account = self.theirs
+        self.staff.save()
+        self.assertEqual(self.staff.visible_account, self.mine)
+
+    def test_a_user_cannot_select_someone_elses_portfolio(self):
+        self.client.force_login(self.staff)
+        self.client.post(reverse('admin:switch_portfolio'), {'account': str(self.theirs.pk)})
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.default_account, self.mine)
+
+    def test_a_superuser_can_select_anyones(self):
+        self.client.force_login(self.root)
+        self.client.post(reverse('admin:switch_portfolio'), {'account': str(self.mine.pk)})
+        self.root.refresh_from_db()
+        self.assertEqual(self.root.default_account, self.mine)
+
+    def test_the_portfolio_list_shows_only_what_the_user_may_see(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = self.staff
+        self.assertEqual(list(admin.site._registry[Account].get_queryset(request)), [self.mine])
+
+    def test_only_a_superuser_changes_the_shared_tables(self):
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = self.staff
+        for model in (CPIIndex, FiscalYear, FiscalYearType):
+            self.assertFalse(admin.site._registry[model].has_change_permission(request))
+        request.user = self.root
+        self.assertTrue(admin.site._registry[CPIIndex].has_change_permission(request))
+
+    def test_a_document_is_served_only_to_a_user_who_may_see_its_portfolio(self):
+        from django.conf import settings
+        for account in (self.mine, self.theirs):
+            folder = Path(settings.MEDIA_ROOT) / str(account.pk)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'note.txt').write_text('private', encoding='utf-8')
+            self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get(f'/media/{self.mine.pk}/note.txt').status_code, 200)
+        self.assertEqual(self.client.get(f'/media/{self.theirs.pk}/note.txt').status_code, 404)
+        self.assertEqual(
+            self.client.get(f'/media/{self.mine.pk}/../{self.theirs.pk}/note.txt').status_code, 404)
+        # On Windows a backslash is a separator too, so it must not reach the other folder either.
+        for escape in (f'{self.mine.pk}/..\\{self.theirs.pk}/note.txt', f'{self.mine.pk}/..%5C{self.theirs.pk}/note.txt'):
+            self.assertEqual(self.client.get(f'/media/{escape}').status_code, 404)
+
+        # Not staff, so not signed in to the admin: sent to the login page.
+        self.client.force_login(AppUser.objects.create_user('visitor', password='x'))
+        self.assertEqual(self.client.get(f'/media/{self.mine.pk}/note.txt').status_code, 302)
+
+    def test_a_portfolio_name_two_owners_use_must_say_whose(self):
+        from share_dinkum_app.management.commands._portfolios import select_accounts
+        fy_type = self.mine.fiscal_year_type
+        Account.objects.create(owner=self.staff, description='Shared name', currency='AUD',
+                               fiscal_year_type=fy_type)
+        root_one = Account.objects.create(owner=self.root, description='Shared name',
+                                          currency='AUD', fiscal_year_type=fy_type)
+
+        with self.assertRaisesMessage(CommandError, 'staff/Shared name, root/Shared name'):
+            select_accounts('Shared name')
+        self.assertEqual(list(select_accounts('root/Shared name')), [root_one])
+        self.assertEqual(list(select_accounts(str(root_one.pk))), [root_one])
+        with self.assertRaisesMessage(CommandError, 'No portfolio named'):
+            select_accounts('Nobody')
+
+
+# --- Source documents (documents/) ---
+
+from share_dinkum_app.documents import (
+    ai as document_ai, check as document_check, columns as document_columns, contract, ocr as document_ocr,
+    prompt as document_prompt, readers as document_readers, redaction, validate as document_validate)
+from share_dinkum_app.documents import parsers as document_parsers
+from share_dinkum_app.documents.ai import schema as ai_schema
+from share_dinkum_app.documents.ai.cache import Cache as AICache
+from share_dinkum_app.documents.extract import FileExtraction, extract_file, files_in
+from share_dinkum_app.documents.extracted import Document, Extracted, Unreadable
+from share_dinkum_app.documents.parsers import _common
+
+SAMPLE_PACKAGE = 'sample_document_parsers'
+
+# A made-up layout, and a parser for it written to the spec: what a contributor delivers.
+SAMPLE_TEXT = """\
+EXAMPLE REGISTRY PTY LTD
+DISTRIBUTION ADVICE
+REDACTED NAME
+REDACTED ADDRESS
+Holder number: X0000000000
+ASX code: VAS
+Payment date: 16/07/2025
+Units held: 1,000
+Distribution rate: 143.6788 cents per unit
+Gross amount: $1,436.79
+Withholding tax: $0.00
+Net amount: $1,436.79
+Payment reference: 001234
+"""
+
+SAMPLE_PARSER = '''\
+"""Example Registry distribution advice: a made-up layout the tests use."""
+
+from share_dinkum_app.documents.extracted import Document, Extracted
+from share_dinkum_app.documents.parsers import _common
+
+NAME = 'example_payment'
+KIND = 'text'
+
+
+def recognises(doc: Document) -> bool:
+    return _common.has_all(doc.text or '', 'EXAMPLE REGISTRY PTY LTD', 'DISTRIBUTION ADVICE')
+
+
+def parse(doc: Document) -> list[Extracted]:
+    text = doc.text or ''
+    rate = _common.money(_common.labelled(text, 'Distribution rate'))
+    row = {
+        'instrument__name': _common.labelled(text, 'ASX code', _common.CODE),
+        'date': _common.date(_common.labelled(text, 'Payment date', _common.DATE)),
+        'quantity': _common.units(_common.labelled(text, 'Units held')),
+        'distribution_amount_per_share': _common.cents_to_dollars(rate),
+        'distribution_amount_per_share_currency': 'AUD',
+        'total_withholding_tax': _common.money(_common.labelled(text, 'Withholding tax')),
+        'total_withholding_tax_currency': 'AUD',
+    }
+    return [Extracted('Distribution', row, reference=_common.labelled(text, 'Payment reference', r'\\d+'),
+                      stated_total=_common.money(_common.labelled(text, 'Gross amount')))]
+'''
+
+SAMPLE_EXPECTED = {'events': [{
+    'model': 'Distribution', 'reference': '001234', 'stated_total': '1436.79',
+    'row': {'instrument__name': 'VAS', 'date': '2025-07-16', 'quantity': '1000',
+            'distribution_amount_per_share': '1.436788', 'distribution_amount_per_share_currency': 'AUD',
+            'total_withholding_tax': '0.00', 'total_withholding_tax_currency': 'AUD'},
+}]}
+
+
+def minimal_pdf(lines):
+    """A one-page PDF with `lines` of text on it, or none."""
+    content = 'BT /F1 12 Tf 72 720 Td ' + ' '.join(f'({line}) Tj 0 -16 Td' for line in lines) + ' ET'
+    objects = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R '
+        '/Resources << /Font << /F1 5 0 R >> >> >>',
+        f'<< /Length {len(content)} >>\nstream\n{content}\nendstream',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]
+    out = b'%PDF-1.4\n'
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f'{number} 0 obj\n{body}\nendobj\n'.encode('latin-1')
+    xref = len(out)
+    out += f'xref\n0 {len(objects) + 1}\n0000000000 65535 f \n'.encode('latin-1')
+    out += b''.join(f'{offset:010d} 00000 n \n'.encode('latin-1') for offset in offsets)
+    out += f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode('latin-1')
+    return out
+
+
+def scanned_pdf(path, text):
+    """A one-page PDF holding `text` only as a picture, as a scanner makes it."""
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.load_default(size=40)
+    page = Image.new('L', (1654, 2339), 255)  # A4 at 200 dpi
+    draw = ImageDraw.Draw(page)
+    for number, line in enumerate(text.splitlines()):
+        draw.text((120, 150 + number * 70), line, fill=0, font=font)
+    page.save(path, resolution=200)
+
+
+class SampleParsersMixin:
+    """A temporary parser package and fixtures folder, holding the sample parser and any others given."""
+
+    def make_parsers(self, sources=None, fixtures=None, expected=None):
+        import importlib
+        import sys
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        package = root / SAMPLE_PACKAGE
+        package.mkdir()
+        (package / '__init__.py').write_text('', encoding='utf-8')
+        sources = {'example_payment': SAMPLE_PARSER} if sources is None else sources
+        fixtures = {'example_payment.txt': SAMPLE_TEXT} if fixtures is None else fixtures
+        expected = {'example_payment': SAMPLE_EXPECTED} if expected is None else expected
+        for name, source in sources.items():
+            (package / f'{name}.py').write_text(source, encoding='utf-8')
+
+        self.fixtures = root / 'fixtures'
+        self.fixtures.mkdir()
+        for name, text in fixtures.items():
+            (self.fixtures / name).write_text(f'{contract.FAKE_DATA}\n{text}', encoding='utf-8')
+        for name, events in expected.items():
+            (self.fixtures / f'{name}.expected.json').write_text(json.dumps(events), encoding='utf-8')
+
+        def forget():
+            sys.path.remove(str(root))
+            for module in [m for m in sys.modules if m == SAMPLE_PACKAGE or m.startswith(f'{SAMPLE_PACKAGE}.')]:
+                del sys.modules[module]
+        sys.path.insert(0, str(root))
+        self.addCleanup(forget)
+        importlib.invalidate_caches()
+        return document_parsers.discover(SAMPLE_PACKAGE)
+
+    def write_document(self, name, text):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = folder / name
+        path.write_text(text, encoding='utf-8')
+        return path
+
+
+class DocumentCommonHelperTests(SimpleTestCase):
+    def test_amounts_keep_every_printed_place(self):
+        self.assertEqual(_common.money('$1,436.79'), Decimal('1436.79'))
+        self.assertEqual(str(_common.money('A$0.436700')), '0.436700')
+        self.assertEqual(_common.money('AUD 10.00'), Decimal('10.00'))
+        self.assertEqual(_common.money('(12.50)'), Decimal('-12.50'))
+        self.assertEqual(_common.money('12.50-'), Decimal('-12.50'))
+        with self.assertRaises(_common.ParseError):
+            _common.money('n/a')
+
+    def test_a_trade_is_dated_on_its_exchange(self):
+        evening = datetime(2022, 10, 2, 22, 11)
+        self.assertEqual(_common.exchange_date(evening, 'America/New_York', 'ASX'), date(2022, 10, 3))
+        self.assertEqual(_common.exchange_date(evening, 'America/New_York', 'NASDAQ'), date(2022, 10, 2))
+        with self.assertRaises(_common.ParseError):
+            _common.exchange_date(evening, 'America/New_York', 'MOON')
+
+    def test_cents_become_dollars_exactly(self):
+        self.assertEqual(str(_common.cents_to_dollars(Decimal('143.6788'))), '1.436788')
+        self.assertEqual(str(_common.cents_to_dollars(_common.money('20'))), '0.20')
+
+    def test_dates_are_read_day_first(self):
+        for text in ('16/07/2025', '16 Jul 2025', '16 July 2025', '16-Jul-25', '2025-07-16', '16th July 2025'):
+            with self.subTest(text):
+                self.assertEqual(_common.date(text), date(2025, 7, 16))
+        self.assertEqual(_common.date('1 Sept 2026'), date(2026, 9, 1))
+        with self.assertRaises(_common.ParseError):
+            _common.date('07/32/2025')
+
+    def test_a_labelled_value_is_found_ignoring_case_and_spacing(self):
+        text = 'Gross   amount :  $1,436.79\nPayment date 16 July 2025'
+        self.assertEqual(_common.labelled(text, 'gross amount'), '$1,436.79')
+        self.assertEqual(_common.labelled(text, 'Payment date', _common.DATE), '16 July 2025')
+        self.assertIsNone(_common.labelled_or_none(text, 'Withholding tax'))
+        with self.assertRaisesMessage(_common.ParseError, 'Withholding tax'):
+            _common.labelled(text, 'Withholding tax')
+
+    def test_phrases_are_matched_across_line_breaks(self):
+        self.assertTrue(_common.has_all('EXAMPLE REGISTRY\nPTY LTD', 'EXAMPLE REGISTRY PTY LTD'))
+        self.assertFalse(_common.has_all('Example Registry Pty Ltd', 'EXAMPLE REGISTRY PTY LTD'))
+
+    def test_phrases_are_matched_with_a_space_missing_as_ocr_gives_them(self):
+        self.assertTrue(_common.has_all('EXAMPLE REGISTRYPTY LTD', 'EXAMPLE REGISTRY PTY LTD'))
+
+
+class DocumentParserContractTests(SampleParsersMixin, SimpleTestCase):
+    """Every parser in documents/parsers meets PARSER_SPEC.md. A contributor's parser is accepted when this passes."""
+
+    def test_every_parser_meets_the_spec(self):
+        parsers = document_parsers.discover()
+        for parser in parsers:
+            with self.subTest(parser.__name__):
+                self.assertEqual(contract.problems(parser, parsers), [])
+
+    def test_every_fixture_has_a_parser(self):
+        self.assertEqual(contract.orphan_fixtures(document_parsers.discover()), [])
+
+    def test_a_parser_written_to_the_spec_passes(self):
+        parsers = self.make_parsers()
+        self.assertEqual(contract.problems(parsers[0], parsers, self.fixtures), [])
+
+    def test_a_name_that_is_not_the_file_name_is_refused(self):
+        parsers = self.make_parsers({'example_payment': SAMPLE_PARSER.replace("NAME = 'example_payment'",
+                                                                              "NAME = 'example'")})
+        self.assertIn("NAME is 'example', but it must be the file name, 'example_payment'.",
+                      contract.problems(parsers[0], parsers, self.fixtures))
+
+    def test_an_unannotated_function_and_a_forbidden_import_are_refused(self):
+        source = SAMPLE_PARSER.replace('def recognises(doc: Document) -> bool:', 'def recognises(doc):')
+        source = source.replace('from share_dinkum_app.documents.extracted', 'import os\nfrom share_dinkum_app.documents.extracted')
+        parsers = self.make_parsers({'example_payment': source})
+        found = contract.problems(parsers[0], parsers, self.fixtures)
+        self.assertIn('recognises() must be annotated.', found)
+        self.assertIn('It imports os, which a parser may not.', found)
+
+    def test_a_parser_recognising_another_layout_is_refused(self):
+        greedy = SAMPLE_PARSER.replace("NAME = 'example_payment'", "NAME = 'greedy_payment'").replace(
+            "'EXAMPLE REGISTRY PTY LTD', 'DISTRIBUTION ADVICE'", "'DISTRIBUTION ADVICE'")
+        parsers = self.make_parsers(
+            {'example_payment': SAMPLE_PARSER, 'greedy_payment': greedy},
+            fixtures={'example_payment.txt': SAMPLE_TEXT,
+                      'greedy_payment.txt': SAMPLE_TEXT.replace('EXAMPLE REGISTRY', 'OTHER REGISTRY')},
+            expected={'example_payment': SAMPLE_EXPECTED, 'greedy_payment': SAMPLE_EXPECTED})
+        example, greedy_parser = parsers
+        self.assertIn('greedy_payment also recognises example_payment.txt. Use phrases only this layout has.',
+                      contract.problems(example, parsers, self.fixtures))
+        self.assertIn('recognises() accepts example_payment.txt, which is another layout.',
+                      contract.problems(greedy_parser, parsers, self.fixtures))
+
+    def test_events_that_differ_from_the_expected_ones_are_shown(self):
+        wrong = json.loads(json.dumps(SAMPLE_EXPECTED))
+        wrong['events'][0]['row']['quantity'] = '100'
+        parsers = self.make_parsers(expected={'example_payment': wrong})
+        [found] = contract.problems(parsers[0], parsers, self.fixtures)
+        self.assertIn('parse() does not give the expected events', found)
+        self.assertIn('"quantity": "100"', found)
+
+    def test_a_total_that_does_not_add_up_is_refused(self):
+        expected = json.loads(json.dumps(SAMPLE_EXPECTED))
+        expected['events'][0]['stated_total'] = '1500.00'
+        parsers = self.make_parsers(fixtures={'example_payment.txt': SAMPLE_TEXT.replace('$1,436.79', '$1,500.00')},
+                                    expected={'example_payment': expected})
+        self.assertEqual(contract.problems(parsers[0], parsers, self.fixtures), [
+            'example_payment.txt event 1: The document gives a total of 1500.00, but the per-unit figures times '
+            'the units come to 1436.788000.'])
+
+    def test_each_variant_of_a_layout_is_checked_against_its_own_expected_events(self):
+        variant = json.loads(json.dumps(SAMPLE_EXPECTED))
+        variant['events'][0]['row']['quantity'] = '2000'
+        variant['events'][0]['stated_total'] = '2873.58'
+        parsers = self.make_parsers(
+            fixtures={'example_payment.txt': SAMPLE_TEXT,
+                      'example_payment--2019.txt': SAMPLE_TEXT.replace('1,000', '2,000').replace('$1,436.79', '$2,873.58')},
+            expected={'example_payment': SAMPLE_EXPECTED, 'example_payment--2019': variant})
+        self.assertEqual(contract.problems(parsers[0], parsers, self.fixtures), [])
+        self.assertEqual(contract.orphan_fixtures(parsers, self.fixtures), [])
+
+        (self.fixtures / 'example_payment--2019.expected.json').write_text(json.dumps(SAMPLE_EXPECTED), encoding='utf-8')
+        [found] = contract.problems(parsers[0], parsers, self.fixtures)
+        self.assertIn('parse() does not give the expected events for example_payment--2019.txt', found)
+
+    def test_a_missing_fixture_is_named(self):
+        parsers = self.make_parsers(fixtures={})
+        self.assertEqual(contract.problems(parsers[0], parsers, self.fixtures),
+                         [f'There is no example_payment.txt in {self.fixtures}.'])
+
+    def test_a_fixture_must_say_it_is_fake(self):
+        parsers = self.make_parsers()
+        (self.fixtures / 'example_payment.txt').write_text(SAMPLE_TEXT, encoding='utf-8')
+        self.assertEqual(contract.problems(parsers[0], parsers, self.fixtures),
+                         [f'example_payment.txt does not start with the line "{contract.FAKE_DATA}"'])
+
+
+class DocumentValidationTests(SimpleTestCase):
+    def event(self, **row):
+        values = {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('1000'),
+                  'distribution_amount_per_share': Decimal('1.436788'),
+                  'distribution_amount_per_share_currency': 'AUD'}
+        values.update(row)
+        return Extracted('Distribution', {k: v for k, v in values.items() if v is not None})
+
+    def test_a_well_formed_event_has_no_problems(self):
+        self.assertEqual(document_validate.problems(self.event()), [])
+
+    def test_columns_types_and_required_values_are_checked(self):
+        found = document_validate.problems(self.event(quantity=None, date='2025-07-16', strategy='FIFO',
+                                                      distribution_amount_per_share=1.43))
+        self.assertIn('Distribution needs quantity, and the event has none.', found)
+        self.assertIn("date must be a datetime.date, not str ('2025-07-16').", found)
+        self.assertIn('distribution_amount_per_share must be a Decimal, not float (1.43).', found)
+        self.assertTrue(any(problem.startswith("Distribution has no column 'strategy'") for problem in found))
+
+    def test_a_model_no_document_gives_is_refused(self):
+        self.assertIn("'Parcel' is not an event", document_validate.problems(Extracted('Parcel', {}))[0])
+
+    def test_a_holding_balance_is_an_event_that_is_checked_but_not_stored(self):
+        row = {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('1000')}
+        self.assertEqual(document_validate.problems(Extracted('HoldingBalance', row)), [])
+        self.assertEqual(document_validate.problems(Extracted('HoldingBalance', {**row, 'quantity': 1000})),
+                         ['quantity must be a Decimal, not int (1000).'])
+        self.assertNotIn('HoldingBalance', document_columns.MODELS)
+        self.assertIn('### HoldingBalance', document_columns.markdown())
+        self.assertNotIn('HoldingBalance', document_ai.system_prompt())
+
+    def test_the_stated_total_must_agree_to_the_cent(self):
+        event = self.event()
+        event.stated_total = Decimal('1436.79')
+        self.assertEqual(document_validate.problems(event), [])
+        event.stated_total = Decimal('1436.80')
+        self.assertEqual(len(document_validate.problems(event)), 1)
+
+    def test_a_printed_average_price_may_be_off_by_its_own_rounding_times_the_units(self):
+        # 100,000 units at a true average of 1.2345674, printed as 1.234567: 4 cents short of the total.
+        row = {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('100000'),
+               'unit_price': Decimal('1.234567'), 'unit_price_currency': 'AUD', 'total_brokerage': Decimal('19.95'),
+               'total_brokerage_currency': 'AUD'}
+        self.assertEqual(document_validate.problems(Extracted('Buy', row, stated_total=Decimal('123456.74'))), [])
+        self.assertEqual(len(document_validate.problems(Extracted('Buy', row, stated_total=Decimal('123456.80')))), 1)
+
+    def test_the_columns_leave_out_what_the_app_sets(self):
+        self.assertEqual(document_columns.columns('Sell'), [
+            'instrument__name', 'date', 'quantity', 'unit_price', 'unit_price_currency', 'total_brokerage',
+            'total_brokerage_currency'])
+        self.assertEqual(document_columns.columns('AttributionComponent'), ['component', 'amount', 'amount_currency'])
+
+
+class DocumentExtractionTests(SampleParsersMixin, SimpleTestCase):
+    def test_a_recognised_document_gives_validated_events(self):
+        parsers = self.make_parsers()
+        path = self.write_document('advice.txt', SAMPLE_TEXT)
+        result = extract_file(path, parsers)
+        self.assertIsNone(result.problem)
+        self.assertEqual(result.parser, 'example_payment')
+        [event] = result.events
+        self.assertEqual((event.source, event.parser, event.problems), (path, 'example_payment', []))
+        self.assertEqual(event.row['distribution_amount_per_share'], Decimal('1.436788'))
+
+    def test_a_layout_no_parser_recognises_is_reported(self):
+        parsers = self.make_parsers()
+        result = extract_file(self.write_document('other.txt', 'SOMETHING ELSE'), parsers)
+        self.assertEqual((result.problem, result.events), ('No parser recognises this layout.', []))
+
+    def test_a_value_the_parser_cannot_find_is_named(self):
+        parsers = self.make_parsers()
+        result = extract_file(self.write_document('advice.txt', SAMPLE_TEXT.replace('Units held', 'Units')), parsers)
+        self.assertEqual(result.problem, 'example_payment could not read it: No value found after "Units held".')
+
+    def test_two_parsers_recognising_one_file_are_reported(self):
+        twin = SAMPLE_PARSER.replace("NAME = 'example_payment'", "NAME = 'twin_payment'")
+        parsers = self.make_parsers({'example_payment': SAMPLE_PARSER, 'twin_payment': twin})
+        result = extract_file(self.write_document('advice.txt', SAMPLE_TEXT), parsers)
+        self.assertIn('More than one parser recognises this file (example_payment, twin_payment)', result.problem)
+
+    def test_unreadable_files_are_reported_and_lock_files_skipped(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        (folder / 'photo.jpg').write_bytes(b'\xff\xd8')
+        (folder / '~$book.xlsx').write_bytes(b'')
+        (folder / 'scan.pdf').write_bytes(minimal_pdf([]))
+        (folder / '2025' / 'July').mkdir(parents=True)
+        (folder / '2025' / 'July' / 'advice.txt').write_text(SAMPLE_TEXT, encoding='utf-8')
+        (folder / '.git').mkdir()
+        (folder / '.git' / 'config.txt').write_text('', encoding='utf-8')
+        self.assertEqual([path.relative_to(folder).as_posix() for path in files_in(folder)],
+                         ['2025/July/advice.txt', 'photo.jpg', 'scan.pdf'])
+        self.assertEqual(document_readers.read(folder / 'photo.jpg').reason, 'Not a PDF, CSV or spreadsheet.')
+        with patch.object(document_ocr, 'available', return_value=False):
+            self.assertIn('probably a scan. To read scans by OCR on this machine, run: uv sync --inexact --extra ocr',
+                          document_readers.read(folder / 'scan.pdf').reason)
+
+    def test_a_pdf_is_read_as_text(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        (folder / 'advice.pdf').write_bytes(minimal_pdf(['EXAMPLE REGISTRY PTY LTD', 'DISTRIBUTION ADVICE']))
+        doc = document_readers.read(folder / 'advice.pdf')
+        self.assertEqual(doc.kind, 'text')
+        self.assertIn('EXAMPLE REGISTRY PTY LTD\nDISTRIBUTION ADVICE', doc.text)
+
+    @skipUnless(document_ocr.available(), 'The ocr extra is not installed.')
+    def test_a_scanned_pdf_is_read_by_ocr_and_parsed(self):
+        parsers = self.make_parsers()
+        path = self.write_document('advice.pdf', '')
+        scanned_pdf(path, SAMPLE_TEXT)
+        result = extract_file(path, parsers)
+        self.assertIsNone(result.problem)
+        self.assertTrue(result.scanned)
+        [event] = result.events
+        self.assertEqual(contract.event_json(event), SAMPLE_EXPECTED['events'][0])
+
+    @skipUnless(document_ocr.available(), 'The ocr extra is not installed.')
+    def test_a_blank_scan_is_reported(self):
+        path = self.write_document('blank.pdf', '')
+        path.write_bytes(minimal_pdf([]))
+        self.assertEqual(document_readers.read(path).reason, 'The PDF has no text in it, and OCR found none either.')
+
+    def test_a_csv_is_read_as_text_cells(self):
+        path = self.write_document('export.csv', 'Code,Units,Rate\nVAS,1000,0.436700\n')
+        doc = document_readers.read(path)
+        self.assertEqual(doc.kind, 'table')
+        self.assertEqual(doc.table.iloc[0].tolist(), ['VAS', '1000', '0.436700'])
+        self.assertTrue(_common.header_is(doc.table, ['Code', 'Units', 'Rate']))
+
+    def test_a_csv_of_several_tables_is_read_with_its_rows_padded(self):
+        # An Interactive Brokers statement: each section has its own columns, and the file a byte order mark.
+        path = self.write_document('activity.csv', '﻿Statement,Header,Field Name,Field Value\n'
+                                                   'Statement,Data,Period,"January 1, 2025"\n'
+                                                   'Trades,Header,DataDiscriminator,Symbol,Quantity\n'
+                                                   'Trades,Data,Order,VAS,100\n')
+        doc = document_readers.read(path)
+        self.assertEqual(list(doc.table.columns), ['Statement', 'Header', 'Field Name', 'Field Value', ''])
+        self.assertEqual(doc.table.iloc[0].tolist(), ['Statement', 'Data', 'Period', 'January 1, 2025', ''])
+        self.assertEqual(doc.table.iloc[2].tolist(), ['Trades', 'Data', 'Order', 'VAS', '100'])
+
+    def test_a_csv_saved_by_excel_in_windows_1252_is_read(self):
+        path = self.write_document('records.csv', '')
+        path.write_bytes('Code,Paid\nSOL,A$1.00 – final\n'.encode('cp1252'))
+        self.assertEqual(document_readers.read(path).table.iloc[0].tolist(), ['SOL', 'A$1.00 – final'])
+
+
+class DocumentOCRTests(SimpleTestCase):
+    def test_boxes_are_put_back_into_lines_with_columns_two_spaces_apart(self):
+        Box = document_ocr.Box
+        boxes = [
+            Box(700, 102, 800, 138, '1,250'),          # a little lower on the line, as on a tilted scan
+            Box(100, 100, 300, 140, '01/07/18'),
+            Box(310, 98, 520, 138, 'Opening Balance'),  # a word's gap away: one space
+            Box(100, 20, 600, 60, 'CHESS HOLDING STATEMENT'),
+            Box(100, 180, 300, 220, '16/07/18'),
+        ]
+        self.assertEqual(document_ocr.page_text(boxes),
+                         'CHESS HOLDING STATEMENT\n01/07/18 Opening Balance  1,250\n16/07/18')
+        self.assertEqual(document_ocr.page_text([]), '')
+
+
+class DocumentCheckTests(TestCase):
+    def setUp(self):
+        self.account = create_account()
+        self.instrument = create_instrument(account=self.account, name='VAS')
+        self.stored = Distribution.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2025, 7, 16), quantity=Decimal('1000'),
+            distribution_amount_per_share=Money(Decimal('1.436788'), 'AUD'),
+        )
+
+    def event(self, model='Distribution', **row):
+        values = {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('1000'),
+                  'distribution_amount_per_share': Decimal('1.436788'),
+                  'distribution_amount_per_share_currency': 'AUD'} if model == 'Distribution' else {}
+        values.update(row)
+        event = Extracted(model, values, source=Path('advice.pdf'), parser='example_payment')
+        event.problems = document_validate.problems(event)
+        return event
+
+    def check(self, *events, unmatched=False):
+        extraction = FileExtraction(Path('advice.pdf'), 'example_payment', list(events))
+        return document_check.check(self.account, [extraction], unmatched=unmatched)
+
+    def statuses(self, report):
+        return [str(result.status) for result in report.events()]
+
+    def test_a_document_the_portfolio_agrees_with(self):
+        report = self.check(self.event())
+        [result] = report.events()
+        self.assertEqual((result.status, result.record), (document_check.Status.AGREES, self.stored))
+
+    def test_a_per_unit_figure_must_agree_exactly_and_a_whole_amount_to_the_cent(self):
+        report = self.check(self.event(distribution_amount_per_share=Decimal('1.436789'),
+                                       total_withholding_tax=Decimal('0.004'), total_withholding_tax_currency='AUD'))
+        [result] = report.events()
+        self.assertEqual(result.status, document_check.Status.DIFFERS)
+        self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
+                         [('distribution_amount_per_share', Decimal('1.436789'), Decimal('1.436788'))])
+
+    def test_a_contract_note_price_is_compared_to_six_places(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('1.2346'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        [result] = self.check(self.event(
+            'Buy', instrument__name='VAS', date=date(2025, 7, 1), quantity=Decimal('1000'),
+            unit_price=Decimal('1.234567'), unit_price_currency='AUD',
+            total_brokerage=Decimal('10'), total_brokerage_currency='AUD')).events()
+        self.assertEqual(result.status, document_check.Status.DIFFERS)
+        self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
+                         [('unit_price', Decimal('1.234567'), Decimal('1.234600'))])
+
+    def test_a_payment_the_portfolio_lacks(self):
+        self.assertEqual(self.statuses(self.check(self.event(date=date(2025, 10, 16)))), ['Not in app'])
+
+    def test_an_unknown_instrument_suggests_the_nearest(self):
+        [result] = self.check(self.event(instrument__name='VAZ')).events()
+        self.assertEqual(result.status, document_check.Status.NOT_IN_APP)
+        self.assertEqual(result.notes, ['This portfolio has no instrument VAZ. Did you mean VAS?'])
+
+    def test_payments_on_one_day_are_told_apart_by_units(self):
+        Distribution.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2025, 7, 16), quantity=Decimal('500'),
+            distribution_amount_per_share=Money(Decimal('1.436788'), 'AUD'))
+        self.assertEqual(self.statuses(self.check(self.event())), ['Agrees'])
+        self.assertEqual(self.statuses(self.check(self.event(quantity=Decimal('700')))), ['Ambiguous'])
+
+    def test_an_invalid_event_is_not_matched(self):
+        [result] = self.check(self.event(quantity=None)).events()
+        self.assertEqual(result.status, document_check.Status.INVALID)
+        self.assertEqual(result.notes, ['Distribution needs quantity, and the event has none.'])
+
+    def test_stored_records_no_document_matched_are_listed_within_the_dates_covered(self):
+        missed = Distribution.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2025, 8, 1), quantity=Decimal('1000'),
+            distribution_amount_per_share=Money(Decimal('0.5'), 'AUD'))
+        Distribution.objects.create(
+            account=self.account, instrument=self.instrument, date=date(2026, 1, 1), quantity=Decimal('1000'),
+            distribution_amount_per_share=Money(Decimal('0.5'), 'AUD'))
+        report = self.check(self.event(), self.event(date=date(2025, 9, 1)), unmatched=True)
+        self.assertEqual(report.without_document, [missed])
+
+    def test_a_statement_and_its_lines(self):
+        statement = AttributionStatement.objects.create(
+            account=self.account, instrument=self.instrument, financial_year_end_date=date(2025, 6, 30))
+        AttributionComponent.objects.create(account=self.account, statement=statement, component='DISCOUNTED_TAP',
+                                            amount=Money(Decimal('100'), 'AUD'))
+        events = [
+            self.event('AttributionStatement', instrument__name='VAS', financial_year_end_date=date(2025, 6, 30)),
+            self.event('AttributionComponent', component='DISCOUNTED_TAP', amount=Decimal('100.00'),
+                       amount_currency='AUD'),
+            self.event('AttributionComponent', component='OTHER_TAP', amount=Decimal('5'), amount_currency='AUD'),
+        ]
+        self.assertEqual(self.statuses(self.check(*events)), ['Agrees', 'Agrees', 'Not in app'])
+        self.assertEqual(self.statuses(self.check(events[1])), ['Invalid'])
+
+    def balance(self, day, units):
+        return self.event('HoldingBalance', instrument__name='VAS', date=day, quantity=Decimal(units))
+
+    def test_a_holding_balance_is_compared_with_the_units_the_trades_and_splits_give(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 8, 1),
+                            quantity=Decimal('400'), unit_price=Money(Decimal('11'), 'AUD'),
+                            total_brokerage=Money(Decimal('10'), 'AUD'), strategy='FIFO')
+        ShareSplit.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 9, 1),
+                                  quantity_before=Decimal('1'), quantity_after=Decimal('2'))
+        report = self.check(self.balance(date(2025, 7, 20), '1000'), self.balance(date(2025, 8, 20), '600'),
+                            self.balance(date(2025, 9, 1), '1200'), self.balance(date(2025, 9, 2), '1100'))
+        self.assertEqual(self.statuses(report), ['Agrees', 'Agrees', 'Agrees', 'Differs'])
+        result = report.events()[-1]
+        self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
+                         [('quantity', Decimal('1100'), Decimal('1200'))])
+        self.assertIsNone(result.record)
+
+    def test_a_holding_balance_allows_a_trade_to_settle(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        # CHESS counts the trade from its settlement, on 3 July.
+        [result] = self.check(self.balance(date(2025, 7, 2), '0')).events()
+        self.assertEqual(result.status, document_check.Status.AGREES)
+        self.assertIn('counted from its settlement', result.notes[0])
+        self.assertEqual(self.statuses(self.check(self.balance(date(2025, 7, 20), '0'))), ['Differs'])
+
+    def test_counts_include_unreadable_files(self):
+        report = document_check.check(self.account, [
+            FileExtraction(Path('a.pdf'), 'example_payment', [self.event()]),
+            FileExtraction(Path('b.jpg'), problem='Not a PDF, CSV or spreadsheet.'),
+        ])
+        self.assertEqual((report.counts()['Agrees'], report.counts()['Unreadable']), (1, 1))
+
+
+class FakeAdapter:
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def complete(self, system, user, schema):
+        self.calls.append(user)
+        return self.replies.pop(0)
+
+
+AI_REPLY = json.dumps({'events': [{
+    'model': 'Distribution', 'reference': '001234', 'stated_total': '1,436.79',
+    'row': {'instrument__name': 'VAS', 'date': '2025-07-16', 'quantity': '1000',
+            'distribution_amount_per_share': '1.436788', 'distribution_amount_per_share_currency': 'AUD',
+            'total_withholding_tax': None, 'total_withholding_tax_currency': None},
+}]})
+
+
+class DocumentAITests(SampleParsersMixin, SimpleTestCase):
+    def reader(self, *replies, server='http://localhost:11434/v1'):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        return document_ai.Reader(provider='openai_compatible', model='qwen3:30b', server=server,
+                                  adapter=FakeAdapter(*replies), cache=AICache(folder))
+
+    def doc(self, text=SAMPLE_TEXT):
+        return Document(self.write_document('advice.txt', text), 'text', text=text)
+
+    def test_a_reply_becomes_events_with_exact_figures(self):
+        [event] = self.reader(AI_REPLY).extract(self.doc())
+        self.assertEqual(event.row, {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('1000'),
+                                     'distribution_amount_per_share': Decimal('1.436788'),
+                                     'distribution_amount_per_share_currency': 'AUD'})
+        self.assertEqual((event.reference, event.stated_total), ('001234', Decimal('1436.79')))
+
+    def test_a_document_is_asked_about_once(self):
+        reader = self.reader(AI_REPLY)
+        doc = self.doc()
+        reader.extract(doc)
+        reader.extract(doc)
+        self.assertEqual(len(reader.adapter.calls), 1)
+
+    def test_the_cache_keeps_the_file_name_redacted(self):
+        reader = self.reader(AI_REPLY)
+        reader.terms = [redaction.Term(redaction.term_pattern('Jane Citizen'), 'REDACTED NAME', 1)]
+        doc = Document(self.write_document('Jane Citizen X0012345678.txt', SAMPLE_TEXT), 'text', text=SAMPLE_TEXT)
+        reader.extract(doc)
+        [kept] = [json.loads(path.read_text(encoding='utf-8')) for path in reader.cache.folder.glob('*.json')]
+        self.assertEqual(kept['source'], 'REDACTED NAME X0000000000.txt')
+
+    def test_an_unusable_reply_is_sent_back_once(self):
+        reader = self.reader('not json', f'```json\n{AI_REPLY}\n```')
+        self.assertEqual(len(reader.extract(self.doc())), 1)
+        self.assertIn('It could not be used: The reply is not JSON', reader.adapter.calls[1])
+
+        failing = self.reader('not json', '{"events": [{"model": "Parcel", "row": {}}]}')
+        with self.assertRaisesMessage(document_ai.AIError, "model 'Parcel' is not one of"):
+            failing.extract(self.doc())
+
+    def test_a_file_no_parser_recognises_goes_to_the_ai_and_is_validated(self):
+        parsers = self.make_parsers()
+        reply = AI_REPLY.replace('1,436.79', '1,500.00')
+        result = extract_file(self.write_document('other.txt', 'ANOTHER REGISTRY'), parsers, self.reader(reply))
+        self.assertEqual(result.parser, 'ai:openai_compatible/qwen3:30b')
+        self.assertEqual(len(result.events[0].problems), 1)
+
+    def test_a_recognised_file_never_goes_to_the_ai(self):
+        reader = self.reader()
+        extract_file(self.write_document('advice.txt', SAMPLE_TEXT), self.make_parsers(), reader)
+        self.assertEqual(reader.adapter.calls, [])
+
+    def test_the_text_sent_is_redacted_with_the_terms_and_masks(self):
+        reader = self.reader(AI_REPLY)
+        reader.terms = [redaction.Term(redaction.term_pattern('Jane Citizen'), 'REDACTED NAME', 1)]
+        reader.extract(self.doc(SAMPLE_TEXT.replace('REDACTED NAME', 'MS JANE CITIZEN')
+                                .replace('X0000000000', 'X0012345678')))
+        [sent] = reader.adapter.calls
+        self.assertNotIn('CITIZEN', sent)
+        self.assertNotIn('12345678', sent)
+        self.assertIn('Payment reference: 001234', sent)
+        self.assertIn('Distribution rate: 143.6788 cents per unit', sent)
+
+    def test_only_a_local_server_keeps_the_text_on_this_machine(self):
+        self.assertTrue(self.reader().is_local)
+        self.assertFalse(self.reader(server='https://api.example.com/v1').is_local)
+
+    def test_the_settings_turn_it_on(self):
+        with override_settings(DOCUMENT_AI_PROVIDER='none'):
+            self.assertIsNone(document_ai.from_settings())
+        with override_settings(DOCUMENT_AI_PROVIDER='nonsense'):
+            with self.assertRaisesMessage(document_ai.AIConfigError, "DOCUMENT_AI_PROVIDER is 'nonsense'"):
+                document_ai.from_settings()
+        with override_settings(DOCUMENT_AI_PROVIDER='openai_compatible', DOCUMENT_AI_BASE_URL='http://localhost:11434/v1',
+                               DOCUMENT_AI_MODEL=''):
+            with self.assertRaisesMessage(document_ai.AIConfigError, 'DOCUMENT_AI_MODEL'):
+                document_ai.from_settings()
+        with override_settings(DOCUMENT_AI_PROVIDER='openai_compatible', DOCUMENT_AI_BASE_URL='http://localhost:11434/v1',
+                               DOCUMENT_AI_MODEL='qwen3:30b'):
+            self.assertEqual(document_ai.from_settings().label, 'ai:openai_compatible/qwen3:30b')
+
+    def test_the_schema_has_a_shape_per_model_with_every_column(self):
+        variants = ai_schema.output_schema()['properties']['events']['items']['anyOf']
+        self.assertEqual([v['properties']['model']['enum'] for v in variants],
+                         [[model] for model in document_columns.MODELS])
+        distribution = variants[document_columns.MODELS.index('Distribution')]['properties']['row']
+        self.assertEqual(distribution['required'], document_columns.columns('Distribution'))
+
+    def test_an_openai_compatible_server_without_schemas_is_asked_for_plain_json(self):
+        from share_dinkum_app.documents.ai.adapters.openai_compatible import OpenAICompatible
+        refused = MagicMock(status_code=400, ok=False)
+        answered = MagicMock(status_code=200, ok=True)
+        answered.json.return_value = {'choices': [{'message': {'content': AI_REPLY}, 'finish_reason': 'stop'}]}
+        adapter = OpenAICompatible('http://localhost:11434/v1/', 'qwen3:30b', '')
+        with patch('share_dinkum_app.documents.ai.adapters.openai_compatible.requests.post',
+                   side_effect=[refused, answered]) as post:
+            self.assertEqual(adapter.complete('system', 'user', {}), AI_REPLY)
+        self.assertEqual(post.call_args_list[0].args[0], 'http://localhost:11434/v1/chat/completions')
+        self.assertEqual(post.call_args_list[0].kwargs['json']['response_format']['type'], 'json_schema')
+        self.assertEqual(post.call_args_list[1].kwargs['json']['response_format'], {'type': 'json_object'})
+
+    def test_a_reply_cut_off_by_a_small_context_window_is_an_error(self):
+        from share_dinkum_app.documents.ai.adapters.openai_compatible import OpenAICompatible
+        cut = MagicMock(status_code=200, ok=True)
+        cut.json.return_value = {'choices': [{'message': {'content': '{"ev'}, 'finish_reason': 'length'}]}
+        with patch('share_dinkum_app.documents.ai.adapters.openai_compatible.requests.post', return_value=cut):
+            with self.assertRaisesMessage(document_ai.AIError, 'OLLAMA_CONTEXT_LENGTH'):
+                OpenAICompatible('http://localhost:11434/v1', 'qwen3:30b', '').complete('s', 'u', {})
+
+    def test_claude_is_asked_for_the_schema_with_fallbacks(self):
+        import importlib.util
+        if importlib.util.find_spec('anthropic') is None:
+            self.skipTest('The anthropic extra is not installed.')
+        from share_dinkum_app.documents.ai.adapters.anthropic import Anthropic
+        adapter = Anthropic(model='', api_key='test-key', base_url='')
+        adapter.client = MagicMock()
+        adapter.client.beta.messages.create.return_value = MagicMock(
+            stop_reason='end_turn', content=[MagicMock(type='text', text=AI_REPLY)])
+        self.assertEqual(adapter.complete('system', 'user', {'type': 'object'}), AI_REPLY)
+        sent = adapter.client.beta.messages.create.call_args.kwargs
+        self.assertEqual(sent['model'], 'claude-opus-5-5')
+        self.assertEqual(sent['output_config'], {'format': {'type': 'json_schema', 'schema': {'type': 'object'}}})
+        self.assertEqual((sent['fallbacks'], sent['betas']), ('default', ['server-side-fallback-2026-07-01']))
+
+        adapter.client.beta.messages.create.return_value = MagicMock(stop_reason='refusal', content=[])
+        with self.assertRaisesMessage(document_ai.AIError, 'declined'):
+            adapter.complete('system', 'user', {})
+
+
+class RedactionTests(SimpleTestCase):
+    def terms(self, text):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        (folder / 'terms.txt').write_text(text, encoding='utf-8')
+        return redaction.load_terms(folder / 'terms.txt')
+
+    def test_identifiers_are_masked_and_figures_kept(self):
+        text = ('TFN: 123 456 789\nHIN X0012345678\nBSB 062-000 Account number 1234 5678\n'
+                'Email me@home.example.com\nGross amount: $1,436.79\nPayment date 16/07/2025')
+        masked, count = redaction.mask(text)
+        self.assertEqual(masked, 'TFN: 000 000 000\nHIN X0000000000\nBSB 000-000 Account number 00000000\n'
+                                 'Email redacted@example.com\nGross amount: $1,436.79\nPayment date 16/07/2025')
+        self.assertEqual(count, 5)
+
+    def test_terms_are_found_ignoring_case_spacing_and_line_breaks(self):
+        terms = self.terms('# my details\n\nJane Citizen => REDACTED NAME\nCitizen\n12 Example St => REDACTED ADDRESS\n')
+        result = redaction.redact('MS JANE\n  CITIZEN\n12  example st\nDear Ms Citizen,', terms)
+        self.assertEqual(result.text, 'MS REDACTED NAME\nREDACTED ADDRESS\nDear Ms REDACTED,')
+        # Counted by the term's line in the list, never by its text.
+        self.assertEqual(dict(result.term_counts), {3: 1, 4: 1, 5: 1})
+
+    def test_a_term_is_found_with_the_space_ocr_dropped(self):
+        terms = self.terms('Jane Citizen => REDACTED NAME\n')
+        self.assertEqual(redaction.redact('MS JANECITIZEN', terms).text, 'MS REDACTED NAME')
+
+    def test_a_term_is_matched_as_whole_words(self):
+        terms = self.terms('Ann\n')
+        self.assertEqual(redaction.redact('Annual statement for Ann', terms).text, 'Annual statement for REDACTED')
+
+    def test_terms_are_found_where_the_text_layer_lost_every_space(self):
+        terms = self.terms('Jane Citizen => NAME\nExampleville => SUBURB\nSouth Exampleville => SUBURB\n6000 => PC\n')
+        self.assertEqual(redaction.redact('MRJANECITIZEN\nSOUTHEXAMPLEVILLEWA6000 HolderID', terms).text,
+                         'MRNAME\nSUBURBWAPC HolderID')
+        # A number term is not found inside a longer number.
+        self.assertEqual(redaction.redact('Ref 160001', terms).text, 'Ref 160001')
+        self.assertEqual(redaction.postcodes('SOUTHEXAMPLEVILLEWA6000 HolderID\nVIC 30001'), [(1, 'WA6000')])
+
+    def test_terms_are_taken_out_of_file_and_folder_names(self):
+        terms = self.terms('Jane Citizen => Holder\n')
+        self.assertEqual(redaction.redact_path(Path('Jane Citizen') / 'jane citizen VAS.pdf', terms),
+                         Path('Holder') / 'Holder VAS.pdf')
+
+    def test_lines_that_still_look_personal_are_pointed_at_by_number(self):
+        text = ('Postal address: somewhere\nEXAMPLEVILLE NSW 2000\nCall 0412 345 678\nRef 12345678\n'
+                'HIN X0000000000\nGross amount: $1,436.79\nUnits 10000000.5\n')
+        self.assertEqual(redaction.review_lines(text), [
+            (1, 'a name, address or contact label'), (3, 'a phone number'), (4, 'a long number, maybe an identifier')])
+        self.assertEqual(redaction.postcodes(text), [(2, 'NSW 2000')])
+
+    def test_holder_numbers_are_masked_however_they_are_printed(self):
+        text = ('SIN/APN/SBN 1402 HIN 12345678\nHolder Number: I0098765432\nReference Number: S00012345678\n'
+                'Payment Reference Number: 001234\nACC: 12345678\nAcc No:  12345678  $1,000.00\n'
+                'Customer Ref No:98765432\nCONTRACT NOTE: 10203040\njane@example.org')
+        self.assertEqual(redaction.mask(text)[0], (
+            'SIN/APN/SBN 1402 HIN X0000000000\nHolder Number: X0000000000\nReference Number: X0000000000\n'
+            'Payment Reference Number: 001234\nACC: 00000000\nAcc No:  00000000  $1,000.00\n'
+            'Customer Ref No:00000000\nCONTRACT NOTE: 10203040\nredacted@example.com'))
+        # Masking a masked text changes nothing, and counts nothing.
+        self.assertEqual(redaction.mask(redaction.mask(text)[0])[1], 0)
+
+    def test_an_account_label_broken_by_a_space_is_still_masked(self):
+        self.assertEqual(redaction.mask('A ccount Number: 12345678\nAcc ount No. 87654321')[0],
+                         'A ccount Number: 00000000\nAcc ount No. 00000000')
+
+    def test_the_last_digits_a_bank_prints_of_an_account_are_masked(self):
+        self.assertEqual(redaction.mask('BSB: 000-000 ACC: ****4321\nAccount ending xxxx987')[0],
+                         'BSB: 000-000 ACC: ****0000\nAccount ending xxxx0000')
+
+    def test_a_stand_in_is_put_in_as_written(self):
+        terms = self.terms('Jane Citizen => C:\\Users\\Name \\1\n')
+        self.assertEqual(redaction.redact('Dear Jane Citizen', terms).text, 'Dear C:\\Users\\Name \\1')
+        self.assertEqual(redaction.redact_path(Path('Jane Citizen.pdf'), terms), Path('C:\\Users\\Name \\1.pdf'))
+
+    def test_a_masked_tfn_is_not_counted_again(self):
+        masked, count = redaction.mask('TFN: 123 456 789')
+        self.assertEqual((masked, count), ('TFN: 000 000 000', 1))
+        self.assertEqual(redaction.mask(masked)[1], 0)
+
+    def test_an_interactive_brokers_account_is_masked(self):
+        self.assertEqual(redaction.mask('Account Information,Data,Account,U12345678\nU1234567_20240101.csv')[0],
+                         'Account Information,Data,Account,U0000000\nU0000000_20240101.csv')
+
+    def test_identifiers_are_taken_out_of_file_names(self):
+        self.assertEqual(redaction.redact_path(Path('NDQ') / 'PRD_1_20171231_X00012345678_BETA_NDQ.pdf', []),
+                         Path('NDQ') / 'PRD_1_20171231_X0000000000_BETA_NDQ.pdf')
+
+
+class RedactDocumentsCommandTests(SimpleTestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.raw = self.root / 'raw'
+        (self.raw / 'Jane Citizen' / '2025').mkdir(parents=True)
+        (self.raw / 'Jane Citizen' / '2025' / 'advice.txt').write_text(
+            SAMPLE_TEXT.replace('REDACTED NAME', 'MS JANE CITIZEN').replace('REDACTED ADDRESS', '12 EXAMPLE ST'),
+            encoding='utf-8')
+        (self.raw / 'Jane Citizen' / 'advice.pdf').write_bytes(minimal_pdf(['Jane Citizen', 'HIN X0012345678']))
+        (self.raw / 'export.csv').write_text('Holder,Code,Postcode\nJane Citizen,VAS,WA 6000\n', encoding='utf-8')
+        (self.raw / 'photo.jpg').write_bytes(b'\xff\xd8')
+        self.terms = self.root / 'terms.txt'
+        self.terms.write_text('Jane Citizen => REDACTED NAME\n12 Example St => REDACTED ADDRESS\nNever Seen\n',
+                              encoding='utf-8')
+        self.out = self.root / 'redacted'
+
+    def run_command(self, **options):
+        output = io.StringIO()
+        call_command('redact_documents', str(self.raw), out=str(options.pop('out', self.out)),
+                     terms=str(options.pop('terms', self.terms)), stdout=output, **options)
+        return output.getvalue()
+
+    def test_every_file_in_every_folder_is_copied_redacted(self):
+        output = self.run_command()
+        written = sorted(path.relative_to(self.out).as_posix() for path in self.out.rglob('*') if path.is_file())
+        self.assertEqual(written, ['REDACTED NAME/2025/advice.txt', 'REDACTED NAME/advice.pdf.txt', 'export.csv'])
+        advice = (self.out / 'REDACTED NAME' / '2025' / 'advice.txt').read_text(encoding='utf-8')
+        self.assertIn('MS REDACTED NAME\nREDACTED ADDRESS\n', advice)
+        self.assertIn('Distribution rate: 143.6788 cents per unit', advice)
+        self.assertEqual((self.out / 'REDACTED NAME' / 'advice.pdf.txt').read_text(encoding='utf-8').splitlines(),
+                         ['REDACTED NAME', 'HIN X0000000000'])
+        self.assertEqual((self.out / 'export.csv').read_text(encoding='utf-8').splitlines(),
+                         ['Holder,Code,Postcode', 'REDACTED NAME,VAS,WA 6000'])
+
+        self.assertIn('Wrote 3 redacted file(s)', output)
+        self.assertIn('Skipped photo.jpg: Not a PDF, CSV or spreadsheet.', output)
+        self.assertIn('Terms never found (lines of your list): 3.', output)
+        self.assertIn('1 different state and postcode(s) are left.', output)
+        self.assertIn('  1 time(s) in 1 file(s), first at export.csv line 2', output)
+        # Nothing personal is printed: not a term, an original name, a postcode or a line of a document.
+        self.assertNotIn('6000', output)
+        self.assertNotIn('Citizen', output)
+        self.assertNotIn('EXAMPLE', output.upper().replace('REDACTED', ''))
+
+    @skipUnless(document_ocr.available(), 'The ocr extra is not installed.')
+    def test_a_scan_is_read_by_ocr_and_redacted(self):
+        scanned_pdf(self.raw / 'Jane Citizen' / 'statement.pdf', 'HOLDING STATEMENT\nMS JANE CITIZEN\nHIN X0012345678')
+        output = self.run_command()
+        copy = (self.out / 'REDACTED NAME' / 'statement.pdf.txt').read_text(encoding='utf-8')
+        self.assertNotIn('CITIZEN', copy.upper())
+        self.assertNotIn('12345678', copy)
+        self.assertIn('Read by OCR: REDACTED NAME', output)
+        self.assertIn('1 of them were scans read by OCR', output)
+
+    def test_the_copies_must_go_outside_the_folder(self):
+        with self.assertRaisesMessage(CommandError, 'must not be inside FOLDER'):
+            self.run_command(out=self.raw / 'redacted')
+
+    def test_a_missing_terms_list_is_started_from_a_template(self):
+        missing = self.root / 'redact_terms.txt'
+        with patch('share_dinkum_app.documents.redaction.default_terms_path', return_value=missing):
+            with self.assertRaisesMessage(CommandError, 'one has been started'):
+                call_command('redact_documents', str(self.raw), out=str(self.out), stdout=io.StringIO())
+        self.assertIn('=> REDACTED NAME', missing.read_text(encoding='utf-8'))
+        with self.assertRaisesMessage(CommandError, 'lists no terms'):
+            self.run_command(terms=missing)
+
+
+class ParserPromptTests(SampleParsersMixin, SimpleTestCase):
+    def test_the_brief_holds_the_spec_the_columns_the_helpers_and_the_document(self):
+        brief, _ = document_prompt.build(Document(Path('advice.pdf'), 'text', text=SAMPLE_TEXT))
+        self.assertTrue(brief.startswith('# Writing a Share Dinkum document parser'))
+        for model in document_columns.MODELS:
+            self.assertIn(f'### {model}', brief)
+        self.assertIn('| `distribution_amount_per_share` | required |', brief)
+        self.assertIn('class Extracted:', brief)
+        self.assertIn('- `def cents_to_dollars(cents: decimal.Decimal) -> decimal.Decimal`', brief)
+        self.assertIn('KIND is `text`. File: `advice.pdf`.', brief)
+        self.assertIn('Distribution rate: 143.6788 cents per unit', brief)
+
+    def test_the_command_writes_the_brief_redacted_with_the_terms_list(self):
+        source = self.write_document('advice.txt', SAMPLE_TEXT.replace('REDACTED NAME', 'Jane Citizen')
+                                     .replace('X0000000000', 'X0012345678'))
+        terms = source.parent / 'terms.txt'
+        terms.write_text('Jane Citizen => REDACTED NAME\n', encoding='utf-8')
+        out = source.parent / 'brief.md'
+        stderr = io.StringIO()
+        call_command('parser_prompt', str(source), out=str(out), terms=str(terms), stdout=io.StringIO(),
+                     stderr=stderr)
+        brief = out.read_text(encoding='utf-8')
+        self.assertIn('ASX code: VAS', brief)
+        self.assertNotIn('Jane Citizen', brief)
+        self.assertIn('1 term(s) from your list and 1 identifier(s) were redacted', stderr.getvalue())
+
+    def test_without_a_terms_list_the_command_says_names_are_not_redacted(self):
+        source = self.write_document('advice.txt', SAMPLE_TEXT)
+        stderr = io.StringIO()
+        with patch('share_dinkum_app.documents.redaction.default_terms_path',
+                   return_value=source.parent / 'redact_terms.txt'):
+            call_command('parser_prompt', str(source), stdout=io.StringIO(), stderr=stderr)
+        self.assertIn('names and addresses are not redacted', stderr.getvalue())
+
+
+class CheckDocumentsCommandTests(SampleParsersMixin, TestCase):
+    def setUp(self):
+        self.account = create_account(description='Mine')
+        instrument = create_instrument(account=self.account, name='VAS')
+        Distribution.objects.create(
+            account=self.account, instrument=instrument, date=date(2025, 7, 16), quantity=Decimal('1000'),
+            distribution_amount_per_share=Money(Decimal('1.436788'), 'AUD'))
+
+    def run_command(self, folder, **options):
+        out = io.StringIO()
+        with patch('share_dinkum_app.documents.parsers.discover', return_value=self.make_parsers()):
+            call_command('check_documents', str(folder), account='Mine', stdout=out, **options)
+        return out.getvalue()
+
+    def test_a_folder_that_agrees_including_the_folders_inside_it(self):
+        folder = self.write_document('advice.txt', SAMPLE_TEXT).parent
+        (folder / '2025').mkdir()
+        (folder / 'advice.txt').rename(folder / '2025' / 'advice.txt')
+        output = self.run_command(folder)
+        self.assertTrue(output.startswith('Experimental: reading documents is new'))
+        self.assertIn('Events: 1 agrees.', output)
+        self.assertIn('Every document agrees with the portfolio.', output)
+
+    def test_findings_are_listed_and_written_to_a_workbook(self):
+        folder = self.write_document('advice.txt', SAMPLE_TEXT.replace('143.6788', '143.6789')).parent
+        (folder / 'notes.jpg').write_bytes(b'')
+        workbook = folder / 'report.xlsx'
+        output = self.run_command(folder, out=str(workbook))
+        self.assertIn('advice.txt: Distribution VAS 2025-07-16: Differs', output)
+        self.assertIn('distribution_amount_per_share: document 1.436789, stored 1.436788', output)
+        self.assertIn('notes.jpg: Not a PDF, CSV or spreadsheet.', output)
+
+        tables = excelinterface.get_all_tables_in_excel(workbook)
+        self.assertTrue(tables['Warning'].iloc[0]['warning'].startswith('Experimental:'))
+        self.assertEqual(tables['Differences'].iloc[0]['column'], 'distribution_amount_per_share')
+        self.assertEqual(tables['Documents']['outcome'].tolist(), ['1 Differs', 'Unreadable'])
+
+    def test_the_ai_needs_a_provider(self):
+        folder = self.write_document('advice.txt', SAMPLE_TEXT).parent
+        with override_settings(DOCUMENT_AI_PROVIDER='none'):
+            with self.assertRaisesMessage(CommandError, 'DOCUMENT_AI_PROVIDER'):
+                self.run_command(folder, ai=True)
+
+    def test_a_hosted_ai_is_refused_without_a_terms_list(self):
+        folder = self.write_document('advice.txt', SAMPLE_TEXT).parent
+        hosted = dict(DOCUMENT_AI_PROVIDER='openai_compatible', DOCUMENT_AI_BASE_URL='https://api.example.com/v1',
+                      DOCUMENT_AI_MODEL='some-model')
+        with override_settings(**hosted), \
+                patch('share_dinkum_app.documents.redaction.default_terms_path', return_value=folder / 'none.txt'):
+            with self.assertRaisesMessage(CommandError, 'there is no list of your terms to redact'):
+                self.run_command(folder, ai=True)

@@ -4,6 +4,74 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
+## 0.7.0 - 2026-10-23
+
+### Added
+
+- **Choose the portfolio you are working on**, from the **Portfolio** list at the top of every page.
+  Only the first portfolio you created could be shown before, so a second one loaded later never
+  appeared on the dashboard. The dashboard, its reports and buttons, and the admin follow the
+  portfolio you choose, and it is remembered. A portfolio you add in the admin is chosen for you.
+
+- **Check a folder of documents against a portfolio (experimental).** `uv run dev check_documents
+  --account NAME FOLDER` lists each payment, trade or statement line the portfolio holds
+  differently or lacks; `--out` writes the findings to a workbook.
+  - Added deterministic parsers for:
+    - CommSec contract notes
+    - SelfWealth contract notes
+    - Computershare dividend advices, including dividend reinvestment advices
+    - Vanguard ETF distribution advices
+    - Link Market Services / MUFG Corporate Markets dividend and distribution advices
+    - Advanced Share Registry dividend advices
+    - Boardroom dividend statements
+    - Computershare annual tax statements (Vanguard ETFs)
+    - Link Market Services / MUFG Corporate Markets annual tax statements (BetaShares)
+    - CHESS holding statements, each balance checked against the units the trades give that day
+    - Interactive Brokers activity statements (CSV): trades, dividends and distributions, and holdings
+  - `uv run dev parser_prompt FILE` writes a brief for adding a parser.
+  - `--ai` reads an unrecognised file with a local or hosted AI model, redacted first.
+    Check its findings against the document.
+- **Redacted copies of your documents, made on your machine.** `uv run dev redact_documents
+  FOLDER --out COPIES` writes a text copy of each document with your own list of names, addresses
+  and other terms (`redact_terms.txt`) taken out, as well as TFNs, HINs, SRNs, bank details and
+  email addresses, and points at any line that still looks personal. Share the copies, never the
+  originals, when asking for a parser for your registry or broker.
+- **Scanned PDFs are read by OCR, on your machine.** Install it with `uv sync --inexact --extra
+  ocr`. `check_documents` and `redact_documents` can then read a scanned PDF. The `--out`
+  workbook marks each scanned file, as OCR can misread a figure.
+
+### Changed
+
+- **The sample data lists only the 10 instruments it holds**, not the whole ASX list (2,352), so
+  loading it no longer fills that portfolio's instrument list with ones it never trades.
+- **The admin shows only the chosen portfolio.** Lists, record pages, actions and the pickers
+  (eg the instrument on a buy) used to show every portfolio's records together. A new record goes
+  into the chosen portfolio. Opening another portfolio's record says which portfolio it is in.
+- **Attached documents and exports need a login.** They are served only to a user who may see
+  their portfolio.
+- **Only a superuser can change the shared tables** (fiscal years, fiscal year types and CPI), which
+  every portfolio uses.
+- **A buy's or sell's unit price holds six decimal places**, up from four, as contract notes print
+  the average price to six (eg `1.234567`). Four places could put a cost base out by up to half a
+  cent per 100 units. Prices already stored are unchanged; enter the full price from the contract
+  note to correct one. The sale's proceeds per unit are kept to six places as well.
+  `check_documents` now compares a trade's price to six places, so a price entered rounded shows
+  as differing from its contract note.
+
+### Removed
+
+- **`migrate.bat`, `runback.bat` and `runtests.bat`.** Use `uv run dev` to start the app,
+  `uv run dev migrate` to apply database changes and `uv run dev test share_dinkum_app` to run the
+  tests. A shortcut to `runback.bat` should be pointed at `uv run dev` instead.
+
+### Fixed
+
+- **A record can no longer refer to another portfolio's record**, eg a buy of an instrument from
+  another portfolio, which the admin allowed. The dashboard warns about any such record already
+  stored, and `uv run dev repair_portfolio_data` lists them to delete and enter again.
+- **`--account` on the commands refuses a name that two users' portfolios share**, rather than
+  running on both. Give it as `owner/name`, or the portfolio's id.
+
 ## 0.6.1 - 2026-10-18
 
 ### Fixed

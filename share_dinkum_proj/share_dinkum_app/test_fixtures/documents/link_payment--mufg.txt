@@ -1,0 +1,48 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+All Registry communications to:
+MUFG Corporate Markets (AU) Limited
+A division of MUFG Pension & Market Services
+Locked Bag A14
+Sydney South NSW 1235 Australia
+Telephone: 1300 857 499
+ASX Code: AFI
+Email: redacted@example.com
+ABN 56 004 147 120 Website: au.investorcentre.mpms.mufg.com
+X0000000000
+Key Details
+053 041127
+Payment date: 20 August 2025
+REDACTED NAME
+Record date: 30 July 2025
+REDACTED ADDRESS
+SRN/HIN: X0000000000
+Final dividend statement for the year ended 30 June 2025
+Dividend Participating Franked Dividend Franking
+Description
+rate per share holding amount Paid credit
+Fully Paid Ordinary
+A$0.16 12,480 A$1,996.80 A$1,996.80 A$855.77
+Shares
+This dividend is franked in Australia at 100% and the corporate tax rate used to determine the franking credit is 30%. No NZ
+imputation credits are applicable to this dividend.
+PAYMENT INSTRUCTIONS
+REDACTED BANK
+BSB: 000-000
+ACC: 00000000 ACCOUNT NAME: REDACTED NAME
+PAYMENT REFERENCE NUMBER: 001337402685
+The payment has been made to the above account. If this account is not valid please turn over for instructions to update your
+details. Once your details have been updated, payment will be made within four weeks.
+IMPORTANT - LIC CAPITAL GAIN INFORMATION
+The attributable part of the above dividend is A$1,640.25
+If you are an Australian resident individual, resident trust (except a trust that is a complying superannuation entity) or resident
+partnership for taxation purposes, you may be entitled to a tax deduction of A$820.13 (i.e. 50% of the attributable part).
+You can claim this deduction in your income tax return. Refer to the section on "Dividend deductions".
+If you are a complying superannuation entity or a life insurance company where the shares are complying superannuation
+assets and an Australian resident for taxation purposes, you may be entitled to a tax deduction of A$546.75 (i.e. 1/3rd of the
+attributable part).
+If you are any other type of entity, you may not be entitled to a tax deduction.
+This LIC capital gains information is for use in the preparation of your 2026 income tax return.
+If you are in any doubt about this information, please consult your tax advisor.
+Retain this statement to assist in preparing your tax return.
+125842000016
+*10Q071542S*

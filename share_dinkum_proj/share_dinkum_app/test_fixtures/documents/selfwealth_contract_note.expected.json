@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Buy",
+      "reference": "T20210305000001-1",
+      "stated_total": "1312.04",
+      "row": {
+        "instrument__name": "WES",
+        "date": "2021-03-05",
+        "quantity": "25",
+        "unit_price": "52.48173",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "9.50",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

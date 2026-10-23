@@ -10,11 +10,12 @@ yfinance. User-confirmed values are never overwritten; suggestions stay unconfir
 
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.core.management.base import BaseCommand, CommandParser
 
 from share_dinkum_app import cgt, yfinanceinterface
+from share_dinkum_app.management.commands._portfolios import select_accounts
 from share_dinkum_app.choices import LegalForm, LegalFormSource
-from share_dinkum_app.models import Account, Instrument, Market
+from share_dinkum_app.models import Instrument, Market
 
 
 class Command(BaseCommand):
@@ -34,11 +35,7 @@ class Command(BaseCommand):
             help='Report what would change without writing anything.')
 
     def handle(self, *args: Any, **options: Any) -> None:
-        accounts = Account.objects.all()
-        if options['account']:
-            accounts = accounts.filter(description=options['account'])
-            if not accounts.exists():
-                raise CommandError(f"No portfolio named {options['account']!r}.")
+        accounts = select_accounts(options['account'])
 
         dry_run = options['dry_run']
         total_markets = total_instruments = 0

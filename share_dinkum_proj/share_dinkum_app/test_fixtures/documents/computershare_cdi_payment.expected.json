@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "model": "Dividend",
+      "reference": "812345",
+      "stated_total": "66.00",
+      "row": {
+        "instrument__name": "RMD",
+        "date": "2025-12-11",
+        "quantity": "1200",
+        "dividend_type": "FOREIGN",
+        "unfranked_amount_per_share": "0.055",
+        "unfranked_amount_per_share_currency": "USD",
+        "franked_amount_per_share": "0",
+        "franked_amount_per_share_currency": "USD",
+        "foreign_tax_credit": "19.80",
+        "foreign_tax_credit_currency": "USD"
+      }
+    }
+  ]
+}

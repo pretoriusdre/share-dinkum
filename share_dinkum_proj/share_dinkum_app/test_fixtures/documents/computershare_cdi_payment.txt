@@ -1,0 +1,41 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+2025 December Quarterly Dividend
+2V_60_100001
+Update your information:
+: Online:
+www.investorcentre.com/au
+*By Mail:
+Computershare Investor Services Pty Limited
+GPO Box 2975 Melbourne
+ABN 46 064 514 852 Victoria 3001 Australia
+Enquiries:
+(within Australia) 1300 850 505
+(international) +61 3 9415 4000
+T 001234 000 RMD
+0000000000000000000000000000000000000000000000000000
+Holder Identification Number (HIN)
+MR REDACTED NAME
+REDACTED ADDRESS
+REDACTED SUBURB WA REDACTED POSTCODE
+Record Date 6 November 2025
+Payment Date 11 December 2025
+Direct Credit Reference No. 812345
+Dear Shareholder,
+The payment below represents a quarterly dividend and is paid at a rate of US$0.055 per fully paid CDI registered in your name as at the record date
+of 6 November 2025. Holders of CDIs receive an Australian dollar amount equivalent to US$0.55 per US common stock, based on the USD:AUD
+exchange rate on the record date (US$0.6500 = AU$1.00) and reflecting the 10:1 ratio between CDIs and US common stock.
+Class Description Amount per Security Number of Securities Total Payment
+CDI US$0.055 1,200 US$66.00
+Non-Resident Withholding Tax US$19.80
+Net Payment US$46.20
+Converted Net Payment AU$71.08
+VIEW OR UPDATE YOUR SECURITY HOLDING DETAILS ONLINE
+To view your security holding details please visit www.investorcentre.com/au. For security purposes, if you wish to update your information you will be required
+to login as an existing user with your Username and password or register as a new user and create a Username and password.
+You may be eligible for a reduced rate of withholding tax (15% for Australian tax residents) for future dividends by completing a US tax form (W8) which can
+be found at au.digital.computershare.com/W8Ben.
+Note: You should retain this statement to assist you in preparing your tax return.
+Your Payment Instruction
+REDACTED BANK LTD Amount Deposited
+BSB: 000-000 Account number: 00000000 AU$71.08
+300002_Broadcast/001234/001234/i

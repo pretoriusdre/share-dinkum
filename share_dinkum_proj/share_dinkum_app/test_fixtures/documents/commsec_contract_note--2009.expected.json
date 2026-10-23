@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "model": "Buy",
+      "reference": "30000001",
+      "stated_total": "5115.00",
+      "row": {
+        "instrument__name": "TLS",
+        "date": "2009-05-14",
+        "quantity": "1500",
+        "unit_price": "3.410000",
+        "unit_price_currency": "AUD",
+        "total_brokerage": "19.95",
+        "total_brokerage_currency": "AUD"
+      }
+    }
+  ]
+}

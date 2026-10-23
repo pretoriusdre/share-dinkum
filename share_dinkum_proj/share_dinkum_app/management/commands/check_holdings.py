@@ -8,8 +8,9 @@ differs. It writes nothing.
 
 from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.core.management.base import BaseCommand, CommandParser
 
+from share_dinkum_app.management.commands._portfolios import select_accounts
 from share_dinkum_app.holdings import compare
 from share_dinkum_app.models import Account, Instrument
 
@@ -26,11 +27,7 @@ class Command(BaseCommand):
                                  'differences listed. Decisions already made are kept.')
 
     def handle(self, *args: Any, **options: Any) -> None:
-        accounts = Account.objects.all()
-        if options['account']:
-            accounts = accounts.filter(description=options['account'])
-            if not accounts.exists():
-                raise CommandError(f'No portfolio named "{options["account"]}".')
+        accounts = select_accounts(options['account'])
 
         for account in accounts:
             self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
