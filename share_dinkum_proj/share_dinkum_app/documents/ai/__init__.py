@@ -9,6 +9,7 @@ and the identifier masks, as `redact_documents` does. The figures and references
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -81,7 +82,7 @@ class Reader:
         reply = self.cache.get(cache_key)
         if reply is None:
             reply = self._ask(system, text)
-            self.cache.put(cache_key, reply, doc.path, self.label)
+            self.cache.put(cache_key, reply, str(redaction.redact_path(Path(doc.path.name), self.terms)), self.label)
         try:
             return schema.parse_reply(reply)
         except schema.ReplyError as error:

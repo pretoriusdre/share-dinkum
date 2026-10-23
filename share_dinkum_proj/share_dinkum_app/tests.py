@@ -10718,6 +10718,12 @@ class PortfolioScopingTests(TransactionTestCase):
         self.owner.refresh_from_db()
         self.assertEqual(self.owner.default_account, self.b)
 
+    def test_switching_on_a_page_that_is_no_record_goes_back_to_it(self):
+        for next_url in (reverse('admin:password_change'),
+                         reverse('admin:auth_user_password_change', args=[self.owner.pk])):
+            response = self._switch(self.b, next_url=next_url)
+            self.assertRedirects(response, next_url, fetch_redirect_response=False)
+
     def test_a_next_address_on_another_site_is_ignored(self):
         response = self._switch(self.b, next_url='https://example.com/')
         self.assertRedirects(response, reverse('admin:dashboard'), fetch_redirect_response=False)
@@ -10862,6 +10868,9 @@ class PortfolioVisibilityTests(TransactionTestCase):
         self.assertEqual(self.client.get(f'/media/{self.theirs.pk}/note.txt').status_code, 404)
         self.assertEqual(
             self.client.get(f'/media/{self.mine.pk}/../{self.theirs.pk}/note.txt').status_code, 404)
+        # On Windows a backslash is a separator too, so it must not reach the other folder either.
+        for escape in (f'{self.mine.pk}/..\\{self.theirs.pk}/note.txt', f'{self.mine.pk}/..%5C{self.theirs.pk}/note.txt'):
+            self.assertEqual(self.client.get(f'/media/{escape}').status_code, 404)
 
         # Not staff, so not signed in to the admin: sent to the login page.
         self.client.force_login(AppUser.objects.create_user('visitor', password='x'))
@@ -11495,6 +11504,14 @@ class DocumentAITests(SampleParsersMixin, SimpleTestCase):
         reader.extract(doc)
         self.assertEqual(len(reader.adapter.calls), 1)
 
+    def test_the_cache_keeps_the_file_name_redacted(self):
+        reader = self.reader(AI_REPLY)
+        reader.terms = [redaction.Term(redaction.term_pattern('Jane Citizen'), 'REDACTED NAME', 1)]
+        doc = Document(self.write_document('Jane Citizen X0012345678.txt', SAMPLE_TEXT), 'text', text=SAMPLE_TEXT)
+        reader.extract(doc)
+        [kept] = [json.loads(path.read_text(encoding='utf-8')) for path in reader.cache.folder.glob('*.json')]
+        self.assertEqual(kept['source'], 'REDACTED NAME X0000000000.txt')
+
     def test_an_unusable_reply_is_sent_back_once(self):
         reader = self.reader('not json', f'```json\n{AI_REPLY}\n```')
         self.assertEqual(len(reader.extract(self.doc())), 1)
@@ -11661,6 +11678,16 @@ class RedactionTests(SimpleTestCase):
     def test_the_last_digits_a_bank_prints_of_an_account_are_masked(self):
         self.assertEqual(redaction.mask('BSB: 000-000 ACC: ****4321\nAccount ending xxxx987')[0],
                          'BSB: 000-000 ACC: ****0000\nAccount ending xxxx0000')
+
+    def test_a_stand_in_is_put_in_as_written(self):
+        terms = self.terms('Jane Citizen => C:\\Users\\Name \\1\n')
+        self.assertEqual(redaction.redact('Dear Jane Citizen', terms).text, 'Dear C:\\Users\\Name \\1')
+        self.assertEqual(redaction.redact_path(Path('Jane Citizen.pdf'), terms), Path('C:\\Users\\Name \\1.pdf'))
+
+    def test_a_masked_tfn_is_not_counted_again(self):
+        masked, count = redaction.mask('TFN: 123 456 789')
+        self.assertEqual((masked, count), ('TFN: 000 000 000', 1))
+        self.assertEqual(redaction.mask(masked)[1], 0)
 
     def test_an_interactive_brokers_account_is_masked(self):
         self.assertEqual(redaction.mask('Account Information,Data,Account,U12345678\nU1234567_20240101.csv')[0],

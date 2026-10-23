@@ -23,7 +23,8 @@ class Cache:
             return None
         return str(json.loads(path.read_text(encoding='utf-8'))['reply'])
 
-    def put(self, cache_key: str, reply: str, source: Path, label: str) -> None:
+    def put(self, cache_key: str, reply: str, source_name: str, label: str) -> None:
+        """Keep `reply`. `source_name` is the document's file name, redacted, as the cache is plain text."""
         self.folder.mkdir(parents=True, exist_ok=True)
-        record = {'source': source.name, 'reader': label, 'reply': reply}
+        record = {'source': source_name, 'reader': label, 'reply': reply}
         (self.folder / f'{cache_key}.json').write_text(json.dumps(record, indent=1), encoding='utf-8')

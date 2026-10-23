@@ -9,6 +9,7 @@ Nothing here prints a document's text or a term, since a command's output may be
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,7 +25,8 @@ HOLDER_LABEL = (r'(?<!payment )\b(?:HIN|SRN|holder (?:identification )?number|se
 # already all zeros is left alone, so it is not counted twice.
 MASKS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r'(?<![\w.+-])(?!redacted@example\.com)[\w.+-]+@[\w-]+(?:\.[\w-]+)+'), 'redacted@example.com'),
-    (re.compile(r'(?i)((?:tax file number|\bTFN)\b[^\n\d]{0,30})\d{3}\s?\d{3}\s?\d{3}'), r'\g<1>000 000 000'),
+    (re.compile(r'(?i)((?:tax file number|\bTFN)\b[^\n\d]{0,30})(?!000\s?000\s?000(?!\d))\d{3}\s?\d{3}\s?\d{3}'),
+     r'\g<1>000 000 000'),
     # With or without its letter and leading zeros: CommSec prints `HIN 12345678`.
     (re.compile(rf'(?i)({HOLDER_LABEL}\W{{0,5}})[A-Z]?(?!0+(?!\d))\d{{6,12}}(?!\d)'), r'\g<1>X0000000000'),
     # Anywhere, as in a file name such as `PRD_1_X0012345678_NDQ`.
@@ -121,11 +123,16 @@ def mask(text: str) -> tuple[str, int]:
     return text, count
 
 
+def _as_written(stand_in: str) -> Callable[[re.Match[str]], str]:
+    """A replacement that puts `stand_in` in as written: as a template, a backslash in it would be read as an escape."""
+    return lambda _: stand_in
+
+
 def redact(text: str, terms: list[Term]) -> Redacted:
     """`text` with every term replaced, then the known identifiers masked."""
     counts: Counter[int] = Counter()
     for term in terms:
-        text, made = term.pattern.subn(term.replacement, text)
+        text, made = term.pattern.subn(_as_written(term.replacement), text)
         if made:
             counts[term.line] += made
     text, masked = mask(text)
@@ -137,7 +144,7 @@ def redact_path(path: Path, terms: list[Term]) -> Path:
     parts = []
     for part in path.parts:
         for term in terms:
-            part = term.pattern.sub(term.replacement, part)
+            part = term.pattern.sub(_as_written(term.replacement), part)
         parts.append(mask(part)[0])
     return Path(*parts)
 

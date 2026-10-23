@@ -15,7 +15,7 @@ from django.contrib import messages
 from django.db.models import Model
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 from django.http.response import HttpResponseBase
-from django.urls import Resolver404, resolve, reverse
+from django.urls import NoReverseMatch, Resolver404, resolve, reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from django.views.static import serve
@@ -70,7 +70,10 @@ def _redirect_target(request: HttpRequest, next_url: str | None) -> str:
     except Resolver404:
         return dashboard
     if match.url_name and match.url_name.endswith(('_change', '_delete', '_history')):
-        return reverse(f'admin:{match.url_name.rsplit("_", 1)[0]}_changelist')
+        try:
+            return reverse(f'admin:{match.url_name.rsplit("_", 1)[0]}_changelist')
+        except NoReverseMatch:  # Not a record's page, such as `password_change`.
+            return next_url
     return next_url
 
 
@@ -97,6 +100,10 @@ def serve_media(request: HttpRequest, path: str) -> HttpResponseBase:
     folder decides. Anything else in the media folder is not Share Dinkum's, and is not served.
     """
     user: Any = request.user
+    # On Windows `serve` reads `\` as a separator too, so `<id>/..\<other id>/...` would reach another
+    # portfolio's folder. No file Share Dinkum stores has one in its path.
+    if '\\' in path:
+        raise Http404('No such document.')
     # As `serve` will read it, so `<id>/../<other id>/...` is judged by the folder it reaches.
     path = posixpath.normpath(path).lstrip('/')
     try:
