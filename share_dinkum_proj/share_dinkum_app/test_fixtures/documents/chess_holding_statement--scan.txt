@@ -1,0 +1,26 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+WOODSIDE
+ABN: 55 004 898 962  CHESS HOLDING STATEMENT
+For statement enquiries contact
+your CHESS Sponsor:
+EXAMPLE SECURITIES LTD
+LOCKED BAG 1
+SYDNEY, NSW 1215
+公 130000
+100002  09997
+MR REDACTED NAME
+REDACTED ADDRESS
+REDACTED SUBURB WA REDACTED POSTCODE  Holder ID Number (HIN):  REDACTED HIN
+CHESS Sponsor's ID (PID):  09997
+Statement Period:  April 2012
+Page:  I of 1
+WPL - ORDINARY FULLY PAID
+ate  Transaction Type  Transaction ID  Ex/Cum  Quantity  Holding
+Status  On  Off  Balance
+Balance Brought Forward from 21 Oct 11  240
+04 Apr 12  Allotment of Securities due to  5800000000000600  243
+Dividend Reinvestment Plan
+FOR YOUR INFORMATION
+CDls: To obtain a free copy of CHESS Depositary Nominee's Financial Services Guide or any Supplementary FSG,
+ASTC may be required by law to disclose information in CHESS Holdings to thirdparties.
+See over for additional Important Information and Disclaimer

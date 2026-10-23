@@ -50,7 +50,7 @@ The columns of each model:
 
 
 def system_prompt() -> str:
-    return INSTRUCTIONS + columns.markdown()
+    return INSTRUCTIONS + columns.markdown(columns.MODELS)
 
 
 @dataclass

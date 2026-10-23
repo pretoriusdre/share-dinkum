@@ -29,6 +29,8 @@ MASKS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf'(?i)({HOLDER_LABEL}\W{{0,5}})[A-Z]?(?!0+(?!\d))\d{{6,12}}(?!\d)'), r'\g<1>X0000000000'),
     # Anywhere, as in a file name such as `PRD_1_X0012345678_NDQ`.
     (re.compile(r'(?<![A-Za-z0-9])[XI](?!0+(?!\d))\d{7,11}(?!\d)'), 'X0000000000'),
+    # An Interactive Brokers account, anywhere: `U1234567`.
+    (re.compile(r'(?<![A-Za-z0-9])U(?!0+(?!\d))\d{7,8}(?!\d)'), 'U0000000'),
     (re.compile(r'\b(?!000-000)\d{3}-\d{3}\b'), '000-000'),
     # A text layer can break the label with a space: Boardroom prints `A ccount Number:`.
     (re.compile(r'(?i)((?:a\s?c\s?c\s?o\s?u\s?n\s?t\s*(?:n\s?u\s?m\s?b\s?e\s?r|no\.?)|\bacc(?:\s*no\.?)?\s*:|'
@@ -42,7 +44,8 @@ MASKS: list[tuple[re.Pattern[str], str]] = [
 
 # A state and its postcode: an address, the holder's or the registry's. Reported by how often each
 # one appears, not line by line, as a registry's own address is on every page it sends.
-POSTCODE = re.compile(r'\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+\d{4}\b')
+# The space before the postcode may be lost, and the one before the state: `EXAMPLEVILLEWA6000`.
+POSTCODE = re.compile(r'(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s*\d{4}(?!\d)')
 
 # Lines worth a second look after redaction, and why.
 REVIEW: list[tuple[re.Pattern[str], str]] = [
@@ -79,7 +82,7 @@ def load_terms(path: Path) -> list[Term]:
 
     Longer terms are applied first, so `Jane Smith` is replaced before `Smith`.
     """
-    terms = []
+    found = []
     for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), start=1):
         line = line.strip()
         if not line or line.startswith('#'):
@@ -87,19 +90,26 @@ def load_terms(path: Path) -> list[Term]:
         term, _, replacement = line.partition('=>')
         term = term.strip()
         if term:
-            terms.append(Term(term_pattern(term), replacement.strip() or DEFAULT_REPLACEMENT, number))
-    return sorted(terms, key=lambda term: -len(term.pattern.pattern))
+            found.append((term, Term(term_pattern(term), replacement.strip() or DEFAULT_REPLACEMENT, number)))
+    return [term for _, term in sorted(found, key=lambda item: -len(''.join(item[0].split())))]
 
 
 def term_pattern(term: str) -> re.Pattern[str]:
     """`term` ignoring case, with any spacing or line breaks between its words, as whole words.
 
-    The space between words may be missing too, as OCR sometimes drops one.
+    The space between words may be missing too, as OCR sometimes drops one. A text layer can lose every space,
+    running a term into its neighbours (`MRJANECITIZEN`, `EXAMPLEVILLEWA6000`), so a term of several words is
+    found inside other text, and a number needs only no digit either side.
     """
-    words = r'\s*'.join(re.escape(word) for word in term.split())
+    words = term.split()
+    pattern = r'\s*'.join(re.escape(word) for word in words)
+    if term.isdigit():
+        return re.compile(rf'(?<!\d){pattern}(?!\d)')
+    if len(words) > 1:
+        return re.compile(pattern, re.IGNORECASE)
     start = r'(?<!\w)' if term[0].isalnum() else ''
     end = r'(?!\w)' if term[-1].isalnum() else ''
-    return re.compile(f'{start}{words}{end}', re.IGNORECASE)
+    return re.compile(f'{start}{pattern}{end}', re.IGNORECASE)
 
 
 def mask(text: str) -> tuple[str, int]:

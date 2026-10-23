@@ -16,7 +16,7 @@ from share_dinkum_app.documents.extracted import Extracted, Unreadable
 
 FIXTURES = Path(__file__).resolve().parent.parent / 'test_fixtures' / 'documents'
 FIXTURE_SUFFIX = {'text': '.txt', 'table': '.csv'}
-DOCUMENT_KINDS = ('payment', 'contract_note', 'annual_statement', 'export')
+DOCUMENT_KINDS = ('payment', 'contract_note', 'annual_statement', 'holding_statement', 'export')
 NAME_PATTERN = re.compile(rf'^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:{"|".join(DOCUMENT_KINDS)})$')
 
 ALLOWED_IMPORTS = {

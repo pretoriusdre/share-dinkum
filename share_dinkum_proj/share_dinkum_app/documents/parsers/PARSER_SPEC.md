@@ -17,9 +17,10 @@ taken out.
 ## Deliverables
 
 `<name>` is `<issuer>_<kind>` in lower_snake_case. `<issuer>` is the registry, broker or fund
-manager whose layout this is. `<kind>` is one of `payment`, `contract_note`, `annual_statement`,
-`export`. For example: `computershare_payment`, `commsec_contract_note`,
-`vanguard_annual_statement`, `commsec_export`.
+manager whose layout this is (`chess` for ASX's own statement). `<kind>` is one of `payment`,
+`contract_note`, `annual_statement`, `holding_statement`, `export`. For example:
+`computershare_payment`, `commsec_contract_note`, `vanguard_annual_statement`,
+`chess_holding_statement`, `commsec_export`.
 
 All paths are under `share_dinkum_proj/share_dinkum_app/`.
 
@@ -118,6 +119,11 @@ def parse(doc: Document) -> list[Extracted]:
     neither.
   - Where the statement prints a subtotal or gross amount, check the lines against it and raise
     `ParseError` if they do not agree, so a line read from the wrong column shows.
+- A holding statement → one `HoldingBalance` for each day it gives a balance: the balance brought
+  forward on its date, then after each day's movements the last balance shown that day, and any
+  final balance. It is not stored; the check compares it with the units the trades give. Check
+  each movement against the balance before it (on or off) and raise `ParseError` if it does not
+  follow.
 - An export of several events → one event per row, using the models above.
 
 ## Values

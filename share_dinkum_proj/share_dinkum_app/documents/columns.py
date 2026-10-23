@@ -17,6 +17,21 @@ from share_dinkum_app import column_help
 # The models a document's events load into.
 MODELS = ('Buy', 'Sell', 'Dividend', 'Distribution', 'AttributionStatement', 'AttributionComponent',
           'CostBaseAdjustment')
+# Events a document gives that are checked against the portfolio but never loaded: a holding balance is what the
+# trades add up to, so it is compared with them. Each column's kind and meaning, as a model field would give them.
+CHECKED: dict[str, dict[str, tuple['ValueKind', str]]] = {
+    'HoldingBalance': {
+        'instrument__name': ('instrument', 'The code of the instrument held, as the document prints it.'),
+        'date': ('date', 'The day the balance is at: the holding at the end of that day.'),
+        'quantity': ('decimal', 'The units held at the end of that day.'),
+    },
+}
+CHECKED_DESCRIPTIONS = {
+    'HoldingBalance': 'The units a holding statement says were held at the end of a day. It is not stored: the check '
+                      "compares it with the units the portfolio's trades, splits and allotments give on that day.",
+}
+# Every kind of event a document can give.
+EVENTS = MODELS + tuple(CHECKED)
 
 # Set by the app: `legacy_id` and `file` when the event is loaded, the statement link from the order
 # of the events. `description` and `notes` are the user's own words.
@@ -33,6 +48,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     'AttributionStatement': ('instrument__name', 'financial_year_end_date'),
     'AttributionComponent': ('component', 'amount'),
     'CostBaseAdjustment': ('instrument__name', 'financial_year_end_date', 'cost_base_increase'),
+    'HoldingBalance': ('instrument__name', 'date', 'quantity'),
 }
 
 # A per-unit figure is compared exactly; a whole amount to the cent.
@@ -51,6 +67,8 @@ def model_class(name: str) -> type[models.Model]:
 
 def columns(model: str) -> list[str]:
     """The columns an event of `model` may fill, in template order."""
+    if model in CHECKED:
+        return list(CHECKED[model])
     from share_dinkum_app.management.commands.make_import_template import get_template_columns
 
     return [column for column in get_template_columns(model_class(model))
@@ -64,6 +82,8 @@ def field_for(model: str, column: str) -> 'models.Field[Any, Any]':
 
 def kind(model: str, column: str) -> ValueKind:
     """What a value of `column` is."""
+    if model in CHECKED:
+        return CHECKED[model][column][0]
     if column == 'instrument__name':
         return 'instrument'
     field = field_for(model, column)
@@ -129,7 +149,8 @@ def to_json(value: Any) -> Any:
 
 def describe(model: str) -> list[tuple[str, str, str]]:
     """(column, required or optional, meaning) for each column of `model`."""
-    notes = column_help.describe_columns(model_class(model), columns(model))
+    notes = ({column: meaning for column, (_, meaning) in CHECKED[model].items()} if model in CHECKED
+             else column_help.describe_columns(model_class(model), columns(model)))
     described = []
     for column in columns(model):
         meaning = notes.get(column, '')
@@ -140,11 +161,12 @@ def describe(model: str) -> list[tuple[str, str, str]]:
     return described
 
 
-def markdown() -> str:
-    """Every model's columns as Markdown tables."""
+def markdown(events: tuple[str, ...] = EVENTS) -> str:
+    """The columns of each kind of event in `events`, as Markdown tables."""
     parts = []
-    for model in MODELS:
-        description = getattr(model_class(model), 'MODEL_DESCRIPTION', '')
+    for model in events:
+        description = CHECKED_DESCRIPTIONS[model] if model in CHECKED else getattr(model_class(model),
+                                                                                    'MODEL_DESCRIPTION', '')
         lines = [f'### {model}', '', description, '', '| Column | Required | Meaning |', '|---|---|---|']
         lines += [f'| `{column}` | {required} | {meaning} |' for column, required, meaning in describe(model)]
         parts.append('\n'.join(lines))

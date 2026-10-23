@@ -4,16 +4,19 @@ An event is matched to the stored record with the same natural key (the keys `fi
 uses): a payment or trade by instrument and date, a statement or cost base adjustment by instrument
 and financial year end, and a statement's line by its component within the statement matched just
 before it. Several trades or payments on one day are told apart by their units.
+
+A holding balance is matched to no record: it is compared with the units the stored trades, splits and
+allotments give at the end of its day.
 """
 
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.db import models
 from djmoney.money import Money
@@ -23,9 +26,15 @@ from share_dinkum_app.documents.extract import FileExtraction
 from share_dinkum_app.documents.extracted import Extracted
 
 if TYPE_CHECKING:
-    from share_dinkum_app.models import Account, AttributionStatement
+    from share_dinkum_app.holdings.facts import Facts
+    from share_dinkum_app.models import Account, AttributionStatement, Instrument
 
 CENT = Decimal('0.01')
+# CHESS counts a trade from its settlement, two or three business days after it (a week with a weekend and a
+# holiday), where the portfolio dates it on the trade.
+SETTLEMENT_DAYS = 7
+# Units are stored to 4 places, and a split rounds each parcel.
+UNIT_TOLERANCE = Decimal('0.001')
 
 
 class Status(StrEnum):
@@ -117,6 +126,7 @@ class Checker:
         self.account = account
         self.loader = DataLoader(account=account)
         self.matched: set[Any] = set()
+        self.facts: dict[Any, 'Facts'] = {}
 
     def run(self, extractions: list[FileExtraction], unmatched: bool) -> DocumentReport:
         report = DocumentReport([self.check_file(extraction) for extraction in extractions])
@@ -160,6 +170,8 @@ class Checker:
             hint = f' Did you mean {" or ".join(near)}?' if near else ''
             return EventResult(event, Status.NOT_IN_APP, notes=[f'This portfolio has no instrument {code}.{hint}'])
 
+        if event.model in columns.CHECKED:
+            return self.check_balance(event, cast('Instrument', instrument))
         model = columns.model_class(event.model)
         key = key_column(event.model)
         assert key is not None
@@ -192,6 +204,44 @@ class Checker:
         record = candidates[0]
         differences = compare(event, record)
         return EventResult(event, Status.DIFFERS if differences else Status.AGREES, record, differences)
+
+    def check_balance(self, event: Extracted, instrument: 'Instrument') -> EventResult:
+        """A holding balance against the units held at the end of its day, counting trades from the trade
+        date, or else from up to `SETTLEMENT_DAYS` later, as CHESS counts a trade not yet settled."""
+        day, stated = event.row['date'], event.row['quantity']
+        held = self.units_held(instrument, day)
+        if abs(held - stated) <= UNIT_TOLERANCE:
+            return EventResult(event, Status.AGREES)
+        for lag in range(1, SETTLEMENT_DAYS + 1):
+            if abs(self.units_held(instrument, day, lag) - stated) <= UNIT_TOLERANCE:
+                return EventResult(event, Status.AGREES, notes=[
+                    f'Agrees when a trade made up to {lag} day(s) before is counted from its settlement, as CHESS '
+                    f'counts it.'])
+        return EventResult(event, Status.DIFFERS, differences=[Difference('quantity', stated, held)],
+                           notes=["The portfolio's trades, splits and allotments give a different holding at the end "
+                                  "of that day, even allowing a week for a trade to settle."])
+
+    def units_held(self, instrument: 'Instrument', day: date, lag: int = 0) -> Decimal:
+        """The units of `instrument` held at the end of `day`, each trade counted `lag` days after its date.
+
+        In date order as the holdings replay takes them: a day's splits, then its buys, then its sales.
+        """
+        from share_dinkum_app.holdings import facts
+
+        if instrument.pk not in self.facts:
+            self.facts[instrument.pk] = facts.load(self.account, instrument)
+        known = self.facts[instrument.pk]
+        shift = timedelta(days=lag)
+        steps = sorted([(split.date, 0, split.ratio) for split in known.splits]
+                       + [(buy.date + shift, 1, buy.quantity) for buy in known.buys]
+                       + [(sale.date + shift, 2, sale.quantity) for sale in known.sales],
+                       key=lambda step: (step[0], step[1]))
+        held = Decimal(0)
+        for when, kind, value in steps:
+            if when > day:
+                break
+            held = held * value if kind == 0 else held + value if kind == 1 else held - value
+        return held
 
     def without_document(self, events: list[EventResult]) -> list[models.Model]:
         """Stored records of the models the documents gave, within the dates they cover, matched by none."""

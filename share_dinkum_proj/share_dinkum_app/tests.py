@@ -11173,7 +11173,16 @@ class DocumentValidationTests(SimpleTestCase):
         self.assertTrue(any(problem.startswith("Distribution has no column 'strategy'") for problem in found))
 
     def test_a_model_no_document_gives_is_refused(self):
-        self.assertIn("'Parcel' is not a model", document_validate.problems(Extracted('Parcel', {}))[0])
+        self.assertIn("'Parcel' is not an event", document_validate.problems(Extracted('Parcel', {}))[0])
+
+    def test_a_holding_balance_is_an_event_that_is_checked_but_not_stored(self):
+        row = {'instrument__name': 'VAS', 'date': date(2025, 7, 16), 'quantity': Decimal('1000')}
+        self.assertEqual(document_validate.problems(Extracted('HoldingBalance', row)), [])
+        self.assertEqual(document_validate.problems(Extracted('HoldingBalance', {**row, 'quantity': 1000})),
+                         ['quantity must be a Decimal, not int (1000).'])
+        self.assertNotIn('HoldingBalance', document_columns.MODELS)
+        self.assertIn('### HoldingBalance', document_columns.markdown())
+        self.assertNotIn('HoldingBalance', document_ai.system_prompt())
 
     def test_the_stated_total_must_agree_to_the_cent(self):
         event = self.event()
@@ -11383,6 +11392,36 @@ class DocumentCheckTests(TestCase):
         self.assertEqual(self.statuses(self.check(*events)), ['Agrees', 'Agrees', 'Not in app'])
         self.assertEqual(self.statuses(self.check(events[1])), ['Invalid'])
 
+    def balance(self, day, units):
+        return self.event('HoldingBalance', instrument__name='VAS', date=day, quantity=Decimal(units))
+
+    def test_a_holding_balance_is_compared_with_the_units_the_trades_and_splits_give(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        Sell.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 8, 1),
+                            quantity=Decimal('400'), unit_price=Money(Decimal('11'), 'AUD'),
+                            total_brokerage=Money(Decimal('10'), 'AUD'), strategy='FIFO')
+        ShareSplit.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 9, 1),
+                                  quantity_before=Decimal('1'), quantity_after=Decimal('2'))
+        report = self.check(self.balance(date(2025, 7, 20), '1000'), self.balance(date(2025, 8, 20), '600'),
+                            self.balance(date(2025, 9, 1), '1200'), self.balance(date(2025, 9, 2), '1100'))
+        self.assertEqual(self.statuses(report), ['Agrees', 'Agrees', 'Agrees', 'Differs'])
+        result = report.events()[-1]
+        self.assertEqual([(d.column, d.document, d.stored) for d in result.differences],
+                         [('quantity', Decimal('1100'), Decimal('1200'))])
+        self.assertIsNone(result.record)
+
+    def test_a_holding_balance_allows_a_trade_to_settle(self):
+        Buy.objects.create(account=self.account, instrument=self.instrument, date=date(2025, 7, 1),
+                           quantity=Decimal('1000'), unit_price=Money(Decimal('10'), 'AUD'),
+                           total_brokerage=Money(Decimal('10'), 'AUD'))
+        # CHESS counts the trade from its settlement, on 3 July.
+        [result] = self.check(self.balance(date(2025, 7, 2), '0')).events()
+        self.assertEqual(result.status, document_check.Status.AGREES)
+        self.assertIn('counted from its settlement', result.notes[0])
+        self.assertEqual(self.statuses(self.check(self.balance(date(2025, 7, 20), '0'))), ['Differs'])
+
     def test_counts_include_unreadable_files(self):
         report = document_check.check(self.account, [
             FileExtraction(Path('a.pdf'), 'example_payment', [self.event()]),
@@ -11561,6 +11600,14 @@ class RedactionTests(SimpleTestCase):
         terms = self.terms('Ann\n')
         self.assertEqual(redaction.redact('Annual statement for Ann', terms).text, 'Annual statement for REDACTED')
 
+    def test_terms_are_found_where_the_text_layer_lost_every_space(self):
+        terms = self.terms('Jane Citizen => NAME\nExampleville => SUBURB\nSouth Exampleville => SUBURB\n6000 => PC\n')
+        self.assertEqual(redaction.redact('MRJANECITIZEN\nSOUTHEXAMPLEVILLEWA6000 HolderID', terms).text,
+                         'MRNAME\nSUBURBWAPC HolderID')
+        # A number term is not found inside a longer number.
+        self.assertEqual(redaction.redact('Ref 160001', terms).text, 'Ref 160001')
+        self.assertEqual(redaction.postcodes('SOUTHEXAMPLEVILLEWA6000 HolderID\nVIC 30001'), [(1, 'WA6000')])
+
     def test_terms_are_taken_out_of_file_and_folder_names(self):
         terms = self.terms('Jane Citizen => Holder\n')
         self.assertEqual(redaction.redact_path(Path('Jane Citizen') / 'jane citizen VAS.pdf', terms),
@@ -11591,6 +11638,10 @@ class RedactionTests(SimpleTestCase):
     def test_the_last_digits_a_bank_prints_of_an_account_are_masked(self):
         self.assertEqual(redaction.mask('BSB: 000-000 ACC: ****4321\nAccount ending xxxx987')[0],
                          'BSB: 000-000 ACC: ****0000\nAccount ending xxxx0000')
+
+    def test_an_interactive_brokers_account_is_masked(self):
+        self.assertEqual(redaction.mask('Account Information,Data,Account,U12345678\nU1234567_20240101.csv')[0],
+                         'Account Information,Data,Account,U0000000\nU0000000_20240101.csv')
 
     def test_identifiers_are_taken_out_of_file_names(self):
         self.assertEqual(redaction.redact_path(Path('NDQ') / 'PRD_1_20171231_X00012345678_BETA_NDQ.pdf', []),

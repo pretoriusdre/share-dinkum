@@ -1,0 +1,34 @@
+FAKE DATA: made-up names, numbers, units, prices and dates, for testing only.
+HIN:REDACTED HIN
+CHESS HOLDING STATEMENT
+Forstatementenquiriescontact
+yourCHESSsponsor:
+VanguardAustralianSharesIndexETF
+EXAMPLECUSTODIANSPTYLTD
+LEVEL1
+1EXAMPLESTREET
+SYDNEYNSW2000
+123456789 REF_TAG 000
+T:0200000000
+REDACTED NAME
+REDACTED ADDRESS
+REDACTED SUBURB HolderIDNumber(HIN): REDACTED HIN
+CHESSSponsor’sID(PID): 09998
+StatementPeriod: March2026
+Page: 1of2
+VAS -VANGUARD AUSTRALIAN SHARES INDEX ETF
+Date TransactionType TransactionID Ex/Cum Quantity Holding
+Status On Off Balance
+BalanceBroughtForwardfrom12Jan26 420
+04Mar26 MovementofSecuritiesduetoPurchase,Sale 0999800000000500 180 600
+orTransfer
+-------------------- Endoftransaction --------------------
+FinalHoldingBalanceto31Mar26 600
+FormoreinformationaboutyourCHESSholdingstatements,pleasevisitasx.com.au/statements.Pleaseseeoverleafforadditionalimportantinformation.
+Statementissuedby: ShareRegistryDetail:
+ASXSettlementPtyLimited COMPUTERSHAREINVESTORSERVICES
+ABN49008504532 PTYLTD
+P.O.BoxH227AustraliaSquareNSW1215 GPOBOX7045
+
+Page: 2of2
+Disclaimer:ASXSettlementPtyLimited(“ASXSettlement”)operatesCHESS.

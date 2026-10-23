@@ -14,8 +14,8 @@ CENT = Decimal('0.01')
 
 def problems(event: Extracted) -> list[str]:
     """What is wrong with `event`; empty when nothing is."""
-    if event.model not in columns.MODELS:
-        return [f'{event.model!r} is not a model a document can give. It is one of: {", ".join(columns.MODELS)}.']
+    if event.model not in columns.EVENTS:
+        return [f'{event.model!r} is not an event a document can give. It is one of: {", ".join(columns.EVENTS)}.']
 
     allowed = columns.columns(event.model)
     found = [f'{event.model} has no column {column!r}. Its columns are: {", ".join(allowed)}.'
