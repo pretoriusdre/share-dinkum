@@ -15,31 +15,30 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
 
 - **Check a folder of documents against a portfolio (experimental).** `uv run dev check_documents
   --account NAME FOLDER` lists each payment, trade or statement line the portfolio holds
-  differently or lacks; `--out` writes the findings to a workbook. Added deterministic parsers for:
-  - CommSec contract notes
-  - SelfWealth contract notes
-  - Computershare dividend advices, including dividend reinvestment advices
-  - Vanguard ETF distribution advices
-  - Link Market Services / MUFG Corporate Markets dividend and distribution advices
-  - Advanced Share Registry dividend advices
-  - Boardroom dividend statements
-  - Computershare annual tax statements (Vanguard ETFs)
-  - Link Market Services / MUFG Corporate Markets annual tax statements (BetaShares)
-  - CHESS holding statements, each balance checked against the units the trades give that day
-  - Interactive Brokers activity statements (CSV): trades, dividends and distributions, and holdings
-
-  `uv run dev parser_prompt FILE` writes a brief for adding a parser. A file no parser
-  recognises can be read by an AI with `--ai` (Ollama locally, or a hosted model set up in
-  `.env`). Each document is redacted before it is sent, and a hosted AI is refused without a
-  `redact_terms.txt`. It is new, so check its findings against the document.
+  differently or lacks; `--out` writes the findings to a workbook.
+  - Added deterministic parsers for:
+    - CommSec contract notes
+    - SelfWealth contract notes
+    - Computershare dividend advices, including dividend reinvestment advices
+    - Vanguard ETF distribution advices
+    - Link Market Services / MUFG Corporate Markets dividend and distribution advices
+    - Advanced Share Registry dividend advices
+    - Boardroom dividend statements
+    - Computershare annual tax statements (Vanguard ETFs)
+    - Link Market Services / MUFG Corporate Markets annual tax statements (BetaShares)
+    - CHESS holding statements, each balance checked against the units the trades give that day
+    - Interactive Brokers activity statements (CSV): trades, dividends and distributions, and holdings
+  - `uv run dev parser_prompt FILE` writes a brief for adding a parser.
+  - `--ai` reads an unrecognised file with a local or hosted AI model, redacted first.
+    Check its findings against the document.
 - **Redacted copies of your documents, made on your machine.** `uv run dev redact_documents
   FOLDER --out COPIES` writes a text copy of each document with your own list of names, addresses
   and other terms (`redact_terms.txt`) taken out, as well as TFNs, HINs, SRNs, bank details and
   email addresses, and points at any line that still looks personal. Share the copies, never the
   originals, when asking for a parser for your registry or broker.
 - **Scanned PDFs are read by OCR, on your machine.** Install it with `uv sync --inexact --extra
-  ocr`. Both commands then read a PDF that holds only a picture of the page, and the check's
-  workbook marks each one, since OCR can misread a figure.
+  ocr`. `check_documents` and `redact_documents` can then read a scanned PDF. The `--out`
+  workbook marks each scanned file, as OCR can misread a figure.
 
 ### Changed
 
