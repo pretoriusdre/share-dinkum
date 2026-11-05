@@ -80,8 +80,9 @@ those decisions cannot follow, such as reducing a buy below what was sold from i
 dated before a sale already allocated, is refused.
 
 Prices are stored as traded on the day in **[InstrumentPriceHistory]**. Use **Refresh prices** on
-the dashboard to fetch new prices and exchange rates. If the dashboard reports a data problem, run
-`uv run dev repair_portfolio_data` (`--dry-run` only reports).
+the dashboard to fetch new prices and exchange rates. Instruments on a market with **Is exchange
+listed** unticked, such as employee options, are not fetched. If the dashboard reports a data
+problem, run `uv run dev repair_portfolio_data` (`--dry-run` only reports).
 
 Further tables hold tax facts the reports read, such as residency periods and loss carry-forwards:
 see [Capital gains tax](#capital-gains-tax). Every table is in the
@@ -139,6 +140,9 @@ Related commands (run with `uv run dev`): `load_cpi`, `capture_cutover_valuation
 
 - [docs/capital_gains_models.md](docs/capital_gains_models.md): what each table is for and the order
   to fill them in.
+- [docs/options_and_employee_shares.md](docs/options_and_employee_shares.md): how to record shares
+  from options, rights issues and employee share schemes, until exercising an option can be
+  recorded directly.
 - [CHANGELOG.md](CHANGELOG.md), version 0.4.0: the full list of behaviour.
 
 ---

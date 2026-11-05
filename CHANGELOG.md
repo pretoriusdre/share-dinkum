@@ -4,6 +4,22 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
+## Unreleased
+
+### Added
+
+- **How to record options, rights issues and employee share schemes**
+  ([docs/options_and_employee_shares.md](docs/options_and_employee_shares.md)). Options cannot be
+  exercised in the app yet, so the guide says which buy of the shares to enter in each case, and
+  why the exercise price does not belong in brokerage.
+
+### Fixed
+
+- **A price refresh no longer fetches prices for an instrument on an unlisted market.** It asked
+  the provider for the instrument's name as a ticker, which with no market suffix is a US code, so
+  an employee option could be given another company's prices. `refetch_price_history` and
+  `suggest_instrument_classification --use-market-data` pass such instruments over too.
+
 ## 0.7.0 - 2026-10-23
 
 ### Added

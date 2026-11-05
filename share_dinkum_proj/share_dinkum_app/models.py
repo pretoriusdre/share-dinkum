@@ -933,8 +933,9 @@ class Market(BaseModel):
     )
     is_exchange_listed = models.BooleanField(
         default=True,
-        help_text='Uncheck for unlisted holdings. Unlisted assets fall into the "other" '
-                  'categories on the CGT schedule regardless of country.',
+        help_text='Uncheck for unlisted holdings, such as employee options. Their prices are '
+                  'not fetched, and they fall into the "other" categories on the CGT schedule '
+                  'regardless of country.',
     )
 
 
@@ -1143,8 +1144,15 @@ class Instrument(BaseModel):
         cover weekends and suspensions, or from the first buy if there is none. A day already
         stored is overwritten: a price fetched while the market was open is not that day's
         close, and one stored adjusted is not the price it traded at. Returns the number of
-        days stored.
+        days stored, which is none for an instrument on an unlisted market.
         """
+        if not self.market.is_exchange_listed:
+            # Nothing quotes an unlisted holding, such as employee options. Its name asked of the
+            # provider is a ticker all the same, and with no suffix a US one: the prices fetched
+            # would be some other company's.
+            logger.debug('Not fetching prices for %s: its market is not exchange listed.', self)
+            return 0
+
         end_date = end_date or date.today()
 
         latest_price_history = (

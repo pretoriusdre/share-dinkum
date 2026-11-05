@@ -10528,6 +10528,60 @@ class StoredPricesAreAsTradedTests(TransactionTestCase):
         self.assertIn('would fetch from 2021-03-01', output.getvalue())
 
 
+class UnlistedMarketPricesTests(TransactionTestCase):
+    """Nothing is fetched for an instrument on an unlisted market, as its name is not a ticker."""
+
+    def setUp(self):
+        self.account = create_account()
+        employer = Market.objects.create(
+            account=self.account, code='EMPLOYER', is_exchange_listed=False)
+        self.options = create_instrument(account=self.account, market=employer, name='ACME')
+        Buy.objects.create(
+            account=self.account, instrument=self.options, date=date(2024, 3, 1),
+            quantity=Decimal('1000'), unit_price=Money(0, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+    def test_a_price_refresh_asks_the_provider_nothing(self):
+        """With no suffix, ACME was asked for as a US ticker, and got another company's prices."""
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history') as history, \
+                patch('share_dinkum_app.models.yfinanceinterface.get_current_price') as current:
+            self.account.update_all_price_history()
+
+        history.assert_not_called()
+        current.assert_not_called()
+        self.options.refresh_from_db()
+        self.assertIsNone(self.options.current_unit_price)
+
+    def test_a_listed_market_with_no_suffix_is_still_fetched(self):
+        """A blank suffix is how a US listing such as IBIT is asked for."""
+        nasdaq = create_market(account=self.account, code='NASDAQ', suffix=None)
+        ibit = create_instrument(account=self.account, market=nasdaq, name='IBIT')
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history',
+                   return_value=pd.DataFrame()) as history:
+            ibit.update_price_history(start_date=date(2024, 3, 1), end_date=date(2024, 3, 8))
+
+        history.assert_called_once()
+        self.assertEqual(ibit.yfinance_ticker_code, 'IBIT')
+
+    def test_the_refetch_command_passes_it_over(self):
+        output = io.StringIO()
+        with patch.object(Instrument, 'update_price_history') as update:
+            call_command(
+                'refetch_price_history', '--account', self.account.description, stdout=output)
+
+        update.assert_not_called()
+        self.assertNotIn('ACME', output.getvalue())
+
+    def test_the_classification_command_does_not_look_it_up(self):
+        from share_dinkum_app.management.commands.suggest_instrument_classification import Command
+
+        with patch.object(Command, '_market_data') as lookup:
+            call_command(
+                'suggest_instrument_classification', '--account', self.account.description,
+                '--use-market-data', '--dry-run', stdout=io.StringIO())
+
+        lookup.assert_not_called()
+
+
 class UnrecordedLossWarningTests(TransactionTestCase):
     """A loss the application worked out reaches no later year until it is recorded."""
 

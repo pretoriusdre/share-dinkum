@@ -101,6 +101,10 @@ fills in what it can from your own dividend and distribution history — a holdi
 dividends is a company, one that has paid distributions is a trust — and lists what it cannot.
 Anything left unclassified is reported as unclassified rather than guessed at.
 
+**Right, option or entitlement** only places a gain on the option itself; it does not turn options
+into shares. [options_and_employee_shares.md](options_and_employee_shares.md) says how to record
+shares from an exercise or an employee share scheme.
+
 ### `CapitalLossCarryForward`
 
 Capital losses available against a later year's gains.
