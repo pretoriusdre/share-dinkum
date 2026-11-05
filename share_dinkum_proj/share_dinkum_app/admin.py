@@ -5,6 +5,7 @@ from django.contrib.admin import helpers
 from django import forms
 
 from django.apps import apps
+from django.contrib.auth import get_permission_codename
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.admin import UserAdmin
@@ -13,7 +14,7 @@ from django.contrib.admin.options import InlineModelAdmin
 from django.contrib.auth.forms import UserChangeForm
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Model, ForeignKey, ManyToManyRel, QuerySet
+from django.db.models import Model, ForeignKey, ForeignObjectRel, ManyToManyRel, QuerySet
 from django.http import HttpRequest, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
@@ -366,7 +367,7 @@ class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
 
                     # Named, since a model can link here twice: an option exercise has its options
                     # and its shares, and without it the formset refuses to guess and the page fails.
-                    inline = type('DynamicInline', (self.inline_class(related_model),),
+                    inline = type('DynamicInline', (self.inline_class(rel, obj),),
                                   {'model': related_model, 'fk_name': rel.field.name})
                     #if related_model not in added_inlines:
                     inline_instances.append(inline(self.model, self.admin_site))
@@ -374,8 +375,8 @@ class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
 
         return inline_instances
 
-    def inline_class(self, related_model: type[Model]) -> type[BaseInline]:
-        """The inline to show `related_model`'s records on this model's page."""
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
+        """The inline to show the records `rel` links to `obj` on its page."""
         return BaseInline
 
 
@@ -409,31 +410,42 @@ class TradeAdmin(GenericModelAdmin):
             return False
         return super().has_delete_permission(request, obj)
 
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
+        # An exercise's trade's own records, and the share buys an option buy was exercised into.
+        if obj.exercise_id is not None or rel.field.name == 'option_buy':
+            return ReadOnlyInline
+        return super().inline_class(rel, obj)
+
 
 class OptionExerciseAdmin(GenericModelAdmin):
     """Option exercises. Deleting one deletes the trades it wrote, unless its shares were sold."""
 
-    def inline_class(self, related_model: type[Model]) -> type[BaseInline]:
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
         return ReadOnlyInline  # Its trades, which change with it.
 
     def get_deleted_objects(self, objs: Any, request: HttpRequest) -> Any:
         from share_dinkum_app.models import Buy, Sell, SellAllocation
 
+        user: Any = request.user
         deleted: list[Any] = []
         protected: list[str] = []
         counts: dict[str, int] = {}
+        perms_needed: set[str] = set()
         for exercise in objs:
             trades = [*Sell.objects.filter(exercise=exercise), *Buy.objects.filter(exercise=exercise)]
             deleted.append(str(exercise))
             deleted.append([f'{capfirst(trade._meta.verbose_name)}: {trade}' for trade in trades])
             for trade in trades:
-                name = str(trade._meta.verbose_name_plural)
-                counts[name] = counts.get(name, 0) + 1
+                opts = trade._meta
+                counts[str(opts.verbose_name_plural)] = counts.get(str(opts.verbose_name_plural), 0) + 1
+                # The user's own permission: the trades' admin refuses every delete of them alone.
+                if not user.has_perm(f'{opts.app_label}.{get_permission_codename("delete", opts)}'):
+                    perms_needed.add(str(opts.verbose_name))
             protected += [f'{capfirst(allocation._meta.verbose_name)}: {allocation} (shares from this exercise sold)'
                           for allocation in SellAllocation.objects.filter(
                               parcel__buy__exercise=exercise, is_active=True)]
         counts[str(self.model._meta.verbose_name_plural)] = len(objs)
-        return deleted, counts, set(), protected
+        return deleted, counts, perms_needed, protected
 
     def delete_queryset(self, request: HttpRequest, queryset: QuerySet[Any]) -> None:
         """One at a time, so each deletes its own trades."""

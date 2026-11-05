@@ -10871,6 +10871,23 @@ class OptionExerciseTests(OptionExerciseMixin, TransactionTestCase):
         keys = figures_dump.Keys(self.account)
         self.assertEqual(len({keys.key(buy) for buy in Buy.objects.filter(exercise=exercise)}), 2)
 
+    def test_two_exercises_of_one_size_on_one_day_have_their_own_figures_keys(self):
+        self.buy_options(quantity='200', brokerage='0')
+        exercises = [self.exercise(quantity='100', brokerage='0', legacy_id=legacy_id)
+                     for legacy_id in ('EX1', 'EX2')]
+
+        keys = figures_dump.Keys(self.account)
+        for model in (Sell, Buy):
+            trades = model.objects.filter(exercise__in=exercises)
+            self.assertEqual(len({keys.key(trade) for trade in trades}), 2, model.__name__)
+
+    def test_an_exercise_guards_every_field_its_trades_holdings_are_worked_out_from(self):
+        from share_dinkum_app import signals
+
+        for model, fields in signals.HOLDINGS_FACT_FIELDS.items():
+            if model in signals.EXERCISE_RECORD_FIELDS:
+                self.assertLessEqual(set(fields), set(signals.EXERCISE_RECORD_FIELDS[model]), model.__name__)
+
     def test_repricing_the_options_carries_into_the_shares(self):
         option_buy = self.buy_options()
         self.exercise()
@@ -10922,6 +10939,37 @@ class OptionExerciseTests(OptionExerciseMixin, TransactionTestCase):
         self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 302)
         self.assertFalse(OptionExercise.objects.exists())
         self.assertFalse(Buy.objects.filter(instrument=self.shares).exists())
+
+    def test_the_trades_pages_show_what_the_exercise_wrote_read_only(self):
+        option_buy = self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        page = self.client.get(reverse('admin:share_dinkum_app_buy_change', args=[option_buy.pk]))
+        self.assertContains(page, str(Buy.objects.get(exercise=exercise)))
+        self.assertNotContains(page, 'name="exercised_into-0-quantity"')
+        self.assertNotContains(page, 'name="exercised_into-1-quantity"')  # No blank row to add one.
+        sale = Sell.objects.get(exercise=exercise)
+        page = self.client.get(reverse('admin:share_dinkum_app_sell_change', args=[sale.pk]))
+        self.assertContains(page, str(sale.sale_allocation.get()))
+        self.assertNotContains(page, 'name="sale_allocation-0-quantity"')
+
+    def test_deleting_one_needs_permission_to_delete_its_trades(self):
+        from django.contrib.auth.models import Permission
+
+        self.buy_options()
+        exercise = self.exercise()
+        user = self.account.owner
+        user.is_staff, user.is_superuser = True, False
+        user.save()
+        user.user_permissions.add(*Permission.objects.filter(
+            codename__in=['view_optionexercise', 'delete_optionexercise']))
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_optionexercise_delete', args=[exercise.pk])
+
+        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 403)
+        self.assertTrue(OptionExercise.objects.filter(pk=exercise.pk).exists())
+        self.assertTrue(Buy.objects.filter(exercise=exercise).exists())
 
     def test_an_exercise_out_of_step_with_its_trades_is_found_and_written_again(self):
         self.buy_options()

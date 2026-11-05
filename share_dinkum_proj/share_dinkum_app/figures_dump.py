@@ -108,6 +108,10 @@ class Keys:
             parts = [obj.name]
         elif isinstance(obj, m.Trade):
             parts = [type(obj).__name__, obj.instrument.name, obj.date, obj.quantity, obj.legacy_id]
+            exercise = obj.exercise if isinstance(obj, (m.Buy, m.Sell)) else None
+            if exercise is not None:
+                # An exercise's trades have no legacy id of their own, but the exercise may.
+                parts.append(self.key(exercise))
             option_buy = obj.option_buy if isinstance(obj, m.Buy) else None
             if option_buy is not None:
                 # An exercise writes one buy per option buy, with no legacy id to tell them apart.
