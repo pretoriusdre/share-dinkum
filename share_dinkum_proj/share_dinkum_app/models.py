@@ -28,12 +28,13 @@ from share_dinkum_app.utils import convert_to_decimal_field
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path
 from share_dinkum_app.decorators import safe_property
-from share_dinkum_app.holdings import live
+from share_dinkum_app.holdings import exercise as exercise_module, live
 from share_dinkum_app.choices import (
     AllocationMethod,
     AttributionComponent as AttributionComponentType,
     CGTAssetCategory,
     CGTBasis,
+    CostBaseBasis,
     DividendType,
     LegalForm,
     LegalFormSource,
@@ -1407,7 +1408,34 @@ class Trade(BaseModel):
             field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
             for field in fields)
 
+    #: What an option exercise sets on the trades it writes (`holdings.exercise`).
+    EXERCISE_FIELDS: tuple[str, ...] = (
+        'instrument', 'date', 'quantity', 'unit_price', 'unit_price_currency', 'total_brokerage',
+        'total_brokerage_currency')
+
+    def _refuse_outside_its_exercise(self, doing: str) -> None:
+        """Refuse changing a trade an option exercise wrote, other than through the exercise."""
+        exercise_id = getattr(self, 'exercise_id', None)
+        if exercise_id is None or exercise_module.writing_now():
+            return
+        exercise = OptionExercise.objects.filter(pk=exercise_id).first()
+        raise live.HoldingsRefused(
+            f'This {self._meta.verbose_name} was written by the exercise "{exercise}", so it cannot '
+            f'be {doing} on its own. Change or delete the exercise instead.')
+
+    def _changes_exercise_fields(self) -> bool:
+        if self._state.adding or self.pk is None:
+            return False
+        fields: list[Any] = [self._meta.get_field(name) for name in self.EXERCISE_FIELDS]
+        stored = type(self)._default_manager.filter(pk=self.pk).values(
+            *[field.attname for field in fields]).first()
+        return stored is not None and any(
+            field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
+            for field in fields)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get('update_fields') is None and self._changes_exercise_fields():
+            self._refuse_outside_its_exercise('changed')
         repriced = self._repriced(kwargs.get('update_fields'))
         if self.is_active:
             self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price} / unit'
@@ -1418,6 +1446,10 @@ class Trade(BaseModel):
             from share_dinkum_app import recalculate
             recalculate.derived_from(cast('Buy | Sell', self))
 
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        self._refuse_outside_its_exercise('deleted')
+        return super().delete(*args, **kwargs)
+
 
 class Buy(Trade):
     MODEL_DESCRIPTION = 'Purchases of share parcels.'
@@ -1426,14 +1458,45 @@ class Buy(Trade):
         help_text='Whether the app has already created the parcel for this buy. Set by the '
                   'app; do not edit.')
 
+    #: Set on the shares an option exercise wrote: one buy per option buy it took options from,
+    #: so options bought at different prices give shares with different cost bases.
+    exercise = models.ForeignKey('OptionExercise', related_name='buys', on_delete=models.PROTECT,
+        null=True, blank=True, editable=False,
+        help_text='The option exercise that wrote this buy of the shares received. Blank for a '
+                  'purchase. Set by the app; do not edit.')
+    option_buy = models.ForeignKey('self', related_name='exercised_into', on_delete=models.PROTECT,
+        null=True, blank=True, editable=False,
+        help_text='The buy of the options exercised into these shares, whose cost is part of '
+                  'their cost base. Set by the app; do not edit.')
+
     calculated_related_parcels = models.TextField(null=True, blank=True, editable=False,
         help_text='The parcels created from this buy, as text. Set by the app; do not edit.')
-    
+
     @safe_property
     def related_parcels(self) -> str:
         related_parcels = Parcel.objects.filter(buy=self)
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
+
+    @property
+    def option_cost_base(self) -> Money:
+        """The cost base of the options exercised into this buy, in the portfolio currency.
+
+        Part of the shares' first element of cost base with the exercise price (s134-1(1) item 1,
+        s130-40). Zero for a purchase, and for the market value basis, whose shares are taken to
+        be acquired for their market value instead (s83A-125).
+        """
+        zero = Money(Decimal('0'), str(self.account.currency))
+        exercise = self.exercise
+        if exercise is None or self.option_buy_id is None:
+            return zero
+        if exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE:
+            return zero
+        # A sale's parcel holds exactly the units it took, so its whole cost base goes across.
+        allocations = SellAllocation.objects.filter(
+            sell__exercise_id=self.exercise_id, parcel__buy_id=self.option_buy_id,
+            is_active=True).select_related('parcel__buy__account')
+        return sum((allocation.parcel.total_cost_base for allocation in allocations), zero)
 
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         """Delete the buy, and spread its share of any adjustment over the rest of the holding.
@@ -1441,6 +1504,7 @@ class Buy(Trade):
         Its adjustment allocations protect its parcels, and dropping them alone would leave each
         adjustment short of its total, so the adjustments it shared are reallocated instead.
         """
+        self._refuse_outside_its_exercise('deleted')
         if not live.active() or live.rebuilding() or not self.instrument_id:
             return super().delete(*args, **kwargs)
         with transaction.atomic():
@@ -1509,6 +1573,14 @@ class Sell(Trade):
     )
 
     STRUCTURAL_FIELDS: tuple[str, ...] = Trade.STRUCTURAL_FIELDS + ('strategy',)
+    EXERCISE_FIELDS: tuple[str, ...] = Trade.EXERCISE_FIELDS + ('strategy',)
+
+    #: Set on the sale of options an exercise wrote. Its gain is not a capital gain: the options'
+    #: cost base goes into the shares (s134-1(4)).
+    exercise = models.OneToOneField('OptionExercise', related_name='sale', on_delete=models.PROTECT,
+        null=True, blank=True, editable=False,
+        help_text='The option exercise that wrote this sale of the options exercised. Blank for '
+                  'a sale. Set by the app; do not edit.')
 
     calculated_proceeds = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True, editable=False,
         help_text='Quantity times unit price less brokerage, in the portfolio currency. Set '
@@ -1580,6 +1652,146 @@ class Sell(Trade):
                 f'keep a share worked out as if still held. Delete the adjustment, enter this '
                 f'sale, then enter the adjustment again.')
         return None
+
+
+#: Which options an exercise takes, when they were bought at different times.
+EXERCISE_STRATEGIES = [(SellStrategy.FIFO.value, 'First bought, first exercised'),
+                       (SellStrategy.LIFO.value, 'Last bought, first exercised')]
+
+
+class OptionExercise(BaseModel):
+    """Options or rights exercised into shares: one record for what is two trades.
+
+    Saving it writes a sale of the options at nothing and a buy of the shares, one per option buy
+    taken (`holdings.exercise`), and the holdings are worked out from those as from any trade.
+    """
+    MODEL_DESCRIPTION = ('Options or rights exercised into shares. Writes the sale of the options '
+                         'and the buy of the shares, whose cost base carries what the options cost.')
+
+    description = models.CharField(max_length=255, null=True, blank=True, editable=False,
+        help_text='Summary of the exercise. Set by the app; do not edit.')
+    _creation_handled = models.BooleanField(default=False, editable=False,
+        help_text='Whether the app has already written the sale of the options and the buy of '
+                  'the shares. Set by the app; do not edit.')
+    instrument = models.ForeignKey(Instrument, related_name='exercises', on_delete=models.PROTECT,
+        help_text='The options or rights exercised. Enter its name as listed in the Instrument '
+                  'table. Its legal form must be "Right, option or entitlement".')
+    underlying_instrument = models.ForeignKey(Instrument, related_name='exercised_into',
+        on_delete=models.PROTECT,
+        help_text='The shares received. Enter its name as listed in the Instrument table.')
+    date = models.DateField(
+        help_text='Date the options were exercised, or the rights vested. The shares count as '
+                  'acquired on it.')
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, validators=[validate_positive],
+        help_text='Number of options or rights exercised. Must be positive.')
+    quantity_received = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True,
+        validators=[validate_positive],
+        help_text='Number of shares received. Blank = one for each option.')
+    exercise_price = MoneyField(max_digits=21, decimal_places=6, default=Decimal('0'),
+        default_currency=DEFAULT_CURRENCY,
+        help_text='Price paid to exercise one option, in the currency named beside it. Zero for '
+                  'rights that vest into shares, such as performance rights.')
+    total_brokerage = MoneyField(max_digits=19, decimal_places=4, default=Decimal('0'),
+        default_currency=DEFAULT_CURRENCY,
+        help_text='Fees paid to exercise or to receive the shares, for the whole exercise. Not the '
+                  'exercise price.')
+    cost_base_basis = models.CharField(max_length=12, choices=CostBaseBasis.choices,
+        default=CostBaseBasis.ROLLOVER,
+        help_text="How the shares get their cost base. ROLLOVER: what the options cost plus the "
+                  "exercise price, for options bought or taxed upfront, and rights issues. "
+                  "MARKET_VALUE: a share's market value when exercised, for a deferred employee "
+                  "share scheme taxed at exercise.")
+    market_value = MoneyField(max_digits=21, decimal_places=6, null=True, blank=True,
+        default_currency=DEFAULT_CURRENCY,
+        help_text='Market value of one share when exercised, as on your ESS statement. '
+                  'MARKET_VALUE basis only.')
+    strategy = models.CharField(max_length=7, choices=EXERCISE_STRATEGIES, default=SellStrategy.FIFO,
+        help_text='Which options are exercised, if they were bought at different times: FIFO '
+                  'takes the first bought, LIFO the last.')
+    file = models.FileField(null=True, blank=True, upload_to=user_directory_path,
+        help_text='Path to a supporting document, such as the exercise confirmation. The file is '
+                  'copied into the app; a path that does not exist is ignored.')
+
+    POSITIVE_FIELDS: tuple[str, ...] = ('quantity', 'quantity_received')
+
+    @property
+    def shares_received(self) -> Decimal:
+        return self.quantity_received or self.quantity
+
+    def share_price(self) -> Money:
+        """The price per share the buy of the shares is entered at.
+
+        The market value under that basis; otherwise the exercise price spread over the shares,
+        the options' own cost going in beside it (`Buy.option_cost_base`).
+        """
+        if self.cost_base_basis == CostBaseBasis.MARKET_VALUE:
+            assert self.market_value is not None  # `problems` refuses one without
+            return self.market_value
+        price = self.exercise_price * self.quantity / self.shares_received
+        return Money(convert_to_decimal_field(price.amount, Buy._meta.get_field('unit_price')),
+                     price.currency)
+
+    calculated_ess_discount = MoneyField(max_digits=19, decimal_places=4, null=True, blank=True,
+        editable=False,
+        help_text='Market value of the shares received less the exercise price paid, under the '
+                  'MARKET_VALUE basis: the discount an ESS statement should show for this '
+                  'exercise. Blank otherwise. Set by the app; do not edit.')
+
+    @safe_property
+    def ess_discount(self) -> Money | None:
+        if self.cost_base_basis != CostBaseBasis.MARKET_VALUE or self.market_value is None:
+            return None
+        if str(self.market_value.currency) != str(self.exercise_price.currency):
+            return None
+        return self.market_value * self.shares_received - self.exercise_price * self.quantity
+
+    def problems(self) -> list[str]:
+        """Why this exercise cannot be saved, as messages; empty if it can."""
+        problems: list[str] = []
+        if self.instrument_id and self.instrument_id == self.underlying_instrument_id:
+            problems.append('The options and the shares received must be different instruments.')
+        if self.instrument_id and self.instrument.legal_form != LegalForm.RIGHT_OPTION:
+            problems.append(
+                f'{self.instrument.name} is not recorded as an option or right. Set its legal '
+                f'form to "{LegalForm.RIGHT_OPTION.label}" first.')
+        if self.cost_base_basis == CostBaseBasis.MARKET_VALUE and self.market_value is None:
+            problems.append('Give the market value of one share, for the MARKET_VALUE basis.')
+        return problems
+
+    def clean(self) -> None:
+        super().clean()
+        problems = self.problems()
+        if problems:
+            raise ValidationError(problems)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Save the exercise, then write its trades to match, in one transaction.
+
+        A row from an export arrives with its trades beside it, so it writes none; nor does a save
+        of only its stored figures.
+        """
+        whole = kwargs.get('update_fields') is None
+        if whole:
+            problems = self.problems()
+            if problems:
+                raise ValueError(' '.join(problems))
+            self.description = (
+                f'{self.date} | Exercise | {self.instrument.name} into '
+                f'{self.underlying_instrument.name} | {self.quantity} @ {self.exercise_price}')
+        arriving_handled = self._state.adding and self._creation_handled
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if whole and not arriving_handled and not live.rebuilding():
+                exercise_module.write(self)
+                if not self._creation_handled:
+                    OptionExercise.objects.filter(pk=self.pk).update(_creation_handled=True)
+                    self._creation_handled = True
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Delete the exercise with its trades. Refused once any of its shares are sold."""
+        with transaction.atomic():
+            exercise_module.remove(self)
+            return super().delete(*args, **kwargs)
 
 
 class Parcel(BaseModel):
@@ -1659,7 +1871,15 @@ class Parcel(BaseModel):
         adjusted_unit_brokerage = self.buy.unit_brokerage_converted / self.cumulative_split_multiplier
         return adjusted_unit_brokerage
 
-    
+    @property
+    def adjusted_unit_option_cost_base(self) -> Money:
+        """What the options exercised into this parcel's buy cost, per unit after splits."""
+        buy = self.buy
+        if not self.is_active or buy.exercise_id is None:
+            return Money(Decimal('0'), buy.account.currency)
+        return buy.option_cost_base / buy.quantity / self.cumulative_split_multiplier
+
+
     @safe_property
     def total_adjustments(self) -> Money:
         total_adjustment = self.cost_base_adjustment_allocation.filter(
@@ -1672,9 +1892,10 @@ class Parcel(BaseModel):
         return total_adjustment
     
     calculated_total_cost_base = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
-        help_text='Price, brokerage and cost base adjustments for the whole parcel, in the '
-                  'portfolio currency. Set by the app; do not edit.')
-    
+        help_text='Price, brokerage, the cost of any options exercised into it, and cost base '
+                  'adjustments for the whole parcel, in the portfolio currency. Set by the app; '
+                  'do not edit.')
+
     @safe_property
     def total_cost_base(self) -> Money:
 
@@ -1685,6 +1906,7 @@ class Parcel(BaseModel):
         parcel_quantity = self.parcel_quantity
         total_cost_base = (self.adjusted_buy_price * parcel_quantity)
         total_cost_base += (self.adjusted_unit_brokerage * parcel_quantity)
+        total_cost_base += (self.adjusted_unit_option_cost_base * parcel_quantity)
         total_cost_base = add_currencies(total_cost_base, self.total_adjustments,
                                          default_currency=str(self.buy.account.currency))
 
@@ -1912,6 +2134,10 @@ class SellAllocation(BaseModel):
     
     @safe_property
     def total_capital_gain(self) -> Money:
+        if self.sell.exercise_id is not None:
+            # Options exercised: their cost base goes into the shares, and any gain or loss
+            # from exercising them is disregarded (s134-1(4), s130-40(7), s130-80(1)).
+            return Money(Decimal('0'), self.sell.proceeds.currency)
         # Note, a parcel is always fully consumed by a sell allocation due to the bifurcation process, therefore can just use parcel.total_cost_base rather than unit cost base and qty. This avoids rounding issues
         return (self.sell.proceeds * self.quantity / self.sell.quantity) - self.parcel.total_cost_base
 

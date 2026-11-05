@@ -185,19 +185,24 @@ def indexed_adjustment(amount: Any, year_end: date, event_date: date, method: st
 
 
 def indexed_cost_base(cost_base: Any, acquisition_date: date | None, event_date: date,
-                      adjustments: Sequence[Adjustment] = (), method: str | None = None) -> Any:
+                      adjustments: Sequence[Adjustment] = (), method: str | None = None,
+                      incurred: Sequence[Adjustment] = ()) -> Any:
     """`cost_base` indexed to the event, each adjustment in it from its own quarter.
 
     The rest of the cost base is indexed from acquisition. `adjustments` are the ones
     included in `cost_base`. s960-275 indexes each element from when it was incurred, but
-    a parcel's other elements are all incurred at acquisition.
+    a parcel's other elements are incurred at acquisition, except what the options exercised
+    into shares cost: each of `incurred`, (day paid, amount), is indexed from its day
+    (s114-15(5)).
     """
     if cost_base is None:
         return cost_base
     rest = cost_base
-    for _year_end, amount in adjustments:
+    for _day, amount in [*adjustments, *incurred]:
         rest = rest - amount
     indexed = rest * indexation_factor(acquisition_date, event_date, method=method)
     for year_end, amount in adjustments:
         indexed = indexed + indexed_adjustment(amount, year_end, event_date, method=method)
+    for day, amount in incurred:
+        indexed = indexed + amount * indexation_factor(day, event_date, method=method)
     return indexed

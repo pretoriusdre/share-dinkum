@@ -373,6 +373,49 @@ class GenericModelAdminWithoutAdd(GenericModelAdmin):
 DELETED_WITH_THEIR_SOURCE = {str(Parcel._meta.verbose_name)}
 
 
+class TradeAdmin(GenericModelAdmin):
+    """Buys and sales. One an option exercise wrote is read-only: it changes with the exercise."""
+
+    def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:
+        if obj is not None and obj.exercise_id is not None:
+            # Not `get_fields`, which builds the form, which asks this again.
+            return [field.name for field in self.model._meta.fields if not field.name.endswith('_currency')]
+        return super().get_readonly_fields(request, obj)
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        if obj is not None and obj.exercise_id is not None:
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+class OptionExerciseAdmin(GenericModelAdmin):
+    """Option exercises. Deleting one deletes the trades it wrote, unless its shares were sold."""
+
+    def get_deleted_objects(self, objs: Any, request: HttpRequest) -> Any:
+        from share_dinkum_app.models import Buy, Sell, SellAllocation
+
+        deleted: list[Any] = []
+        protected: list[str] = []
+        counts: dict[str, int] = {}
+        for exercise in objs:
+            trades = [*Sell.objects.filter(exercise=exercise), *Buy.objects.filter(exercise=exercise)]
+            deleted.append(str(exercise))
+            deleted.append([f'{capfirst(trade._meta.verbose_name)}: {trade}' for trade in trades])
+            for trade in trades:
+                name = str(trade._meta.verbose_name_plural)
+                counts[name] = counts.get(name, 0) + 1
+            protected += [f'{capfirst(allocation._meta.verbose_name)}: {allocation} (shares from this exercise sold)'
+                          for allocation in SellAllocation.objects.filter(
+                              parcel__buy__exercise=exercise, is_active=True)]
+        counts[str(self.model._meta.verbose_name_plural)] = len(objs)
+        return deleted, counts, set(), protected
+
+    def delete_queryset(self, request: HttpRequest, queryset: QuerySet[Any]) -> None:
+        """One at a time, so each deletes its own trades."""
+        for obj in queryset:
+            obj.delete()
+
+
 class HiddenModelAdmin(admin.ModelAdmin):
     search_fields = ('id', 'description')
     def has_module_permission(self, request: HttpRequest) -> bool:
@@ -605,6 +648,9 @@ class CostBaseAdjustmentAdmin(GenericModelAdmin):
 model_admin_map: "dict[type[Model], type[admin.ModelAdmin[Any]]]" = {
 
     Account : AccountAdmin,
+    share_dinkum_app.models.Buy : TradeAdmin,
+    share_dinkum_app.models.Sell : TradeAdmin,
+    share_dinkum_app.models.OptionExercise : OptionExerciseAdmin,
     CostBaseAdjustment : CostBaseAdjustmentAdmin,
     ExchangeRate : ExchangeRateAdmin,
     Instrument : InstrumentAdmin,

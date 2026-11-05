@@ -16,7 +16,8 @@ from django.db.models.functions import Abs, Coalesce
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Parcel, Sell, ShareSplit,
+        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, OptionExercise, Parcel,
+        Sell, ShareSplit,
     )
 
 COMMAND = 'uv run dev repair_portfolio_data'
@@ -127,6 +128,19 @@ def splits_without_parcels(account: 'Account') -> list['ShareSplit']:
     return [split for split in unlinked if split.parcels_created()]
 
 
+def exercises_out_of_step(account: 'Account') -> list['OptionExercise']:
+    """Option exercises whose sale of options or buys of shares no longer match them.
+
+    A file loaded as an export keeps the trades it carries, so an exercise edited in one arrives
+    with the trades it had. Saving the exercise writes them again.
+    """
+    from share_dinkum_app.holdings import exercise
+    from share_dinkum_app.models import OptionExercise
+
+    return [found for found in OptionExercise.objects.filter(account=account, _creation_handled=True)
+            if exercise.differences(found)]
+
+
 def holdings_differences(account: 'Account') -> int:
     """Figures where the stored holding differs from the one worked out again from the trades.
 
@@ -202,6 +216,9 @@ def run(account: 'Account') -> list[Finding]:
          'difference(s) between the stored holdings and the holdings worked out again from the '
          'trades; `uv run dev check_holdings` lists them',
          False, True),
+        ('exercises_out_of_step', len(exercises_out_of_step(account)),
+         'option exercise(s) whose sale of the options or buys of the shares no longer match them',
+         True, True),
         ('orphaned_adjustment_allocations', orphaned_adjustment_allocations(account).count(),
          'cost base adjustment allocation(s) left behind by a share split, and so missing '
          'from the cost base',

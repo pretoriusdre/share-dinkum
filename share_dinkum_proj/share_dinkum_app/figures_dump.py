@@ -115,6 +115,8 @@ class Keys:
             parts = [self.key(obj.sell), self.key(obj.parcel), obj.quantity]
         elif isinstance(obj, m.ShareSplit):
             parts = ['ShareSplit', obj.instrument.name, obj.date]
+        elif isinstance(obj, m.OptionExercise):
+            parts = ['OptionExercise', obj.instrument.name, obj.date, obj.quantity, obj.legacy_id]
         elif isinstance(obj, m.CostBaseAdjustment):
             parts = ['CostBaseAdjustment', obj.instrument.name, obj.financial_year_end_date, obj.legacy_id]
         elif isinstance(obj, m.CostBaseAdjustmentAllocation):
@@ -138,8 +140,9 @@ class Keys:
 
 #: The records an id in the figures can name, keyed before anything is translated.
 KEYED_MODELS = (
-    'Instrument', 'Buy', 'Sell', 'Parcel', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment',
-    'CostBaseAdjustmentAllocation', 'Dividend', 'Distribution', 'AttributionStatement',
+    'Instrument', 'OptionExercise', 'Buy', 'Sell', 'Parcel', 'SellAllocation', 'ShareSplit',
+    'CostBaseAdjustment', 'CostBaseAdjustmentAllocation', 'Dividend', 'Distribution',
+    'AttributionStatement',
 )
 
 

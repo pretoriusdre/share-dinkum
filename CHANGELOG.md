@@ -8,10 +8,25 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
 
 ### Added
 
+- **Exercise options or rights into shares** with an **Option exercise**: the options, the shares
+  received, the date, the number exercised and received, the exercise price and the fees. It writes
+  the sale of the options and the buy of the shares, and the shares' cost base carries what the
+  options cost (s134-1), shown on the CGT report as `option_cost_base`. Exercising makes no capital
+  gain. Options bought at different prices give shares with different cost bases.
+  - A deferred employee share scheme uses the **market value** basis instead: the shares' cost
+    base is their market value when exercised (s83A-125), and the exercise shows the discount that
+    implies, to compare with the ESS statement.
+  - The trades it writes are read-only, and change with it. It is refused if fewer options were
+    held than it exercises; deleting it is refused once its shares are sold.
+  - It loads from the import template's new optional **OptionExercise** table, in date order with
+    the sales, and restores from an export.
+  - With the 2027 regime on, exercising options held on 30 June 2027 realises their deferred gain
+    (s112-160), and the shares carry the options' 1 July 2027 value, indexed from then (s114-15(5)).
+  - `repair_portfolio_data` writes again the trades of an exercise that no longer matches them.
+
 - **How to record options, rights issues and employee share schemes**
-  ([docs/options_and_employee_shares.md](docs/options_and_employee_shares.md)). Options cannot be
-  exercised in the app yet, so the guide says which buy of the shares to enter in each case, and
-  why the exercise price does not belong in brokerage.
+  ([docs/options_and_employee_shares.md](docs/options_and_employee_shares.md)): which cost base
+  basis each case takes and what the options cost.
 
 ### Fixed
 

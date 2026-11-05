@@ -17,14 +17,27 @@ logger = logging.getLogger(__name__)
 
 
 def parcels(parcels: 'Iterable[Parcel]') -> int:
-    """Save each parcel, then the allocations that sold it (their gain uses its cost base)."""
-    count = 0
-    for parcel in parcels:
-        parcel.save()
+    """Save each parcel, then the allocations that sold it (their gain uses its cost base).
+
+    A parcel of options exercised is also part of the cost base of the shares they became, so
+    those parcels are saved too.
+    """
+    return sum((_save_parcel(parcel) for parcel in parcels), 0)
+
+
+def _save_parcel(parcel: 'Parcel') -> int:
+    from share_dinkum_app.models import Parcel
+
+    parcel.save()
+    count = 1
+    for allocation in parcel.sale_allocation.filter(is_active=True).select_related('sell'):
+        allocation.save()
         count += 1
-        for allocation in parcel.sale_allocation.filter(is_active=True):
-            allocation.save()
-            count += 1
+        if allocation.sell.exercise_id is not None:
+            for shares in Parcel.objects.filter(
+                    buy__exercise_id=allocation.sell.exercise_id, buy__option_buy_id=parcel.buy_id,
+                    deactivation_date__isnull=True):
+                count += _save_parcel(shares)
     return count
 
 
@@ -123,6 +136,19 @@ def relink_split_parcels(account: 'Account') -> int:
         split.affected_parcels.set(split.parcels_created())
         split.save()  # Its stored list of parcels was worked out without them.
     return len(splits)
+
+
+def rewrite_exercises(account: 'Account') -> int:
+    """Write again the trades of each option exercise out of step with them. Returns how many.
+
+    See `data_checks.exercises_out_of_step`.
+    """
+    from share_dinkum_app import data_checks
+
+    exercises = data_checks.exercises_out_of_step(account)
+    for exercise in exercises:
+        exercise.save()
+    return len(exercises)
 
 
 def refetch_placeholder_rates(account: 'Account') -> int:

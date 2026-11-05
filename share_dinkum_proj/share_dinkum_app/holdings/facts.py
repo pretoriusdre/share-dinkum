@@ -134,9 +134,13 @@ def load(account: 'Account', instrument: 'Instrument | None' = None,
 
     facts = Facts(currency=currency)
     for buy in of(Buy.objects).select_related('instrument', 'exchange_rate'):
+        unit_price = _amount(buy.unit_price_converted)
+        if buy.exercise_id is not None and unit_price is not None:
+            # Shares from exercising options: their cost is part of the price paid for them.
+            unit_price += buy.option_cost_base.amount / buy.quantity
         facts.buys.append(BuyFact(
             id=buy.pk, instrument=buy.instrument.name, date=buy.date, quantity=buy.quantity,
-            legacy_id=buy.legacy_id, unit_price=_amount(buy.unit_price_converted),
+            legacy_id=buy.legacy_id, unit_price=unit_price,
             unit_brokerage=_amount(buy.unit_brokerage_converted)))
     for sell in of(Sell.objects).select_related('instrument', 'exchange_rate'):
         facts.sales.append(SaleFact(

@@ -76,7 +76,8 @@ class UnrealisedGainReport(BaseReport):
             label = CGTAssetCategory.label_for(event.asset_category)
             line = totals.setdefault(label, {name: Decimal('0') for name in self.SUMMARY_FIGURES})
             if event.slice != cgt.events.SLICE_POST_CUTOVER:
-                line['cost_base'] += _amount(event.buy_consideration) + _amount(event.buy_brokerage)
+                line['cost_base'] += (_amount(event.buy_consideration) + _amount(event.buy_brokerage)
+                                      + _amount(event.option_cost_base))
             line['cost_base'] += _amount(event.cost_base_adjustments)
             if event.slice != cgt.events.SLICE_PRE_CUTOVER:
                 line['market_value'] += _amount(event.net_proceeds)

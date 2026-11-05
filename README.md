@@ -74,6 +74,11 @@ A **[ShareSplit]**, dated on its ex-date, takes the units held before and after.
 affected parcels with new ones at the adjusted quantity and cost base, and moves their cost base
 adjustment allocations across.
 
+An **[OptionExercise]** turns options or rights into shares. It writes a sale of the options at
+nothing and a buy of the shares, one per buy of the options it took, and the shares' cost base
+carries what the options cost. Those trades change with the exercise, and not on their own. See
+[docs/options_and_employee_shares.md](docs/options_and_employee_shares.md).
+
 Decisions already made are kept when parcels are worked out again: which parcels each sale used,
 and how each adjustment was divided (see [Cost base adjustments](#cost-base-adjustments)). A change
 those decisions cannot follow, such as reducing a buy below what was sold from it, or a share split
@@ -101,8 +106,11 @@ flowchart LR
     Distribution --> Instrument
     CostBaseAdjustment --> Instrument
     ShareSplit --> Instrument
+    OptionExercise --> Instrument
 
     Parcel --> Buy
+    Buy --> OptionExercise
+    Sell --> OptionExercise
     Parcel --> Parcel
     SellAllocation --> Parcel
     SellAllocation --> Sell
@@ -140,9 +148,8 @@ Related commands (run with `uv run dev`): `load_cpi`, `capture_cutover_valuation
 
 - [docs/capital_gains_models.md](docs/capital_gains_models.md): what each table is for and the order
   to fill them in.
-- [docs/options_and_employee_shares.md](docs/options_and_employee_shares.md): how to record shares
-  from options, rights issues and employee share schemes, until exercising an option can be
-  recorded directly.
+- [docs/options_and_employee_shares.md](docs/options_and_employee_shares.md): how to record
+  options, their exercise, rights issues and employee share schemes.
 - [CHANGELOG.md](CHANGELOG.md), version 0.4.0: the full list of behaviour.
 
 ---

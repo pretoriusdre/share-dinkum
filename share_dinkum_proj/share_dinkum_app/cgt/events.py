@@ -25,7 +25,7 @@ from share_dinkum_app.cgt import (
     tap as tap_module,
 )
 from share_dinkum_app import constants
-from share_dinkum_app.choices import TaxpayerType
+from share_dinkum_app.choices import CostBaseBasis, TaxpayerType
 from share_dinkum_app.constants import (
     CGT_CUTOVER_DATE,
     CGT_GAIN_DEFERRED_NON_RESIDENTIAL,
@@ -116,6 +116,8 @@ class CGTEvent:
     unit_buy_price: Money | None
     buy_consideration: Money | None
     buy_brokerage: Money | None
+    #: What the options exercised into the shares cost (s134-1(1) item 1); zero for a purchase.
+    option_cost_base: Money | None
     cost_base_adjustments: Money | None
     cost_base: Money | None
 
@@ -287,6 +289,7 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
         unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
         buy_consideration=_money(parcel.adjusted_buy_price * quantity),
         buy_brokerage=_money(parcel.adjusted_unit_brokerage * quantity),
+        option_cost_base=_money(parcel.adjusted_unit_option_cost_base * quantity),
         cost_base_adjustments=_money(
             parcel.total_adjustments * share_of_parcel(parcel, quantity)),
         cost_base=cost_base,
@@ -314,6 +317,9 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
             account, sell.instrument, buy.date, sell.date, declared=declared),
     )
 
+    if sell.exercise_id is not None:
+        return _exercise_events(whole, allocation, account=account, declared=declared)
+
     # Two gates, and only one of them is a setting. The account's is read here rather than
     # from a module constant, which is what makes it something a person can actually change.
     if sell.date < CGT_CUTOVER_DATE or not models_2027_regime(account):
@@ -325,6 +331,113 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
 
     return _apply_cutover(whole, parcel, quantity, sell.date, sell.instrument, account=account,
                           declared=declared)
+
+
+def _exercise_events(whole: CGTEvent, allocation: 'SellAllocation', account: 'Account | None' = None,
+                     declared: residency_module.Periods | None = None) -> list[CGTEvent]:
+    """Options exercised make no capital gain (s134-1(4)), except one deferred from 2027.
+
+    From 1 July 2027, exercising options held on 30 June 2027 realises the gain or loss from their
+    deemed sale that day (s112-155, s112-160): exercise is CGT event C2, and every CGT event but
+    E4, E10 and G1 is a realisation event (s977-5). That gain is the deferred slice of a sale split
+    at the cutover. A deferred employee scheme's options whose taxing point is still to come have
+    none, as every CGT event before it is disregarded (s130-80(1)(d)(ii)); the market value basis
+    is for those.
+    """
+    sell = allocation.sell
+    if sell.date < CGT_CUTOVER_DATE or not models_2027_regime(account):
+        return []
+    if sell.exercise is None or sell.exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE:
+        return []
+    parcel = allocation.parcel
+    applies, _reason = cutover_module.deemed_sale_applies(
+        account, parcel.buy.date, sell.date, declared=declared)
+    if not applies:
+        return []
+    market_value, _source = parcel.market_value_at(
+        cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
+    if market_value is None:
+        return [replace(
+            whole,
+            slice=SLICE_PRE_CUTOVER,
+            sale_date=cutover_module.DEEMED_SALE_DATE,
+            gain_category=_gain_category(sell.instrument, deferred=True),
+            pending_reason=cutover_module.PENDING_NO_VALUATION.format(
+                instrument=sell.instrument.name, day=cutover_module.DEEMED_SALE_DATE.isoformat()),
+        )]
+    market_value = _money(market_value * share_of_parcel(parcel, allocation.quantity))
+    deferred, _post = _split_events(
+        whole, parcel.buy, sell.date, sell.instrument, market_value, False, [])
+    return [deferred]
+
+
+@dataclass(frozen=True)
+class _OptionElement:
+    """The cost of the options exercised into shares, as a part of their cost base."""
+    #: As `Parcel.total_cost_base` has it: what the options cost.
+    stored: Money
+    #: As the 2027 rules have it: their value on 30 June 2027, if they were deemed sold then.
+    amount: Money
+    #: When it is indexed from (s114-15(5)): when the options were bought, or 1 July 2027.
+    incurred: date
+    pending_reason: str | None = None
+
+
+def _option_element(parcel: 'Parcel', quantity: Decimal, account: 'Account | None' = None,
+                    declared: residency_module.Periods | None = None) -> _OptionElement | None:
+    """The options' part of `quantity` units of `parcel`, or None for shares bought as shares.
+
+    Options held on 30 June 2027 and exercised after it were deemed sold that day and rebought for
+    their market value (s112-155(2)), so that value, rather than what they cost, goes into the
+    shares, indexed from 1 July 2027. Their deferred gain is the exercise's (`_exercise_events`).
+    """
+    buy = parcel.buy
+    exercise, option_buy = buy.exercise, buy.option_buy
+    if exercise is None or option_buy is None or exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE:
+        return None
+    stored = _money(parcel.adjusted_unit_option_cost_base * quantity)
+    applies, reason = cutover_module.deemed_sale_applies(
+        account, option_buy.date, buy.date, declared=declared)
+    if not applies:
+        # Undeclared residency leaves open whether the options were deemed sold, and so which
+        # figure is right.
+        pending = reason if reason == cutover_module.PENDING_UNDECLARED_RESIDENCY else None
+        return _OptionElement(stored, stored, option_buy.date, pending)
+
+    # The share of the buy's options in these units: the buy's units are today's, after splits.
+    fraction = quantity / (buy.quantity * parcel.cumulative_split_multiplier)
+    total = _zero_like(stored)
+    for allocation in exercise.sale.sale_allocation.filter(
+            is_active=True, parcel__buy_id=option_buy.pk).select_related('parcel__buy'):
+        value, _source = allocation.parcel.market_value_at(
+            cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
+        if value is None:
+            return _OptionElement(stored, stored, option_buy.date, cutover_module.PENDING_NO_VALUATION.format(
+                instrument=option_buy.instrument.name, day=cutover_module.DEEMED_SALE_DATE.isoformat()))
+        total = total + value
+    return _OptionElement(stored, _money(total * fraction), CGT_CUTOVER_DATE)
+
+
+def _with_option_element(whole: CGTEvent, element: _OptionElement) -> CGTEvent:
+    """`whole` with the options' part of its cost base as the 2027 rules have it."""
+    if element.amount == element.stored:
+        return whole
+    assert whole.cost_base is not None  # set on every disposal and open parcel
+    cost_base = whole.cost_base - element.stored + element.amount
+    if whole.net_proceeds is None:
+        return replace(whole, option_cost_base=element.amount, cost_base=cost_base)
+    gain = whole.net_proceeds - cost_base
+    zero = _zero_like(gain)
+    return replace(
+        whole, option_cost_base=element.amount, cost_base=cost_base, capital_gain=gain,
+        gross_gain=gain if gain.amount > 0 else zero, gross_loss=-gain if gain.amount < 0 else zero)
+
+
+def _with_pending(event: CGTEvent, reason: str | None) -> CGTEvent:
+    if reason is None:
+        return event
+    joined = f'{event.pending_reason} {reason}' if event.pending_reason else reason
+    return replace(event, pending_reason=joined)
 
 
 def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_date: date,
@@ -347,9 +460,14 @@ def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_da
         account, buy.date, sale_date, declared=declared)
 
     if not applies:
-        return [_single_post_cutover_event(
+        element = _option_element(parcel, quantity, account=account, declared=declared)
+        if element is not None:
+            whole = _with_option_element(whole, element)
+        event = _single_post_cutover_event(
             whole, buy, sale_date, instrument, indexation_eligible, reason,
-            adjustments_by_year(parcel, quantity), account=account, declared=declared)]
+            adjustments_by_year(parcel, quantity), account=account, declared=declared,
+            incurred=[(element.incurred, element.amount)] if element is not None else [])
+        return [_with_pending(event, element.pending_reason if element is not None else None)]
 
     market_value, _source = parcel.market_value_at(
         cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
@@ -423,15 +541,17 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sale_date: date, ins
                                reason: str | None,
                                adjustments: list[indexation_module.Adjustment],
                                account: 'Account | None' = None,
-                               declared: residency_module.Periods | None = None) -> CGTEvent:
+                               declared: residency_module.Periods | None = None,
+                               incurred: list[indexation_module.Adjustment] | None = None) -> CGTEvent:
     """A post-cutover disposal that s112-155 does not split.
 
     If indexation is available it is mandatory (s110-36(1A)) and removes the discount
     (s115-20). For a returned expatriate denied the split by s112-155(1)(d), that means no
     discount and indexation only from 2027, so the row carries `reason` to explain it.
 
-    Each of `adjustments` is indexed from its own quarter (`indexed_cost_base`). The factor
-    reported is the one for the rest of the cost base.
+    Each of `adjustments` is indexed from its own quarter, and each of `incurred` (the options
+    exercised into the shares) from when it was paid (`indexed_cost_base`). The factor reported is
+    the one for the rest of the cost base.
     """
     category = _gain_category(instrument)
     if not indexation_eligible:
@@ -446,7 +566,7 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sale_date: date, ins
     try:
         factor = indexation_module.indexation_factor(buy.date, sale_date)
         indexed_cost_base = _money(cast(Money, indexation_module.indexed_cost_base(
-            plain_cost_base, buy.date, sale_date, adjustments=adjustments)))
+            plain_cost_base, buy.date, sale_date, adjustments=adjustments, incurred=incurred or ())))
     except indexation_module.IndexationDataUnavailable as exc:
         return replace(whole, gain_category=category, pending_reason=str(exc))
 
@@ -588,6 +708,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sale_date: date, instrument: 'Ins
         unit_buy_price=None,
         buy_consideration=market_value,
         buy_brokerage=_zero_like(market_value),
+        option_cost_base=_zero_like(market_value),
         cost_base_adjustments=later_adjustments,
         cost_base=post_cost_base,
         capital_gain=post_gain,
@@ -656,6 +777,7 @@ def _attribution_events(statement: 'AttributionStatement', account: 'Account | N
         unit_buy_price=None,
         buy_consideration=None,
         buy_brokerage=None,
+        option_cost_base=None,
         cost_base_adjustments=None,
         cost_base=None,
         unit_sale_price=None,
@@ -762,10 +884,15 @@ def years_with_events(account: 'Account') -> list['FiscalYear']:
     A statement counts on its own: a year whose only gains a trust attributed is still a year
     with capital gains to report, and to snapshot.
     """
+    from django.db.models import Q
     from share_dinkum_app.models import AttributionStatement, Sell
 
+    sells = Sell.objects.filter(account=account, is_active=True)
+    # Options exercised make a capital gain only from the 2027 cutover (`_exercise_events`).
+    exercised = (Q(exercise__isnull=False, date__gte=CGT_CUTOVER_DATE) if models_2027_regime(account)
+                 else Q(pk__in=[]))
     records: list[Sell | AttributionStatement] = [
-        *Sell.objects.filter(account=account, is_active=True),
+        *sells.filter(Q(exercise__isnull=True) | exercised),
         *AttributionStatement.objects.filter(account=account, is_active=True),
     ]
     years = {record.fiscal_year for record in records if record.fiscal_year}
@@ -927,6 +1054,7 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
         unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
         buy_consideration=_money(parcel.adjusted_buy_price * quantity),
         buy_brokerage=_money(parcel.adjusted_unit_brokerage * quantity),
+        option_cost_base=_money(parcel.adjusted_unit_option_cost_base * quantity),
         cost_base_adjustments=_money(parcel.total_adjustments * share),
         cost_base=cost_base,
 

@@ -1,26 +1,45 @@
 # Options, rights and employee share schemes
 
-Share Dinkum has no record yet for exercising an option, so options cannot turn into shares inside
-the app ([issue #41](https://github.com/pretoriusdre/share-dinkum/issues/41)). Until they can,
-record the **shares** you end up with, at the cost base the law gives them. Record the options
-themselves only where they matter on their own: when you sell them, or they lapse.
+Record options or rights as an instrument of their own, and record exercising them with an **Option
+exercise**. It sells the options and buys the shares in one step, and the shares' cost base carries
+what the options cost. This page says how to fill one in for each case.
 
-This page says what to enter in each case. It describes how to record things in the app, and is not
-tax advice. For an employee share scheme, your employer's ESS statement and the ATO's guidance are
-the authority.
+It describes how to record things in the app, and is not tax advice. For an employee share scheme,
+your employer's ESS statement and the ATO's guidance are the authority.
 
-## What the legal form does
+## Recording the options
 
-**Right, option or entitlement** on an instrument only decides where a gain on that instrument goes
-on the CGT schedule: *Other CGT assets and any other CGT events*. It does not exercise anything.
-Shares you get by exercising an option go in the category for the company's shares, like any other
-shares.
+1. If no exchange quotes them, as with most employee options, put them on a **Market** of their own
+   with **Is exchange listed** unticked. A price refresh skips instruments on an unlisted market.
+   Left ticked, the app asks the price provider for the option's name as a ticker, which with no
+   suffix is a US code, and may store another company's prices. Listed options go on their exchange.
+2. Add an **Instrument** for them with legal form **Right, option or entitlement**. An exercise of
+   anything else is refused. A gain on the options themselves, if you sell them or they lapse, goes
+   in *Other CGT assets and any other CGT events* on the CGT schedule.
+3. Enter a **Buy** of the options at what they cost, dated when you received them. The sections
+   below say what that cost is; for most employee options it is 0. Unlisted options are shown as
+   worth nothing, since no provider quotes them.
 
-## Don't put the exercise price in brokerage
+## Exercising them
 
-Brokerage is part of the cost base of the instrument the buy is for. On an option instrument it
-stays with the options and never reaches the shares you later sell. On the shares it usually gives
-the wrong cost base anyway (see below). Keep brokerage to the fees you actually paid.
+An **Option exercise** takes:
+
+- the options, the shares received, and the date;
+- the number of options exercised, and of shares received (blank is one for each option);
+- the **exercise price** per option, and the **fees** paid to exercise. Don't put the exercise price
+  in brokerage anywhere: it is part of the cost base already;
+- the **cost base basis**: ROLLOVER (what the options cost plus the exercise price) or MARKET_VALUE
+  (a share's market value, for a deferred employee scheme), with the market value per share for the
+  second;
+- which options it takes if they were bought at different times: first bought (FIFO) or last (LIFO).
+
+Saving it writes a sale of the options at nothing and a buy of the shares, one for each buy of the
+options it took from, so options bought at different prices give shares with different cost bases.
+Those trades are read-only: change or delete the exercise instead. It is refused if fewer options
+were held on the date than it exercises, and deleting it is refused once any of its shares are sold.
+
+Exercising makes no capital gain or loss (s134-1(4)). What the options cost goes into the shares,
+and the CGT report shows it beside each sale of them as `option_cost_base`.
 
 ## Employee options and rights
 
@@ -34,86 +53,60 @@ For options you can't transfer, the deferred taxing point is when you exercise t
 are free of any risk of forfeiture and free to sell. If the shares are held in escrow, it is when
 the restriction lifts. It is never more than 15 years after the grant (s83A-120).
 
-Enter a **Buy** of the shares:
+Record the options at 0, and exercise them with basis **MARKET_VALUE** and the market value of a
+share at the taxing point, from your ESS statement. The shares are treated as acquired then for their
+market value (s83A-125); the difference from what you paid is the discount, already taxed as income.
+The exercise shows that difference as **ESS discount**, to compare with the statement. If you took
+the fees off the discount you reported as income, leave them out here, so they are not counted twice.
 
-- **date:** the taxing point. The app shows the shares from then, not from the exercise.
-- **unit price:** the market value of a share at that time, as on your ESS statement.
-- **brokerage:** the fees you paid to exercise or to receive the shares, not the exercise price.
-  If you took those fees off the discount you reported as income, leave them out here, so they
-  are not counted twice.
-
-Don't record the options. The shares are treated as acquired at the taxing point for their market
-value (s83A-125), so neither what you paid for the options nor the exercise price is part of their
-cost base: the difference is the discount, already taxed as income.
+The app counts the shares as acquired on the exercise date. Where they were held in escrow, the law
+counts them from when the restriction lifted, so check by hand a sale within 12 months of that.
 
 ### Sold within 30 days of the taxing point
 
-If you sell the shares within 30 days after the taxing point, the taxing point moves to the sale
-and the whole gain is ESS income (s83A-120(3)). There is no capital gain, so **record neither the
-buy nor the sale**. Exercising and selling on the same day is this case.
+If you sell the shares within 30 days after the taxing point, the taxing point moves to the sale and
+the whole gain is ESS income (s83A-120(3)). There is no capital gain, so **record neither the
+exercise nor the sale of the shares**. Exercising and selling on the same day is this case. If you
+recorded the options, close them with a **Sell** at 0 on that date: with nothing paid for them, it
+makes no gain or loss.
 
 ### Deferred scheme, taxed before exercise
 
 This is uncommon: options that vested and could be sold or transferred before you exercised them, or
 options held for 15 years. The options are treated as acquired at their own market value at the
-taxing point (s83A-125), shown on your ESS statement. Enter a **Buy** of the shares dated when you
-exercised, with unit price = (market value of the options at the taxing point + the exercise price
-you paid) ÷ the shares you received (s134-1).
+taxing point (s83A-125), shown on your ESS statement. Record them at that value, dated at the taxing
+point, and exercise them with basis **ROLLOVER**.
 
 ### Taxed upfront
 
 The discount was taxed in the year you received the options, and they are treated as acquired then
-for their market value (s83A-30). Enter a **Buy** of the shares dated when you exercised, with unit
-price = (market value of the options when you received them + the exercise price you paid) ÷ the
-shares you received.
+for their market value (s83A-30). Record them at that value, dated when you received them, and
+exercise them with basis **ROLLOVER**.
 
 ### Start-up concession
 
-The options cost what you paid for them, usually nothing (s83A-30(2)). Enter a **Buy** of the shares
-dated when you exercised, with unit price = (what you paid for the options + the exercise price) ÷
-the shares you received.
+The options cost what you paid for them, usually nothing (s83A-30(2)). Record them at that, and
+exercise them with basis **ROLLOVER**.
 
 For the CGT discount, though, the shares count as acquired when you received the options
-(s115-30(1) item 9A). The app counts from the buy date, so it gives no discount on a sale more than
+(s115-30(1) item 9A). The app counts from the exercise, so it gives no discount on a sale more than
 12 months after the grant but within 12 months of the exercise. Check such a sale by hand.
 
 ### Options that lapse or are forfeited
 
-If you never recorded the options, there is nothing to record. If an amount was included in your
-income for them and you then forfeit them or they lapse, including after you leave your job or
-choose not to exercise them, Division 83A is treated as never having applied (s83A-310). That is an
-amendment to your income, not a capital loss.
-
-### Listing the options in your portfolio
-
-The tax figures don't need them. To list them anyway:
-
-1. Put them on a **Market** of their own with **Is exchange listed** unticked. A price refresh skips
-   instruments on an unlisted market. Left ticked, the app asks the price provider for the option's
-   name as a ticker, which with no suffix is a US code, and may store another company's prices.
-2. Set the instrument's legal form to **Right, option or entitlement**.
-3. Enter a **Buy** at the cost the case above gives the options (usually 0), dated when you received
-   them.
-4. When you exercise, enter a **Sell** of the options on that date at the same unit price as their
-   buy, with no brokerage, to close the holding with no gain or loss. It shows on the CGT report as
-   a sale with no gain.
-
-They are shown as worth nothing, since no provider quotes them.
+Close them with a **Sell** at 0 on the date. Options in a deferred scheme cost nothing, so that makes
+no loss. If an amount was included in your income for them, as in a scheme taxed upfront, and you
+forfeit them or they lapse, including after you leave your job or choose not to exercise them,
+Division 83A is treated as never having applied (s83A-310). That is an amendment to your income, not
+a capital loss: change their buy to what you paid for them (usually 0) before entering the sale.
 
 ## Listed options and rights issues
 
 ### Options you bought, or were granted outside an employee scheme
 
-Record them as an instrument of their own, with legal form **Right, option or entitlement**, and buys
-and sells as usual. A sale is a capital gain or loss. An option that lapses unexercised is a
-**Sell** at 0 on its expiry date: a capital loss of what it cost.
-
-When you exercise some, enter:
-
-- a **Buy** of the shares dated when you exercised, with unit price = (what you paid for those
-  options + the exercise price) ÷ the shares you received (s134-1); and
-- a **Sell** of those options on the same date at their parcel's unit cost base, with no brokerage,
-  so they leave the holding with no gain or loss.
+Record them at what you paid, with buys and sells as usual. A sale is a capital gain or loss. An
+option that lapses unexercised is a **Sell** at 0 on its expiry date: a capital loss of what it cost.
+Exercise them with basis **ROLLOVER** (s134-1).
 
 ### Rights issues
 
@@ -128,8 +121,14 @@ shares came in several, then the **Sell**.
 ## After 1 July 2027
 
 With **Model 2027 regime** on, options you hold on 30 June 2027 are deemed sold and rebought that
-day, like any other asset (s112-155). Exercising them later realises that deemed gain or loss in
-the year you exercise (s112-160), and the shares' cost base starts from the options' value on
-1 July 2027 rather than what you paid. Employee options in a deferred scheme whose taxing point has
-not yet come are the exception (s130-80(1)). The app does not handle this yet, so work out that
-year's figures by hand.
+day, like any other asset (s112-155). Exercising them later realises that deemed gain or loss, in
+the year you exercise (s112-160): the CGT report shows it as the options' `pre_cutover` slice. The
+shares then carry the options' 1 July 2027 value instead of what they cost, indexed from 1 July
+2027, and the exercise price is indexed from the quarter of the exercise (s114-15(5)).
+
+That needs a value for the options on 30 June 2027. `uv run dev capture_cutover_valuations` lists
+the unlisted ones it cannot value; enter those by hand as an **Instrument valuation**. Until there
+is one, the figures are marked pending.
+
+Options in a deferred scheme whose taxing point has not yet come are the exception: every CGT event
+before it is disregarded (s130-80(1)), so exercising them with basis MARKET_VALUE gives no gain.
