@@ -10788,13 +10788,88 @@ class OptionExerciseTests(OptionExerciseMixin, TransactionTestCase):
         buy = Buy.objects.get(exercise=exercise)
         sale = Sell.objects.get(exercise=exercise)
 
+        from django.db.models import ProtectedError
+
         buy.quantity = Decimal('5')
         with self.assertRaises(live.HoldingsRefused):
             buy.save()
         with self.assertRaises(live.HoldingsRefused):
-            Buy.objects.get(exercise=exercise).delete()
+            buy.save(update_fields=['quantity'])
         with self.assertRaises(live.HoldingsRefused):
+            Buy.objects.get(exercise=exercise).delete()
+        with self.assertRaises(ProtectedError):  # By its allocations, before any signal.
             sale.delete()
+
+    def test_its_sales_allocations_cannot_be_deleted_on_their_own(self):
+        """Deleting one used to switch the sale to MANUAL, and the shares lost the options' cost."""
+        self.buy_options()
+        exercise = self.exercise()
+
+        with self.assertRaises(live.HoldingsRefused):
+            SellAllocation.objects.get(sell__exercise=exercise).delete()
+
+        sale = Sell.objects.get(exercise=exercise)
+        self.assertEqual(sale.strategy, 'FIFO')
+        self.assertEqual(sale.sale_allocation.count(), 1)
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('2530'), 'AUD'))
+
+    def test_a_recalculation_saves_its_trades_unchanged(self):
+        self.buy_options()
+        self.exercise()
+
+        recalculate.account(self.account)  # Saves every trade and allocation; nothing changes.
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.calculated_total_cost_base, Money(Decimal('2530'), 'AUD'))
+
+    def test_the_instrument_pages_still_open(self):
+        """An exercise links to two instruments, so the inlines must name which link they show."""
+        self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        for url in (reverse('admin:share_dinkum_app_instrument_change', args=[self.options.pk]),
+                    reverse('admin:share_dinkum_app_instrument_change', args=[self.shares.pk]),
+                    reverse('admin:share_dinkum_app_buy_change', args=[Buy.objects.get(exercise=exercise).pk])):
+            self.assertEqual(self.client.get(url).status_code, 200, url)
+
+    def test_the_exercise_page_shows_its_trades_read_only(self):
+        self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        page = self.client.get(reverse('admin:share_dinkum_app_optionexercise_change', args=[exercise.pk]))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'ACME')
+        self.assertNotContains(page, 'name="buys-0-quantity"')
+        self.assertNotContains(page, 'name="buys-1-quantity"')
+
+    def test_the_rounded_share_price_loses_none_of_the_exercise_price(self):
+        """1,000 options at $1 into 3,000 shares are priced at $0.333333 each, which pays $999.999."""
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(exercise_price='1.00', brokerage='0', quantity_received=Decimal('3000'))
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(Buy.objects.get(exercise__isnull=False).unit_price, Money(Decimal('0.333333'), 'AUD'))
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('1000'), 'AUD'))
+
+    def test_fees_divided_between_option_buys_never_go_negative(self):
+        for day in (date(2024, 1, 10), date(2024, 2, 10), date(2024, 3, 10), date(2024, 4, 10)):
+            self.buy_options(day=day, quantity='250', brokerage='0')
+        exercise = self.exercise(brokerage='0.0002')
+
+        fees = [buy.total_brokerage.amount for buy in Buy.objects.filter(exercise=exercise)]
+        self.assertTrue(all(fee >= 0 for fee in fees), fees)
+        self.assertEqual(sum(fees), Decimal('0.0002'))
+
+    def test_two_share_buys_of_one_size_have_their_own_figures_keys(self):
+        self.buy_options(day=date(2024, 1, 10), quantity='100', brokerage='0')
+        self.buy_options(day=date(2024, 2, 10), quantity='100', brokerage='0')
+        exercise = self.exercise(quantity='200', brokerage='0')
+
+        keys = figures_dump.Keys(self.account)
+        self.assertEqual(len({keys.key(buy) for buy in Buy.objects.filter(exercise=exercise)}), 2)
 
     def test_repricing_the_options_carries_into_the_shares(self):
         option_buy = self.buy_options()
@@ -10974,6 +11049,8 @@ class OptionExerciseDatesTests(OptionExerciseMixin, TransactionTestCase):
         self.assertEqual(event.method, 'discount')
         self.assertEqual(event.purchase_date, date(2023, 1, 10))
         self.assertEqual(event.cost_base, Money(Decimal('1000'), 'AUD'))
+        allocation = SellAllocation.objects.get(sell__exercise__isnull=True)
+        self.assertEqual(allocation.calculated_days_held, event.days_held)  # The admin and the report agree.
 
     def test_bought_options_count_the_discount_from_the_exercise(self):
         self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
@@ -11107,6 +11184,16 @@ class OptionExercise2027Tests(OptionExerciseMixin, TransactionTestCase):
                       market_value=Money(Decimal('3.40'), 'AUD'))
 
         self.assertEqual(cgt.disposal_events(self.account), [])
+        self.assertEqual(cgt.years_with_events(self.account), [])  # No event, so no year to list.
+
+    def test_with_residency_undeclared_the_deferred_gain_is_pending(self):
+        """Whether the options were deemed sold turns on residency, so the year is a draft."""
+        ResidencyPeriod.objects.all().delete()
+        self.exercise(day=date(2028, 1, 15), brokerage='0')
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.pending_reason, cgt.cutover.PENDING_UNDECLARED_RESIDENCY)
+        self.assertEqual(event.capital_gain, Money(Decimal('0'), 'AUD'))
 
 
 class UnrecordedLossWarningTests(TransactionTestCase):

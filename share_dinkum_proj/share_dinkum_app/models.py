@@ -1408,34 +1408,7 @@ class Trade(BaseModel):
             field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
             for field in fields)
 
-    #: What an option exercise sets on the trades it writes (`holdings.exercise`).
-    EXERCISE_FIELDS: tuple[str, ...] = (
-        'instrument', 'date', 'quantity', 'unit_price', 'unit_price_currency', 'total_brokerage',
-        'total_brokerage_currency')
-
-    def _refuse_outside_its_exercise(self, doing: str) -> None:
-        """Refuse changing a trade an option exercise wrote, other than through the exercise."""
-        exercise_id = getattr(self, 'exercise_id', None)
-        if exercise_id is None or exercise_module.writing_now():
-            return
-        exercise = OptionExercise.objects.filter(pk=exercise_id).first()
-        raise live.HoldingsRefused(
-            f'This {self._meta.verbose_name} was written by the exercise "{exercise}", so it cannot '
-            f'be {doing} on its own. Change or delete the exercise instead.')
-
-    def _changes_exercise_fields(self) -> bool:
-        if self._state.adding or self.pk is None:
-            return False
-        fields: list[Any] = [self._meta.get_field(name) for name in self.EXERCISE_FIELDS]
-        stored = type(self)._default_manager.filter(pk=self.pk).values(
-            *[field.attname for field in fields]).first()
-        return stored is not None and any(
-            field.to_python(stored[field.attname]) != field.to_python(getattr(self, field.attname))
-            for field in fields)
-
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if kwargs.get('update_fields') is None and self._changes_exercise_fields():
-            self._refuse_outside_its_exercise('changed')
         repriced = self._repriced(kwargs.get('update_fields'))
         if self.is_active:
             self.description = f'{self.date} | {self.__class__.__name__} | {self.instrument.name} | {self.quantity} unit @ {self.unit_price} / unit'
@@ -1445,10 +1418,6 @@ class Trade(BaseModel):
         if repriced:
             from share_dinkum_app import recalculate
             recalculate.derived_from(cast('Buy | Sell', self))
-
-    def delete(self, *args: Any, **kwargs: Any) -> Any:
-        self._refuse_outside_its_exercise('deleted')
-        return super().delete(*args, **kwargs)
 
 
 class Buy(Trade):
@@ -1483,25 +1452,55 @@ class Buy(Trade):
         parcel_list ='\n'.join([str(parcel) for parcel in related_parcels])
         return parcel_list
 
+    def _rolled_over_exercise(self) -> 'OptionExercise | None':
+        """The exercise that wrote this buy, if the options' cost goes into it (not MARKET_VALUE)."""
+        exercise = self.exercise if self.exercise_id is not None else None
+        if exercise is None or self.option_buy_id is None:
+            return None
+        return None if exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE else exercise
+
+    def _options_exercised(self) -> tuple[Money, Decimal]:
+        """(their total cost base, how many) of the options exercised into this buy."""
+        total = Money(Decimal('0'), str(self.account.currency))
+        units = Decimal('0')
+        if self.option_buy_id is None:
+            return total, units
+        # A sale's parcel holds exactly the units it took, so its whole cost base goes across.
+        for allocation in SellAllocation.objects.filter(
+                sell__exercise_id=self.exercise_id, parcel__buy_id=self.option_buy_id,
+                is_active=True).select_related('parcel__buy__account'):
+            total = total + allocation.parcel.total_cost_base
+            units += allocation.quantity
+        return total, units
+
+    def _exercise_price_rounding(self, exercise: 'OptionExercise', units: Decimal) -> Money:
+        """What the unit price, rounded to six places, leaves out of the exercise price paid for
+        these shares' `units` options, in the portfolio currency."""
+        return self.convert(exercise.exercise_price * units - self.unit_price * self.quantity)
+
+    @property
+    def exercise_price_rounding(self) -> Money:
+        """The exercise price the rounded unit price leaves out; part of `option_cost_base`."""
+        exercise = self._rolled_over_exercise()
+        if exercise is None:
+            return Money(Decimal('0'), str(self.account.currency))
+        return self._exercise_price_rounding(exercise, self._options_exercised()[1])
+
     @property
     def option_cost_base(self) -> Money:
         """The cost base of the options exercised into this buy, in the portfolio currency.
 
         Part of the shares' first element of cost base with the exercise price (s134-1(1) item 1,
-        s130-40). Zero for a purchase, and for the market value basis, whose shares are taken to
-        be acquired for their market value instead (s83A-125).
+        s130-40), and so is any of the exercise price the unit price, rounded to six places, leaves
+        out: 1,000 options at $1 into 3,000 shares are priced at $0.333333, so $0.001 goes here.
+        Zero for a purchase, and for the market value basis, whose shares are taken to be acquired
+        for their market value instead (s83A-125).
         """
-        zero = Money(Decimal('0'), str(self.account.currency))
-        exercise = self.exercise
-        if exercise is None or self.option_buy_id is None:
-            return zero
-        if exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE:
-            return zero
-        # A sale's parcel holds exactly the units it took, so its whole cost base goes across.
-        allocations = SellAllocation.objects.filter(
-            sell__exercise_id=self.exercise_id, parcel__buy_id=self.option_buy_id,
-            is_active=True).select_related('parcel__buy__account')
-        return sum((allocation.parcel.total_cost_base for allocation in allocations), zero)
+        exercise = self._rolled_over_exercise()
+        if exercise is None:
+            return Money(Decimal('0'), str(self.account.currency))
+        total, units = self._options_exercised()
+        return total + self._exercise_price_rounding(exercise, units)
 
     @property
     def ess_taxing_point(self) -> Date | None:
@@ -1541,7 +1540,6 @@ class Buy(Trade):
         Its adjustment allocations protect its parcels, and dropping them alone would leave each
         adjustment short of its total, so the adjustments it shared are reallocated instead.
         """
-        self._refuse_outside_its_exercise('deleted')
         if not live.active() or live.rebuilding() or not self.instrument_id:
             return super().delete(*args, **kwargs)
         with transaction.atomic():
@@ -1610,7 +1608,6 @@ class Sell(Trade):
     )
 
     STRUCTURAL_FIELDS: tuple[str, ...] = Trade.STRUCTURAL_FIELDS + ('strategy',)
-    EXERCISE_FIELDS: tuple[str, ...] = Trade.EXERCISE_FIELDS + ('strategy',)
 
     #: Set on the sale of options an exercise wrote. Its gain is not a capital gain: the options'
     #: cost base goes into the shares (s134-1(4)).
@@ -2176,11 +2173,14 @@ class SellAllocation(BaseModel):
         return fiscal_year
     
     calculated_days_held = models.IntegerField(null=True, blank=True, editable=False,
-        help_text='Days from the buy to the sale. Set by the app; do not edit.')
-    
+        help_text='Days from the buy to the sale; for shares from an option exercise or a '
+                  'deferred employee share scheme, from when they count as acquired for the CGT '
+                  'discount. Set by the app; do not edit.')
+
     @safe_property
     def days_held(self) -> int:
-        return (self.sell.date - self.parcel.buy.date).days
+        # As the CGT report counts them (`CGTEvent.days_held`).
+        return (self.sell.date - self.parcel.buy.discount_counted_from).days
     
     calculated_total_capital_gain = MoneyField(max_digits=19, decimal_places=6, null=True, blank=True, editable=False,
         help_text="Share of the sale proceeds less the parcel's cost base, in the portfolio "

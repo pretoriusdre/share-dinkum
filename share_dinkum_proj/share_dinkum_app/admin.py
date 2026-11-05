@@ -99,6 +99,21 @@ class BaseInline(PortfolioScopedMixin, admin.TabularInline):
     extra = 1
 
 
+class ReadOnlyInline(BaseInline):
+    """Records shown on another's page but changed only through it, such as an exercise's trades."""
+
+    extra = 0
+
+    def has_add_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
 
 class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
 
@@ -349,12 +364,19 @@ class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
                         continue
                     remaining_fields -= cost
 
-                    inline = type('DynamicInline', (BaseInline,), {'model': related_model})
+                    # Named, since a model can link here twice: an option exercise has its options
+                    # and its shares, and without it the formset refuses to guess and the page fails.
+                    inline = type('DynamicInline', (self.inline_class(related_model),),
+                                  {'model': related_model, 'fk_name': rel.field.name})
                     #if related_model not in added_inlines:
                     inline_instances.append(inline(self.model, self.admin_site))
                         #added_inlines.add(related_model)
 
         return inline_instances
+
+    def inline_class(self, related_model: type[Model]) -> type[BaseInline]:
+        """The inline to show `related_model`'s records on this model's page."""
+        return BaseInline
 
 
 
@@ -390,6 +412,9 @@ class TradeAdmin(GenericModelAdmin):
 
 class OptionExerciseAdmin(GenericModelAdmin):
     """Option exercises. Deleting one deletes the trades it wrote, unless its shares were sold."""
+
+    def inline_class(self, related_model: type[Model]) -> type[BaseInline]:
+        return ReadOnlyInline  # Its trades, which change with it.
 
     def get_deleted_objects(self, objs: Any, request: HttpRequest) -> Any:
         from share_dinkum_app.models import Buy, Sell, SellAllocation

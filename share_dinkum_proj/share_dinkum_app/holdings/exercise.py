@@ -7,18 +7,19 @@ There is one buy of the shares per option buy the sale took from, so options bou
 prices give shares with different cost bases (`Buy.option_cost_base`).
 
 The trades belong to the exercise. They change when it does and go when it is deleted; changed or
-deleted on their own, they are refused (`writing`).
+deleted on their own, as are its sale's allocations, they are refused
+(`signals.keep_exercise_records`), except while it writes them (`writing`).
 """
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, Decimal
 import threading
 from typing import TYPE_CHECKING, Any
 
 from djmoney.money import Money
 
-from share_dinkum_app.holdings import live
+from share_dinkum_app.holdings import live, strategies
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import OptionExercise, Sell
@@ -48,12 +49,13 @@ def _units(value: Decimal) -> str:
     return f'{value.normalize():f}'
 
 
-def _shares(total: Decimal, weights: list[Decimal], places: Decimal) -> list[Decimal]:
-    """`total` divided in proportion to `weights`, each rounded to `places`, the last taking what
-    rounding leaves so they add up to it exactly."""
-    whole = sum(weights, Decimal('0'))
-    parts = [(total * weight / whole).quantize(places, rounding=ROUND_HALF_UP) for weight in weights[:-1]]
-    return [*parts, total - sum(parts, Decimal('0'))]
+def _divide(total: Decimal, taken: list[tuple[Any, Decimal]], places: Decimal) -> dict[Any, Decimal]:
+    """`total` divided between the option buys by the options each gave (`strategies.spread`).
+
+    Rounded down to `places`, so the buy that takes what rounding leaves never goes below its share.
+    """
+    parts = strategies.spread(total, taken, lambda amount: amount.quantize(places, rounding=ROUND_DOWN))
+    return {option_buy_id: amount for option_buy_id, amount, _ in parts}
 
 
 def write(exercise: 'OptionExercise') -> None:
@@ -181,9 +183,13 @@ def _write_buys(exercise: 'OptionExercise', taken: list[tuple[Any, Decimal]]) ->
     from share_dinkum_app.models import Buy, ExchangeRate
 
     existing = {buy.option_buy_id: buy for buy in Buy.objects.filter(exercise=exercise)}
-    weights = [units for _, units in taken]
-    shares = _shares(exercise.shares_received, weights, QUANTITY_PLACES)
-    fees = _shares(exercise.total_brokerage.amount, weights, AMOUNT_PLACES)
+    shares = _divide(exercise.shares_received, taken, QUANTITY_PLACES)
+    fees = _divide(exercise.total_brokerage.amount, taken, AMOUNT_PLACES)
+    if any(quantity <= 0 for quantity in shares.values()):
+        raise live.HoldingsRefused(
+            f'{_units(exercise.shares_received)} shares cannot be divided between the '
+            f'{len(taken)} buys of {exercise.instrument.name} the options came from, to four '
+            f'decimal places.')
     price = exercise.share_price()
     account_currency = str(exercise.account.currency)
 
@@ -196,13 +202,13 @@ def _write_buys(exercise: 'OptionExercise', taken: list[tuple[Any, Decimal]]) ->
             account=exercise.account, convert_from=str(price.currency), convert_to=account_currency,
             exchange_date=taxing_point)
 
-    for (option_buy_id, _), quantity, fee in zip(taken, shares, fees):
+    for option_buy_id, _units_taken in taken:
         wanted: dict[str, Any] = {
             'instrument_id': exercise.underlying_instrument_id,
             'date': exercise.date,
-            'quantity': quantity,
+            'quantity': shares[option_buy_id],
             'unit_price': price,
-            'total_brokerage': Money(fee, exercise.total_brokerage.currency),
+            'total_brokerage': Money(fees[option_buy_id], exercise.total_brokerage.currency),
         }
         buy = existing.pop(option_buy_id, None)
         if rate is not None:

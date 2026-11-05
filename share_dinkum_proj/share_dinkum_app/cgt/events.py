@@ -128,7 +128,8 @@ class CGTEvent:
     unit_buy_price: Money | None
     buy_consideration: Money | None
     buy_brokerage: Money | None
-    #: What the options exercised into the shares cost (s134-1(1) item 1); zero for a purchase.
+    #: What the options exercised into the shares cost (s134-1(1) item 1), with any of the
+    #: exercise price their rounded unit price leaves out; zero for a purchase.
     option_cost_base: Money | None
     cost_base_adjustments: Money | None
     cost_base: Money | None
@@ -366,21 +367,21 @@ def _exercise_events(whole: CGTEvent, allocation: 'SellAllocation', account: 'Ac
     if sell.exercise is None or sell.exercise.cost_base_basis == CostBaseBasis.MARKET_VALUE:
         return []
     parcel = allocation.parcel
-    applies, _reason = cutover_module.deemed_sale_applies(
+    applies, reason = cutover_module.deemed_sale_applies(
         account, parcel.buy.acquired_for_cgt, sell.date, declared=declared)
+    # A row with no gain, saying why the figure is not known, as a share sale has.
+    unknown = replace(whole, slice=SLICE_PRE_CUTOVER, sale_date=cutover_module.DEEMED_SALE_DATE,
+                      gain_category=_gain_category(sell.instrument, deferred=True))
     if not applies:
+        # Undeclared residency leaves open whether the options were deemed sold.
+        if reason == cutover_module.PENDING_UNDECLARED_RESIDENCY:
+            return [replace(unknown, pending_reason=reason)]
         return []
     market_value, _source = parcel.market_value_at(
         cutover_module.DEEMED_SALE_DATE, purpose=cutover_module.PURPOSE_CUTOVER)
     if market_value is None:
-        return [replace(
-            whole,
-            slice=SLICE_PRE_CUTOVER,
-            sale_date=cutover_module.DEEMED_SALE_DATE,
-            gain_category=_gain_category(sell.instrument, deferred=True),
-            pending_reason=cutover_module.PENDING_NO_VALUATION.format(
-                instrument=sell.instrument.name, day=cutover_module.DEEMED_SALE_DATE.isoformat()),
-        )]
+        return [replace(unknown, pending_reason=cutover_module.PENDING_NO_VALUATION.format(
+            instrument=sell.instrument.name, day=cutover_module.DEEMED_SALE_DATE.isoformat()))]
     market_value = _money(market_value * share_of_parcel(parcel, allocation.quantity))
     deferred, _post = _split_events(
         whole, parcel.buy, sell.date, sell.instrument, market_value, False, [])
@@ -431,7 +432,8 @@ def _option_element(parcel: 'Parcel', quantity: Decimal, account: 'Account | Non
             return _OptionElement(stored, stored, option_buy.date, cutover_module.PENDING_NO_VALUATION.format(
                 instrument=option_buy.instrument.name, day=cutover_module.DEEMED_SALE_DATE.isoformat()))
         total = total + value
-    return _OptionElement(stored, _money(total * fraction), CGT_CUTOVER_DATE)
+    # The exercise price the rounded unit price leaves out stays, as it is not the options' cost.
+    return _OptionElement(stored, _money((total + buy.exercise_price_rounding) * fraction), CGT_CUTOVER_DATE)
 
 
 def _with_option_element(whole: CGTEvent, element: _OptionElement) -> CGTEvent:
@@ -905,17 +907,21 @@ def years_with_events(account: 'Account') -> list['FiscalYear']:
     A statement counts on its own: a year whose only gains a trust attributed is still a year
     with capital gains to report, and to snapshot.
     """
-    from django.db.models import Q
     from share_dinkum_app.models import AttributionStatement, Sell
 
     sells = Sell.objects.filter(account=account, is_active=True)
-    # Options exercised make a capital gain only from the 2027 cutover (`_exercise_events`).
-    exercised = (Q(exercise__isnull=False, date__gte=CGT_CUTOVER_DATE) if models_2027_regime(account)
-                 else Q(pk__in=[]))
     records: list[Sell | AttributionStatement] = [
-        *sells.filter(Q(exercise__isnull=True) | exercised),
+        *sells.filter(exercise__isnull=True),
         *AttributionStatement.objects.filter(account=account, is_active=True),
     ]
+    if models_2027_regime(account):
+        # Options exercised make a capital gain only from the 2027 cutover, and then not always
+        # (`_exercise_events`), so such a sale counts only if it gives one.
+        declared = residency_module.periods(account)
+        for sell in sells.filter(exercise__isnull=False, date__gte=CGT_CUTOVER_DATE):
+            if any(_events_from_allocation(allocation, account=account, declared=declared)
+                   for allocation in sell.sale_allocation.filter(is_active=True)):
+                records.append(sell)
     years = {record.fiscal_year for record in records if record.fiscal_year}
     return sorted(years, key=lambda year: year.start_year)
 
