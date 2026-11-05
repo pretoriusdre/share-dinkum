@@ -46,13 +46,23 @@ and the CGT report shows it beside each sale of them as `option_cost_base`.
 
 Your employer's ESS statement says whether your scheme is **taxed upfront** or **deferred**, and the
 discount included in your income. That discount is employment income, reported at item 12 from the
-statement. Share Dinkum does not work it out; what it needs is the cost base of your shares.
+statement. Share Dinkum does not work it out; what it needs is the cost base of your shares. Shares
+granted as shares, with no option to exercise, are [further down](#shares-rather-than-options).
 
 ### Deferred scheme, taxed at exercise (the usual case)
 
 For options you can't transfer, the deferred taxing point is when you exercise them, once the shares
 are free of any risk of forfeiture and free to sell. If the shares are held in escrow, it is when
 the restriction lifts. It is never more than 15 years after the grant (s83A-120).
+
+Leaving the job the options came from is not a taxing point. It was one until 30 June 2022: the
+change applies to every option or share whose taxing point had not come by then, whenever it was
+granted (Schedule 10 to the Corporate Collective Investment Vehicle Framework and Other Measures
+Act 2022). If you left a job on or before 30 June 2022 still holding its deferred options, that day
+was their taxing point if nothing came first: see
+[Deferred scheme, taxed before exercise](#deferred-scheme-taxed-before-exercise), valuing the options
+on the day you left. Shares from options already exercised but still restricted then take that day
+as their taxing point date.
 
 Record the options at 0, and exercise them with basis **MARKET_VALUE** and the market value of a
 share at the taxing point, from your ESS statement. The shares are treated as acquired then for their
@@ -102,6 +112,30 @@ no loss. If an amount was included in your income for them, as in a scheme taxed
 forfeit them or they lapse, including after you leave your job or choose not to exercise them,
 Division 83A is treated as never having applied (s83A-310). That is an amendment to your income, not
 a capital loss: change their buy to what you paid for them (usually 0) before entering the sale.
+
+### Shares rather than options
+
+Some plans grant shares outright: a general employee plan offering up to $1,000 of shares a year, a
+salary sacrifice plan, or shares you forfeit if you leave before they vest. There is nothing to
+exercise; record a **Buy** of the shares. Your ESS statement says whether they were taxed upfront or
+are deferred, and the market value used.
+
+**Taxed upfront.** The shares are treated as acquired when you received them, for their market value
+then (s83A-30), whatever you paid and whether or not up to $1,000 of the discount was tax-free
+(s83A-35). Enter the buy on that date, at the market value per share, with any fees as brokerage.
+
+**Deferred.** These are shares at real risk of forfeiture, or up to $5,000 a year of salary
+sacrificed shares (s83A-105). The taxing point is when they are no longer at risk and you are free
+to sell them, or 15 years after you received them if that is sooner (s83A-115). As for options,
+leaving the job has not been one since 30 June 2022; a departure on or before that date was. The
+shares are treated as acquired at the taxing point, for their market value then (s83A-125). Enter
+the buy on that date, at that market value. The app shows the shares from the taxing point, not from
+when you received them; dividends paid before then are recorded as usual.
+
+If you sell deferred shares within 30 days after the taxing point, the taxing point moves to the
+sale and the whole gain is ESS income (s83A-115(3)), not a capital gain (s130-80(1)). The app cannot
+mark a buy as deferred, so **record neither the buy nor the sale**. Selling as soon as the shares
+vest is this case.
 
 ## Listed options and rights issues
 

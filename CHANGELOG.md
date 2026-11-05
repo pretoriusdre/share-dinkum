@@ -32,7 +32,8 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
 
 - **How to record options, rights issues and employee share schemes**
   ([docs/options_and_employee_shares.md](docs/options_and_employee_shares.md)): which cost base
-  basis each case takes and what the options cost.
+  basis each case takes and what the options cost, shares granted under an employee share plan,
+  and the taxing point that leaving a job was until 30 June 2022.
 
 ### Fixed
 
