@@ -22,6 +22,8 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
     them out of the schedule and out of its foreign resident label.
   - The **start-up concession** basis: the cost base as for options bought, with the discount
     counted from when the options were acquired (s115-30(1) item 9A).
+  - A buy of shares from a deferred employee share plan can be marked **Is deferred ess**, so a
+    sale within 30 days of it makes no capital gain either (s83A-115(3)).
   - The trades it writes are read-only, and change with it. It is refused if fewer options were
     held than it exercises; deleting it is refused once its shares are sold.
   - It loads from the import template's new optional **OptionExercise** table, in date order with

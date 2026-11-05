@@ -10942,6 +10942,28 @@ class OptionExerciseDatesTests(OptionExerciseMixin, TransactionTestCase):
         [parcel] = self.share_parcels()
         self.assertEqual(parcel.total_cost_base, Money(Decimal('16000'), 'AUD'))
 
+    def buy_plan_shares(self, is_deferred_ess=True):
+        """Shares granted outright by a deferred plan, entered at their taxing point."""
+        return Buy.objects.create(
+            account=self.account, instrument=self.shares, date=date(2025, 3, 1), quantity=Decimal('1000'),
+            unit_price=Money(Decimal('3.40'), 'AUD'), total_brokerage=Money(Decimal('0'), 'AUD'),
+            is_deferred_ess=is_deferred_ess)
+
+    def test_deferred_plan_shares_sold_within_30_days_make_no_capital_gain(self):
+        """s83A-115(3): the same rule for shares granted as shares."""
+        self.buy_plan_shares()
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        self.assertEqual(self.only_event().disregard_reason, cgt.events.REASON_ESS_30_DAYS)
+
+    def test_shares_not_marked_deferred_make_a_capital_gain_within_30_days(self):
+        self.buy_plan_shares(is_deferred_ess=False)
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertFalse(event.is_disregarded)
+        self.assertEqual(event.capital_gain, Money(Decimal('200'), 'AUD'))
+
     def test_start_up_shares_count_the_discount_from_the_grant(self):
         """s115-30(1) item 9A: held 12 months counting from when the options were acquired."""
         self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
@@ -10996,6 +11018,22 @@ class OptionExerciseImportTests(OptionExerciseMixin, ImportWorkbookMixin, Transa
         [event] = cgt.disposal_events(self.account)
         self.assertEqual(event.cost_base, Money(Decimal('2530'), 'AUD'))
         self.assertEqual(event.capital_gain, Money(Decimal('460'), 'AUD'))
+
+    def test_a_template_buy_marked_as_deferred_plan_shares(self):
+        buys = [{'legacy_id': 'B1', 'instrument__name': 'BHP', 'date': date(2025, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('40'), 'total_brokerage': Decimal('0'),
+                 'is_deferred_ess': True}]
+        sells = pd.DataFrame([{
+            'legacy_id': 'S1', 'instrument__name': 'BHP', 'date': date(2025, 3, 20),
+            'quantity': Decimal('100'), 'unit_price': Decimal('42'), 'total_brokerage': Decimal('0'),
+            'strategy': 'FIFO'}])
+        self.build_workbook(self.workbook, buys=buys, extra_tables=[('Sell', sells)])
+
+        loading.DataLoader(account=self.account, input_file=self.workbook)
+
+        self.assertTrue(Buy.objects.get(legacy_id='B1').is_deferred_ess)
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.disregard_reason, cgt.events.REASON_ESS_30_DAYS)
 
     def test_an_export_restores_the_exercise_and_its_trades_once(self):
         self.make_instruments()

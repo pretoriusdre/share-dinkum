@@ -85,6 +85,7 @@ erDiagram
         decimal quantity
         money unit_price
         money total_brokerage
+        boolean is_deferred_ess
     }
     Sell {
         date date

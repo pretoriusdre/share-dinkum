@@ -1468,6 +1468,11 @@ class Buy(Trade):
         null=True, blank=True, editable=False,
         help_text='The buy of the options exercised into these shares, whose cost is part of '
                   'their cost base. Set by the app; do not edit.')
+    is_deferred_ess = models.BooleanField(default=False,
+        help_text='Yes for shares from a deferred employee share scheme, entered at their taxing '
+                  'point for their market value then (s83A-125). A sale within 30 days of it is '
+                  'then ESS income, not a capital gain (s83A-115(3)). No for anything else; an '
+                  'option exercise marks its own shares.')
 
     calculated_related_parcels = models.TextField(null=True, blank=True, editable=False,
         help_text='The parcels created from this buy, as text. Set by the app; do not edit.')
@@ -1500,9 +1505,14 @@ class Buy(Trade):
 
     @property
     def ess_taxing_point(self) -> Date | None:
-        """The deferred employee scheme taxing point of shares an exercise wrote, or None."""
+        """The deferred employee scheme taxing point of these shares, or None.
+
+        An exercise's, or the buy's own date for shares entered at it (`is_deferred_ess`).
+        """
         exercise = self.exercise if self.exercise_id is not None else None
-        return exercise.taxing_point if exercise is not None else None
+        if exercise is not None:
+            return exercise.taxing_point
+        return self.date if self.is_deferred_ess else None
 
     @property
     def acquired_for_cgt(self) -> Date:

@@ -132,10 +132,19 @@ shares are treated as acquired at the taxing point, for their market value then 
 the buy on that date, at that market value. The app shows the shares from the taxing point, not from
 when you received them; dividends paid before then are recorded as usual.
 
-If you sell deferred shares within 30 days after the taxing point, the taxing point moves to the
-sale and the whole gain is ESS income (s83A-115(3)), not a capital gain (s130-80(1)). The app cannot
-mark a buy as deferred, so **record neither the buy nor the sale**. Selling as soon as the shares
-vest is this case.
+Tick **Is deferred ess** on that buy. If you sell the shares within 30 days after the taxing point,
+the taxing point moves to the sale and the whole gain is ESS income (s83A-115(3)), not a capital
+gain (s130-80(1)): the CGT report lists the sale as disregarded and leaves it out of the schedule.
+Selling as soon as the shares vest is this case.
+
+### Options sold rather than exercised
+
+Employee options can rarely be sold. If yours could, and you sold deferred options before their
+taxing point or within 30 days after it, the gain is ESS income, not a capital gain (s83A-120(3),
+s130-80(1)). Close the options with a **Sell** at 0 on that date: they cost nothing, so it makes no
+gain. The same applies if you exercised options taxed when they vested and sold the shares within
+30 days of that: record the options at 0, close them with a Sell at 0, and record neither the
+exercise nor the sale of the shares. Sold later, they are an ordinary sale.
 
 ## Listed options and rights issues
 
