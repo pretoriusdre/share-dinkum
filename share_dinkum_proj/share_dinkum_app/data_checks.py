@@ -16,8 +16,8 @@ from django.db.models.functions import Abs, Coalesce
 
 if TYPE_CHECKING:
     from share_dinkum_app.models import (
-        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, OptionExercise, Parcel,
-        Sell, ShareSplit,
+        Account, CostBaseAdjustment, CostBaseAdjustmentAllocation, ExchangeRate, Instrument, OptionExercise,
+        Parcel, Sell, ShareSplit,
     )
 
 COMMAND = 'uv run dev repair_portfolio_data'
@@ -176,6 +176,19 @@ def cross_portfolio_links(account: 'Account') -> list[tuple[Any, str]]:
     return found
 
 
+def unlisted_prices(account: 'Account') -> 'QuerySet[Instrument]':
+    """Instruments on an unlisted market with prices stored for them.
+
+    A price refresh used to fetch them by name, which with no market suffix is a US ticker, so the
+    prices can be another security's, and the current price with them. Nothing fetches them now.
+    """
+    from django.db.models import Exists, OuterRef
+    from share_dinkum_app.models import Instrument, InstrumentPriceHistory
+
+    return Instrument.objects.filter(account=account, market__is_exchange_listed=False).filter(
+        Exists(InstrumentPriceHistory.objects.filter(instrument=OuterRef('pk'))))
+
+
 def placeholder_rates(account: 'Account') -> 'QuerySet[ExchangeRate]':
     from share_dinkum_app.models import ExchangeRate
     return ExchangeRate.objects.filter(account=account, is_placeholder=True)
@@ -230,6 +243,10 @@ def run(account: 'Account') -> list[Finding]:
         ('placeholder_rates', placeholder_rates(account).count(),
          'exchange rate(s) standing in for one that could not be fetched',
          True, True),
+        ('unlisted_prices', unlisted_prices(account).count(),
+         'instrument(s) on an unlisted market with prices fetched under their name as a ticker, '
+         "which may be another security's",
+         True, False),
         ('unconverted_parcels', Parcel.with_unconverted_cost_base(account).count(),
          f'parcel(s) with their cost base stored in a currency other than {account.currency}',
          True, False),

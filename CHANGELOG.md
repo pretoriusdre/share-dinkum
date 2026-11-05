@@ -33,7 +33,9 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
 - **A price refresh no longer fetches prices for an instrument on an unlisted market.** It asked
   the provider for the instrument's name as a ticker, which with no market suffix is a US code, so
   an employee option could be given another company's prices. `refetch_price_history` and
-  `suggest_instrument_classification --use-market-data` pass such instruments over too.
+  `suggest_instrument_classification --use-market-data` pass such instruments over too. The
+  dashboard warns of prices already fetched that way, and `repair_portfolio_data` deletes them with
+  the instrument's current price.
 
 ## 0.7.0 - 2026-10-23
 

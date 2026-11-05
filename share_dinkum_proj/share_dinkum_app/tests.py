@@ -10574,6 +10574,27 @@ class UnlistedMarketPricesTests(TransactionTestCase):
         update.assert_not_called()
         self.assertNotIn('ACME', output.getvalue())
 
+    def test_prices_fetched_before_are_found_and_cleared(self):
+        """Fetched before the refresh skipped them, so perhaps another company's."""
+        listed = create_instrument(account=self.account, name='VAS')
+        for instrument in (self.options, listed):
+            InstrumentPriceHistory.objects.create(
+                account=self.account, instrument=instrument, date=date(2025, 3, 3), open=Decimal('5'),
+                high=Decimal('5'), low=Decimal('5'), close=Decimal('5'), volume=0, stock_splits=Decimal('0'))
+            instrument.current_unit_price = Decimal('5')
+            instrument.save()
+
+        self.assertEqual(list(data_checks.unlisted_prices(self.account)), [self.options])
+        call_command('repair_portfolio_data', '--account', self.account.description, stdout=io.StringIO())
+
+        self.assertEqual(list(data_checks.unlisted_prices(self.account)), [])
+        self.options.refresh_from_db()
+        self.assertIsNone(self.options.current_unit_price)
+        self.assertEqual(self.options.calculated_value_held, Money(Decimal('0'), 'AUD'))
+        listed.refresh_from_db()
+        self.assertEqual(listed.current_unit_price, Decimal('5'))
+        self.assertTrue(InstrumentPriceHistory.objects.filter(instrument=listed).exists())
+
     def test_the_classification_command_does_not_look_it_up(self):
         from share_dinkum_app.management.commands.suggest_instrument_classification import Command
 

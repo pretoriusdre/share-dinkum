@@ -151,6 +151,23 @@ def rewrite_exercises(account: 'Account') -> int:
     return len(exercises)
 
 
+def clear_unlisted_prices(account: 'Account') -> int:
+    """Delete the prices stored for instruments on an unlisted market, and their current price.
+
+    Returns the instruments cleared. See `data_checks.unlisted_prices`. A market unticked by
+    mistake gets them back by ticking it and running `refetch_price_history`.
+    """
+    from share_dinkum_app import data_checks
+    from share_dinkum_app.models import InstrumentPriceHistory
+
+    instruments = list(data_checks.unlisted_prices(account))
+    for instrument in instruments:
+        InstrumentPriceHistory.objects.filter(instrument=instrument).delete()
+        instrument.current_unit_price = None
+        instrument.save()  # Its value, which was worked out at that price.
+    return len(instruments)
+
+
 def refetch_placeholder_rates(account: 'Account') -> int:
     """Fetch again every stand-in exchange rate. Returns the number now real."""
     from share_dinkum_app import data_checks
