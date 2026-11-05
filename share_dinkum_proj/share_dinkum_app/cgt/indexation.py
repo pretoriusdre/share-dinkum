@@ -85,10 +85,16 @@ def held_twelve_months(acquisition_date: date | None, event_date: date | None) -
 
 
 def is_indexation_eligible(account: 'Account | None', acquisition_date: date | None, event_date: date | None,
-                           declared: residency.Periods | None = None) -> bool:
-    """Whether a cost base is indexed: held 12 months (s114-10(1)) and resident throughout (s114-25)."""
+                           declared: residency.Periods | None = None,
+                           testing_from: date | None = None) -> bool:
+    """Whether a cost base is indexed: held 12 months (s114-10(1)) and resident throughout (s114-25).
+
+    The residency test runs from `testing_from` if given: start-up shares take their options'
+    acquisition for it (s114-25(4), s115-30(1) item 9A), but not for the 12 months.
+    """
     return (held_twelve_months(acquisition_date, event_date)
-            and residency_allows_indexation(account, acquisition_date, event_date, declared=declared))
+            and residency_allows_indexation(account, testing_from or acquisition_date, event_date,
+                                            declared=declared))
 
 
 def residency_allows_indexation(account: 'Account | None', acquisition_date: date | None, event_date: date | None,

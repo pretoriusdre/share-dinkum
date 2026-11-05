@@ -133,7 +133,7 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
             capital_gain = unit_proceeds - parcel.unit_cost_base
             return cgt.apply_discount(
                 capital_gain,
-                purchase_date=parcel.buy.date,
+                purchase_date=parcel.buy.discount_counted_from,
                 sale_date=instance.date,
                 account=instance.account,
             )

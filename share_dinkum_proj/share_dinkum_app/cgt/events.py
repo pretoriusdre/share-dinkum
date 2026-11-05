@@ -51,6 +51,18 @@ SOURCE_UNREALISED = 'unrealised'
 #: Takes Money to the account currency, or None if there is no rate.
 Converter = Callable[[Money], Money | None]
 
+#: Shares sold within 30 days after their deferred employee scheme taxing point make no capital
+#: gain or loss: the taxing point moves to the sale (s83A-120(3)), and a CGT event on or before it
+#: is disregarded (s130-80(1)(d)(ii)). The whole gain is employee share scheme income.
+REASON_ESS_30_DAYS = ('s83A-120(3) and s130-80(1): sold within 30 days of the employee share scheme '
+                      'taxing point, so the gain is ESS income, not a capital gain')
+ESS_30_DAYS = timedelta(days=30)
+
+
+def _within_ess_30_days(buy: 'Buy', sale_date: date) -> bool:
+    taxing_point = buy.ess_taxing_point
+    return taxing_point is not None and sale_date <= taxing_point + ESS_30_DAYS
+
 #: Why an unrealised row has no figures.
 PENDING_NO_PRICE = 'No current price for {instrument}, so its value is unknown.'
 PENDING_NO_RATE = 'No exchange rate from {currency} to {account_currency}, so its value is unknown.'
@@ -259,10 +271,12 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
     gross_gain = capital_gain if gain_amount > 0 else zero
     gross_loss = -capital_gain if gain_amount < 0 else zero
 
-    eligible = discount_module.is_discount_eligible(buy.date, sell.date)
+    # The buy's date for shares bought as shares; see `Buy.acquired_for_cgt` for the others.
+    acquired, discount_from = buy.acquired_for_cgt, buy.discount_counted_from
+    eligible = discount_module.is_discount_eligible(discount_from, sell.date)
 
     tap_status = tap_module.parcel_tap_status(
-        account, sell.instrument, buy.date, sell.date, declared=declared)
+        account, sell.instrument, acquired, sell.date, declared=declared)
     is_disregarded, disregard_reason = tap_module.disregard(
         account, tap_status, sell.date, declared=declared)
 
@@ -281,10 +295,10 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
         legacy_buy_id=buy.legacy_id,
         legacy_sell_id=sell.legacy_id,
 
-        purchase_date=buy.date,
+        purchase_date=discount_from,
         sale_date=sell.date,
         quantity=quantity,
-        days_held=allocation.days_held,
+        days_held=(sell.date - discount_from).days,
 
         unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
         buy_consideration=_money(parcel.adjusted_buy_price * quantity),
@@ -305,7 +319,7 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
 
         method=METHOD_DISCOUNT if eligible else METHOD_OTHER,
         discount_percentage=discount_module.discount_percentage(
-            buy.date, sell.date, account=account, declared=declared),
+            discount_from, sell.date, account=account, declared=declared),
         regime=_regime_for(sell.date),
         tap_status=tap_status,
         source_reconciles=None,
@@ -314,11 +328,13 @@ def _events_from_allocation(allocation: 'SellAllocation', account: 'Account | No
         disregard_reason=disregard_reason,
         discount_basis=residency_module.basis(account, declared=declared),
         tap_override_suppressed_deeming=tap_module.override_suppresses_deeming(
-            account, sell.instrument, buy.date, sell.date, declared=declared),
+            account, sell.instrument, acquired, sell.date, declared=declared),
     )
 
     if sell.exercise_id is not None:
         return _exercise_events(whole, allocation, account=account, declared=declared)
+    if _within_ess_30_days(buy, sell.date):
+        return [replace(whole, is_disregarded=True, disregard_reason=REASON_ESS_30_DAYS)]
 
     # Two gates, and only one of them is a setting. The account's is read here rather than
     # from a module constant, which is what makes it something a person can actually change.
@@ -351,7 +367,7 @@ def _exercise_events(whole: CGTEvent, allocation: 'SellAllocation', account: 'Ac
         return []
     parcel = allocation.parcel
     applies, _reason = cutover_module.deemed_sale_applies(
-        account, parcel.buy.date, sell.date, declared=declared)
+        account, parcel.buy.acquired_for_cgt, sell.date, declared=declared)
     if not applies:
         return []
     market_value, _source = parcel.market_value_at(
@@ -451,13 +467,14 @@ def _apply_cutover(whole: CGTEvent, parcel: 'Parcel', quantity: Decimal, sale_da
     hypothetical ones of `unrealised_events`, so the two cannot be characterised differently.
     """
     buy = parcel.buy
+    acquired = buy.acquired_for_cgt
 
-    held_twelve_months = indexation_module.held_twelve_months(buy.date, sale_date)
+    held_twelve_months = indexation_module.held_twelve_months(acquired, sale_date)
     indexation_eligible = indexation_module.is_indexation_eligible(
-        account, buy.date, sale_date, declared=declared)
+        account, acquired, sale_date, declared=declared, testing_from=buy.discount_counted_from)
 
     applies, reason = cutover_module.deemed_sale_applies(
-        account, buy.date, sale_date, declared=declared)
+        account, acquired, sale_date, declared=declared)
 
     if not applies:
         element = _option_element(parcel, quantity, account=account, declared=declared)
@@ -564,9 +581,10 @@ def _single_post_cutover_event(whole: CGTEvent, buy: 'Buy', sale_date: date, ins
     net_proceeds, plain_cost_base = whole.net_proceeds, whole.cost_base
     assert net_proceeds is not None and plain_cost_base is not None  # set on every disposal
     try:
-        factor = indexation_module.indexation_factor(buy.date, sale_date)
+        factor = indexation_module.indexation_factor(buy.acquired_for_cgt, sale_date)
         indexed_cost_base = _money(cast(Money, indexation_module.indexed_cost_base(
-            plain_cost_base, buy.date, sale_date, adjustments=adjustments, incurred=incurred or ())))
+            plain_cost_base, buy.acquired_for_cgt, sale_date, adjustments=adjustments,
+            incurred=incurred or ())))
     except indexation_module.IndexationDataUnavailable as exc:
         return replace(whole, gain_category=category, pending_reason=str(exc))
 
@@ -620,9 +638,10 @@ def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy'
     Never for a hold under 12 months: that is denied indexation (s114-10(1)) and a discount
     whatever the residency, so the figure is final.
     """
-    if buy.date < CGT_CUTOVER_DATE:
+    acquired = buy.acquired_for_cgt
+    if acquired < CGT_CUTOVER_DATE:
         return False
-    if not indexation_module.held_twelve_months(buy.date, sale_date):
+    if not indexation_module.held_twelve_months(acquired, sale_date):
         return False
     if discount_module.taxpayer_type_of(account) not in (TaxpayerType.INDIVIDUAL, TaxpayerType.TRUST):
         return False
@@ -630,7 +649,9 @@ def _undeclared_days_alone_deny_indexation(account: 'Account | None', buy: 'Buy'
         declared = residency_module.periods(account)
     if not declared:
         return False
-    counts = residency_module.days_by_status(account, buy.date, sale_date, declared=declared)
+    # The s114-25 testing period, which start-up shares begin at their grant (s114-25(4)).
+    testing_from = max(CGT_CUTOVER_DATE, buy.discount_counted_from)
+    counts = residency_module.days_by_status(account, testing_from, sale_date, declared=declared)
     return (counts.get(None, 0) > 0
             and counts.get(residency_module.FOREIGN, 0) == 0
             and counts.get(residency_module.TEMPORARY, 0) == 0)
@@ -680,7 +701,7 @@ def _split_events(whole: CGTEvent, buy: 'Buy', sale_date: date, instrument: 'Ins
     # s114-10(9): the deemed reacquisition is disregarded for the 12-month rule, so the
     # deferred slice is measured from the original purchase and both slices are held for
     # more than twelve months if the parcel was.
-    deferred_eligible = discount_module.is_discount_eligible(buy.date, sale_date)
+    deferred_eligible = discount_module.is_discount_eligible(buy.discount_counted_from, sale_date)
 
     deferred = replace(
         whole,
@@ -1028,8 +1049,11 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
         gross_gain = capital_gain if capital_gain.amount > 0 else zero
         gross_loss = -capital_gain if capital_gain.amount < 0 else zero
 
-    tap_status = tap_module.parcel_tap_status(account, instrument, buy.date, as_at, declared=declared)
+    acquired, discount_from = buy.acquired_for_cgt, buy.discount_counted_from
+    tap_status = tap_module.parcel_tap_status(account, instrument, acquired, as_at, declared=declared)
     is_disregarded, disregard_reason = tap_module.disregard(account, tap_status, as_at, declared=declared)
+    if _within_ess_30_days(buy, as_at):
+        is_disregarded, disregard_reason = True, REASON_ESS_30_DAYS
 
     whole = CGTEvent(
         source=SOURCE_UNREALISED,
@@ -1046,10 +1070,10 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
         legacy_buy_id=buy.legacy_id,
         legacy_sell_id=None,
 
-        purchase_date=buy.date,
+        purchase_date=discount_from,
         sale_date=as_at,
         quantity=quantity,
-        days_held=(as_at - buy.date).days,
+        days_held=(as_at - discount_from).days,
 
         unit_buy_price=_money(parcel.adjusted_buy_price, UNIT_PLACES),
         buy_consideration=_money(parcel.adjusted_buy_price * quantity),
@@ -1067,9 +1091,9 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
         gross_gain=gross_gain,
         gross_loss=gross_loss,
 
-        method=METHOD_DISCOUNT if discount_module.is_discount_eligible(buy.date, as_at) else METHOD_OTHER,
+        method=METHOD_DISCOUNT if discount_module.is_discount_eligible(discount_from, as_at) else METHOD_OTHER,
         discount_percentage=discount_module.discount_percentage(
-            buy.date, as_at, account=account, declared=declared),
+            discount_from, as_at, account=account, declared=declared),
         regime=_regime_for(as_at),
         tap_status=tap_status,
         residency_status=residency_module.status_on(account, as_at, declared=declared),
@@ -1077,13 +1101,14 @@ def _unrealised_events_of(parcel: 'Parcel', quantity: Decimal, as_at: date, fisc
         disregard_reason=disregard_reason,
         discount_basis=residency_module.basis(account, declared=declared),
         tap_override_suppressed_deeming=tap_module.override_suppresses_deeming(
-            account, instrument, buy.date, as_at, declared=declared),
+            account, instrument, acquired, as_at, declared=declared),
         pending_reason=' '.join(pending) or None,
     )
 
     # The same gates as a real sale. With no value there is nothing to split or index, and the
     # row already says why.
-    if proceeds is None or as_at < CGT_CUTOVER_DATE or not models_2027_regime(account):
+    if (proceeds is None or as_at < CGT_CUTOVER_DATE or not models_2027_regime(account)
+            or disregard_reason == REASON_ESS_30_DAYS):
         return [whole]
     return _apply_cutover(whole, parcel, quantity, as_at, instrument, account=account, declared=declared)
 

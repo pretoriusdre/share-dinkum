@@ -178,16 +178,26 @@ def _write_buys(exercise: 'OptionExercise', taken: list[tuple[Any, Decimal]]) ->
 
     The shares and fees are divided between them by the options each took.
     """
-    from share_dinkum_app.models import Buy
+    from share_dinkum_app.models import Buy, ExchangeRate
 
     existing = {buy.option_buy_id: buy for buy in Buy.objects.filter(exercise=exercise)}
     weights = [units for _, units in taken]
     shares = _shares(exercise.shares_received, weights, QUANTITY_PLACES)
     fees = _shares(exercise.total_brokerage.amount, weights, AMOUNT_PLACES)
     price = exercise.share_price()
+    account_currency = str(exercise.account.currency)
+
+    # A market value taken after the exercise is converted at its own day's rate. Otherwise the
+    # buy is given its date's rate as any trade is (`signals.attach_exchange_rate`).
+    rate = None
+    taxing_point = exercise.taxing_point
+    if taxing_point is not None and taxing_point != exercise.date and str(price.currency) != account_currency:
+        rate = ExchangeRate.get_or_create(
+            account=exercise.account, convert_from=str(price.currency), convert_to=account_currency,
+            exchange_date=taxing_point)
 
     for (option_buy_id, _), quantity, fee in zip(taken, shares, fees):
-        wanted = {
+        wanted: dict[str, Any] = {
             'instrument_id': exercise.underlying_instrument_id,
             'date': exercise.date,
             'quantity': quantity,
@@ -195,6 +205,10 @@ def _write_buys(exercise: 'OptionExercise', taken: list[tuple[Any, Decimal]]) ->
             'total_brokerage': Money(fee, exercise.total_brokerage.currency),
         }
         buy = existing.pop(option_buy_id, None)
+        if rate is not None:
+            wanted['exchange_rate'] = rate
+        elif buy is not None and buy.exchange_rate is not None and buy.exchange_rate.date != exercise.date:
+            wanted['exchange_rate'] = None  # A taxing point's rate no longer wanted.
         if buy is not None and (str(buy.unit_price.currency), str(buy.total_brokerage.currency)) != (
                 str(price.currency), str(exercise.total_brokerage.currency)):
             # A buy's currencies are fixed once it has its parcel.

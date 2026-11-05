@@ -28,9 +28,10 @@ An **Option exercise** takes:
 - the number of options exercised, and of shares received (blank is one for each option);
 - the **exercise price** per option, and the **fees** paid to exercise. Don't put the exercise price
   in brokerage anywhere: it is part of the cost base already;
-- the **cost base basis**: ROLLOVER (what the options cost plus the exercise price) or MARKET_VALUE
-  (a share's market value, for a deferred employee scheme), with the market value per share for the
-  second;
+- the **cost base basis**: ROLLOVER (what the options cost plus the exercise price), MARKET_VALUE
+  (a share's market value, for a deferred employee scheme) or START_UP (as ROLLOVER, for the
+  start-up concession). MARKET_VALUE also takes the market value per share at the taxing point, and
+  the **taxing point date** if that was after the exercise;
 - which options it takes if they were bought at different times: first bought (FIFO) or last (LIFO).
 
 Saving it writes a sale of the options at nothing and a buy of the shares, one for each buy of the
@@ -59,16 +60,17 @@ market value (s83A-125); the difference from what you paid is the discount, alre
 The exercise shows that difference as **ESS discount**, to compare with the statement. If you took
 the fees off the discount you reported as income, leave them out here, so they are not counted twice.
 
-The app counts the shares as acquired on the exercise date. Where they were held in escrow, the law
-counts them from when the restriction lifted, so check by hand a sale within 12 months of that.
+If the shares were held in escrow after the exercise, give the **taxing point date**, when the
+restriction lifted, and the market value then. The shares count as acquired on that date for
+capital gains, so the 12 months for the discount run from it, though your holding shows them from
+the exercise. A market value in another currency is converted at that date's exchange rate.
 
 ### Sold within 30 days of the taxing point
 
 If you sell the shares within 30 days after the taxing point, the taxing point moves to the sale and
-the whole gain is ESS income (s83A-120(3)). There is no capital gain, so **record neither the
-exercise nor the sale of the shares**. Exercising and selling on the same day is this case. If you
-recorded the options, close them with a **Sell** at 0 on that date: with nothing paid for them, it
-makes no gain or loss.
+the whole gain is ESS income (s83A-120(3)), not a capital gain (s130-80(1)). Record the exercise and
+the sale as usual: the CGT report lists the sale as disregarded, with that reason, and leaves it out
+of the schedule. Exercising and selling on the same day is this case.
 
 ### Deferred scheme, taxed before exercise
 
@@ -85,12 +87,13 @@ exercise them with basis **ROLLOVER**.
 
 ### Start-up concession
 
-The options cost what you paid for them, usually nothing (s83A-30(2)). Record them at that, and
-exercise them with basis **ROLLOVER**.
+The options cost what you paid for them, usually nothing (s83A-30(2)). Record them at that, dated
+when you received them, and exercise them with basis **START_UP**.
 
-For the CGT discount, though, the shares count as acquired when you received the options
-(s115-30(1) item 9A). The app counts from the exercise, so it gives no discount on a sale more than
-12 months after the grant but within 12 months of the exercise. Check such a sale by hand.
+The shares' cost base is as for ROLLOVER, but for the CGT discount they count as acquired when you
+received the options (s115-30(1) item 9A), so a sale 12 months after the grant gets the discount
+even if it is soon after the exercise. The CGT report shows that date as the purchase date. The
+1 July 2027 split and indexation still count from the exercise.
 
 ### Options that lapse or are forfeited
 

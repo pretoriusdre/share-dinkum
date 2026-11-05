@@ -140,6 +140,7 @@ erDiagram
         money total_brokerage
         string cost_base_basis
         money market_value
+        date taxing_point_date
         string strategy
     }
     ExchangeRate {

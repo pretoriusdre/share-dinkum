@@ -10859,6 +10859,110 @@ class OptionExerciseTests(OptionExerciseMixin, TransactionTestCase):
         self.assertEqual(Buy.objects.get(exercise=exercise).unit_price, Money(Decimal('2'), 'AUD'))
 
 
+class OptionExerciseDatesTests(OptionExerciseMixin, TransactionTestCase):
+    """Shares whose CGT dates are not the exercise: the 30-day rule, escrow, and start-ups."""
+
+    def deferred(self, day=date(2025, 3, 1), taxing_point=None, market_value='3.40'):
+        self.buy_options(price='0', brokerage='0')
+        return self.exercise(day=day, brokerage='0', cost_base_basis='MARKET_VALUE',
+                             market_value=Money(Decimal(market_value), 'AUD'), taxing_point_date=taxing_point)
+
+    def only_event(self):
+        [event] = cgt.disposal_events(self.account)
+        return event
+
+    def test_shares_sold_within_30_days_of_the_taxing_point_make_no_capital_gain(self):
+        """s83A-120(3), s130-80(1): the gain is ESS income instead."""
+        self.deferred()
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertTrue(event.is_disregarded)
+        self.assertEqual(event.disregard_reason, cgt.events.REASON_ESS_30_DAYS)
+        schedule = cgt.build_schedule(self.account, 'FY2024/25')
+        self.assertEqual(schedule.gross_gains, Money(Decimal('0'), 'AUD'))
+        # Not a foreign resident's disregarded gain, which is a label of its own on the schedule.
+        self.assertEqual(schedule.disregarded_gains, Money(Decimal('0'), 'AUD'))
+
+    def test_a_sale_on_the_31st_day_is_a_capital_gain(self):
+        self.deferred()
+        self.sell_shares(day=date(2025, 4, 1), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertFalse(event.is_disregarded)
+        self.assertEqual(event.capital_gain, Money(Decimal('200'), 'AUD'))
+
+    def test_the_30_day_rule_is_only_for_a_deferred_scheme(self):
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(brokerage='0')
+        self.sell_shares(day=date(2025, 3, 10), price='3.60', brokerage='0')
+
+        self.assertFalse(self.only_event().is_disregarded)
+
+    def test_shares_in_escrow_count_as_acquired_when_it_ends(self):
+        """s83A-125: acquired at the taxing point, so the discount waits 12 months from it."""
+        self.deferred(day=date(2024, 3, 1), taxing_point=date(2024, 9, 1))
+        self.sell_shares(day=date(2025, 8, 1), price='5.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.purchase_date, date(2024, 9, 1))
+        self.assertEqual(event.method, 'other')
+        self.shares.refresh_from_db()
+        self.assertEqual(Buy.objects.get(exercise__isnull=False).date, date(2024, 3, 1))
+
+    def test_without_escrow_the_same_sale_gets_the_discount(self):
+        self.deferred(day=date(2024, 3, 1))
+        self.sell_shares(day=date(2025, 8, 1), price='5.00', brokerage='0')
+
+        self.assertEqual(self.only_event().method, 'discount')
+
+    def test_a_sale_within_30_days_of_escrow_ending_makes_no_capital_gain(self):
+        self.deferred(day=date(2024, 3, 1), taxing_point=date(2024, 9, 1))
+        self.sell_shares(day=date(2024, 9, 20), price='5.00', brokerage='0')
+
+        self.assertTrue(self.only_event().is_disregarded)
+
+    def test_a_taxing_point_is_refused_before_the_exercise_or_on_another_basis(self):
+        self.buy_options(price='0', brokerage='0')
+        with self.assertRaises(ValueError):
+            self.exercise(cost_base_basis='MARKET_VALUE', market_value=Money(Decimal('3.40'), 'AUD'),
+                          taxing_point_date=date(2025, 2, 1))
+        with self.assertRaises(ValueError):
+            self.exercise(taxing_point_date=date(2025, 6, 1))
+
+    def test_a_foreign_market_value_is_converted_at_the_taxing_points_rate(self):
+        create_exchange_rate(self.account, 'USD', 'AUD', rate=Decimal('1.5'), exchange_date=date(2024, 3, 1))
+        create_exchange_rate(self.account, 'USD', 'AUD', rate=Decimal('1.6'), exchange_date=date(2024, 9, 2))
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(day=date(2024, 3, 1), exercise_price='0', brokerage='0', cost_base_basis='MARKET_VALUE',
+                      market_value=Money(Decimal('10'), 'USD'), taxing_point_date=date(2024, 9, 2))
+
+        buy = Buy.objects.get(exercise__isnull=False)
+        self.assertEqual(buy.exchange_rate.date, date(2024, 9, 2))
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('16000'), 'AUD'))
+
+    def test_start_up_shares_count_the_discount_from_the_grant(self):
+        """s115-30(1) item 9A: held 12 months counting from when the options were acquired."""
+        self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
+        self.exercise(day=date(2024, 6, 1), exercise_price='1.00', brokerage='0', cost_base_basis='START_UP')
+        self.sell_shares(day=date(2024, 12, 2), price='3.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.method, 'discount')
+        self.assertEqual(event.purchase_date, date(2023, 1, 10))
+        self.assertEqual(event.cost_base, Money(Decimal('1000'), 'AUD'))
+
+    def test_bought_options_count_the_discount_from_the_exercise(self):
+        self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
+        self.exercise(day=date(2024, 6, 1), exercise_price='1.00', brokerage='0')
+        self.sell_shares(day=date(2024, 12, 2), price='3.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.method, 'other')
+        self.assertEqual(event.purchase_date, date(2024, 6, 1))
+
+
 class OptionExerciseImportTests(OptionExerciseMixin, ImportWorkbookMixin, TransactionTestCase):
     """An exercise loads from an import template in date order, and restores from an export."""
 

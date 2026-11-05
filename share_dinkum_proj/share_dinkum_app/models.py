@@ -1498,6 +1498,33 @@ class Buy(Trade):
             is_active=True).select_related('parcel__buy__account')
         return sum((allocation.parcel.total_cost_base for allocation in allocations), zero)
 
+    @property
+    def ess_taxing_point(self) -> Date | None:
+        """The deferred employee scheme taxing point of shares an exercise wrote, or None."""
+        exercise = self.exercise if self.exercise_id is not None else None
+        return exercise.taxing_point if exercise is not None else None
+
+    @property
+    def acquired_for_cgt(self) -> Date:
+        """When the shares count as acquired for capital gains: the buy's date, except shares a
+        deferred employee scheme taxed after their exercise, as when held in escrow, which count
+        from that taxing point (s83A-125). The holding still has them from the buy's date."""
+        return self.ess_taxing_point or self.date
+
+    @property
+    def discount_counted_from(self) -> Date:
+        """When the CGT discount counts the shares as acquired: `acquired_for_cgt`, except shares
+        from a start-up's options, counted from when the options were (s115-30(1) item 9A).
+
+        Item 9A reaches the discount and its residency apportionment (ss 115-25, 115-105 to
+        115-115) and the 2027 residency test (s114-25(4)), not the 2027 split or indexation.
+        """
+        exercise = self.exercise if self.exercise_id is not None else None
+        if (exercise is not None and exercise.cost_base_basis == CostBaseBasis.START_UP
+                and self.option_buy is not None):
+            return self.option_buy.date
+        return self.acquired_for_cgt
+
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         """Delete the buy, and spread its share of any adjustment over the rest of the holding.
 
@@ -1699,12 +1726,17 @@ class OptionExercise(BaseModel):
         default=CostBaseBasis.ROLLOVER,
         help_text="How the shares get their cost base. ROLLOVER: what the options cost plus the "
                   "exercise price, for options bought or taxed upfront, and rights issues. "
-                  "MARKET_VALUE: a share's market value when exercised, for a deferred employee "
-                  "share scheme taxed at exercise.")
+                  "MARKET_VALUE: a share's market value at the taxing point, for a deferred "
+                  "employee share scheme taxed at or after exercise. START_UP: as ROLLOVER, with "
+                  "the CGT discount counted from when the options were acquired.")
     market_value = MoneyField(max_digits=21, decimal_places=6, null=True, blank=True,
         default_currency=DEFAULT_CURRENCY,
-        help_text='Market value of one share when exercised, as on your ESS statement. '
+        help_text='Market value of one share at the taxing point, as on your ESS statement. '
                   'MARKET_VALUE basis only.')
+    taxing_point_date = models.DateField(null=True, blank=True,
+        help_text='When the shares were free of any risk of forfeiture and free to sell, if later '
+                  'than the exercise, such as when an escrow ended. The shares count as acquired '
+                  'then (s83A-125). Blank = the exercise date. MARKET_VALUE basis only.')
     strategy = models.CharField(max_length=7, choices=EXERCISE_STRATEGIES, default=SellStrategy.FIFO,
         help_text='Which options are exercised, if they were bought at different times: FIFO '
                   'takes the first bought, LIFO the last.')
@@ -1717,6 +1749,13 @@ class OptionExercise(BaseModel):
     @property
     def shares_received(self) -> Decimal:
         return self.quantity_received or self.quantity
+
+    @property
+    def taxing_point(self) -> Date | None:
+        """A deferred employee scheme's taxing point for the shares (s83A-120), or None."""
+        if self.cost_base_basis != CostBaseBasis.MARKET_VALUE:
+            return None
+        return self.taxing_point_date or self.date
 
     def share_price(self) -> Money:
         """The price per share the buy of the shares is entered at.
@@ -1756,6 +1795,11 @@ class OptionExercise(BaseModel):
                 f'form to "{LegalForm.RIGHT_OPTION.label}" first.')
         if self.cost_base_basis == CostBaseBasis.MARKET_VALUE and self.market_value is None:
             problems.append('Give the market value of one share, for the MARKET_VALUE basis.')
+        if self.taxing_point_date is not None:
+            if self.cost_base_basis != CostBaseBasis.MARKET_VALUE:
+                problems.append('A taxing point date is for the MARKET_VALUE basis only.')
+            elif self.date and self.taxing_point_date < self.date:
+                problems.append('The taxing point cannot be before the exercise.')
         return problems
 
     def clean(self) -> None:
