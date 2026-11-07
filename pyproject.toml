@@ -48,6 +48,7 @@ dev = [
     "pandas-stubs>=2.2.0",
     "types-openpyxl>=3.1.0",
     "types-requests>=2.32.0",
+    "tblib>=3.2.2",
 ]
 
 [tool.mypy]

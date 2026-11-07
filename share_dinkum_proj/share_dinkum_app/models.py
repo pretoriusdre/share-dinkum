@@ -1600,11 +1600,12 @@ class Sell(Trade):
 
     
     strategy = models.CharField(
-        max_length=7,
+        max_length=12,
         choices=SellStrategy.choices,
         default=SellStrategy.MIN_CGT,
-        help_text='How the sale picks the parcels it consumes. MANUAL means you give the '
-                  'allocations yourself.',
+        help_text='How the sale picks the parcels it consumes. MIN_CGT and MAX_CGT rank parcels by '
+                  'their gain after the discount, MIN_GROSS and MAX_GROSS by their gain before it '
+                  '(their cost base). MANUAL means you give the allocations yourself.',
     )
 
     STRUCTURAL_FIELDS: tuple[str, ...] = Trade.STRUCTURAL_FIELDS + ('strategy',)

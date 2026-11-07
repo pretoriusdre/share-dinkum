@@ -33,7 +33,7 @@ class BuyFact:
     date: date
     quantity: Decimal
     legacy_id: str | None
-    #: Price and brokerage per unit in the portfolio currency, for a MIN_CGT sale to rank by.
+    #: Price and brokerage per unit in the portfolio currency, for a gain-ranked sale to rank by.
     unit_price: Decimal | None = None
     unit_brokerage: Decimal | None = None
     #: When the CGT discount counts from, where not `date` (`Buy.discount_counted_from`).
@@ -52,7 +52,7 @@ class SaleFact:
     quantity: Decimal
     strategy: str
     legacy_id: str | None
-    #: Net proceeds per unit in the portfolio currency, for MIN_CGT.
+    #: Net proceeds per unit in the portfolio currency, for MIN_CGT and MAX_CGT.
     unit_proceeds: Decimal | None = None
 
     def label(self) -> str:
@@ -110,7 +110,7 @@ class Facts:
     #: adjustment id -> {parcel lineage: amount}: the same, on each stored parcel. The replay
     #: follows these where its parcels match the stored ones, so a rebuild changes no amount.
     pinned_parts: dict[Any, dict[Lineage, Decimal]] = field(default_factory=dict)
-    #: Ranks a MIN_CGT parcel: (sale, buy, unit cost base) -> net gain per unit after discount.
+    #: Ranks a MIN_CGT or MAX_CGT parcel: (sale, buy, unit cost base) -> net gain per unit after discount.
     net_gain_per_unit: Callable[[SaleFact, BuyFact, Decimal], Any] | None = None
 
 
@@ -185,7 +185,7 @@ def load(account: 'Account', instrument: 'Instrument | None' = None,
             facts.pinned_spreads[key] = facts.pinned_spreads.get(key, Decimal('0')) + part.amount
 
     def net_gain_per_unit(sale: SaleFact, buy: BuyFact, unit_cost_base: Decimal) -> Any:
-        """As the MIN_CGT signal ranks a parcel: the reports' discount on the gain per unit."""
+        """As the MIN_CGT and MAX_CGT signal ranks a parcel: the reports' discount on the gain per unit."""
         return cgt.apply_discount(
             Money((sale.unit_proceeds or Decimal('0')) - unit_cost_base, currency),
             purchase_date=buy.discount_from or buy.date, sale_date=sale.date, account=account)

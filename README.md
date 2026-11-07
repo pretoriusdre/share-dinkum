@@ -58,8 +58,11 @@ Income is entered as **[Dividend]** and **[Distribution]** objects, and classifi
 **[FiscalYear]** according to the account's **[FiscalYearType]**.
 
 A **[Sell]** is allocated against parcels by a strategy: FIFO (first in, first out), LIFO (last in,
-first out), MIN_CGT (minimise net capital gain) or MANUAL (you create the allocations, usually only
-when importing legacy data). The sell creates **[SellAllocation]** objects linking it to parcels.
+first out), MIN_CGT or MAX_CGT (minimise or maximise net capital gain, ranking parcels by their gain
+per unit after the discount), MIN_GROSS or MAX_GROSS (minimise or maximise the gain before the
+discount: highest or lowest cost base first), or MANUAL (you create the allocations, usually only
+when importing legacy data). From 1 July 2027 the net ranking still applies the discount rule only,
+not indexation. The sell creates **[SellAllocation]** objects linking it to parcels.
 Each allocation is a capital gain or loss, classified into a **[FiscalYear]**.
 
 When a **[SellAllocation]** does not consume a whole parcel, the parcel is bifurcated: it is marked
