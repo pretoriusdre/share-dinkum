@@ -26,6 +26,11 @@ REASON_TEMPORARY_RESIDENT = 's768-915: temporary resident, asset is not taxable 
 REASON_TRUST_ATTRIBUTION = 's855-40(2) and s276-55: foreign resident member, gain not attributable to taxable Australian property'
 REASON_MIT_WITHHOLDING = 's840-815: foreign resident member, MIT withholding tax on the gain is final'
 
+#: The reasons a gain is disregarded because of the holder's residency: what the CGT schedule's
+#: "capital gains disregarded by a foreign resident" counts.
+RESIDENCY_REASONS = (REASON_FOREIGN_RESIDENT, REASON_TEMPORARY_RESIDENT, REASON_TRUST_ATTRIBUTION,
+                     REASON_MIT_WITHHOLDING)
+
 
 def instrument_tap_status(instrument: 'Instrument | None') -> str | None:
     """TAP or NTAP if the instrument decides it alone, else None (the normal case).

@@ -90,6 +90,17 @@ class SellStrategy(models.TextChoices):
     MANUAL = 'MANUAL', 'Manually create allocations'
 
 
+class CostBaseBasis(models.TextChoices):
+    """How the shares from exercising options get their cost base."""
+
+    #: s134-1(1) item 1 and s130-40: what the options cost, plus the exercise price.
+    ROLLOVER = 'ROLLOVER', "The options' cost base plus the exercise price"
+    #: s83A-125: a deferred employee scheme whose taxing point is the exercise, or after it.
+    MARKET_VALUE = 'MARKET_VALUE', 'Market value at the taxing point (deferred employee share scheme)'
+    #: ROLLOVER, with the discount counted from when the options were acquired (s115-30(1) item 9A).
+    START_UP = 'START_UP', 'Start-up concession: as ROLLOVER, the discount counted from the grant'
+
+
 class AllocationMethod(models.TextChoices):
     """How a cost base adjustment is spread across parcels."""
 

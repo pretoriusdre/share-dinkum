@@ -24,6 +24,12 @@ erDiagram
     Instrument ||--o{ Distribution : "pays"
     Instrument ||--o{ CostBaseAdjustment : "adjusted by"
     Instrument ||--o{ ShareSplit : "split by"
+    Instrument ||--o{ OptionExercise : "exercised by"
+    Instrument ||--o{ OptionExercise : "received from"
+
+    OptionExercise ||--|| Sell : "sells the options via"
+    OptionExercise ||--o{ Buy : "buys the shares via"
+    Buy |o--o{ Buy : "options exercised into"
 
     Buy ||--o{ Parcel : "creates"
     Parcel ||--o{ Parcel : "bifurcates into"
@@ -79,6 +85,7 @@ erDiagram
         decimal quantity
         money unit_price
         money total_brokerage
+        boolean is_deferred_ess
     }
     Sell {
         date date
@@ -125,6 +132,17 @@ erDiagram
         date date
         decimal quantity_before
         decimal quantity_after
+    }
+    OptionExercise {
+        date date
+        decimal quantity
+        decimal quantity_received
+        money exercise_price
+        money total_brokerage
+        string cost_base_basis
+        money market_value
+        date taxing_point_date
+        string strategy
     }
     ExchangeRate {
         date date

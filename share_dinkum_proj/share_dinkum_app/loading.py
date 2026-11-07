@@ -357,6 +357,8 @@ class DataLoader():
             'Instrument': share_dinkum_app.models.Instrument,
             'InstrumentValuation': share_dinkum_app.models.InstrumentValuation,
             'InstrumentPriceHistory': share_dinkum_app.models.InstrumentPriceHistory,
+            # Before the trades it wrote, which name it.
+            'OptionExercise': share_dinkum_app.models.OptionExercise,
             'Buy': share_dinkum_app.models.Buy,
             'Sell': share_dinkum_app.models.Sell,
             'Parcel': share_dinkum_app.models.Parcel,
@@ -379,7 +381,8 @@ class DataLoader():
 
     #: From an import template these are loaded as one timeline in date order, not table by
     #: table. See `load_timeline`.
-    TIMELINE_TABLES: tuple[str, ...] = ('Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment')
+    TIMELINE_TABLES: tuple[str, ...] = (
+        'Sell', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment', 'OptionExercise')
 
     def is_template(self) -> bool:
         """Whether the app derives parcels and allocations from this file (an import template).
@@ -469,12 +472,15 @@ class DataLoader():
         }
 
     def load_timeline(self) -> None:
-        """Load sales (each with its pinned allocations), splits and adjustments in date order.
+        """Load sales (each with its pinned allocations), splits, option exercises and
+        adjustments in date order.
 
         Each is worked out from the holding as it stood on its date: a sale after a split has
         to find the split parcels, and a sale before it the parcels as they were. Loaded
         table by table, every sale was allocated before any split, in row order, and a
-        "minimise capital gain" sale ranked parcels before their adjustments existed.
+        "minimise capital gain" sale ranked parcels before their adjustments existed. An
+        exercise is a sale of options and a buy of shares, so a later sale of those shares has
+        to find them.
         """
         prepared: dict[str, PreparedTable] = {}
         for name in self.TIMELINE_TABLES:
@@ -485,11 +491,13 @@ class DataLoader():
 
         self.check_pinned_allocations(prepared)
 
-        # On one date: a split first, since a sale on its ex-date is in post-split units, and
-        # an adjustment last, since it is spread over the year's holdings.
+        # On one date: a split first, since a sale on its ex-date is in post-split units, then an
+        # exercise, whose shares a sale that day can sell, and an adjustment last, since it is
+        # spread over the year's holdings.
         events: list[tuple[Any, int, int, str, Any]] = []
-        for rank, name, date_column in ((0, 'ShareSplit', 'date'), (1, 'Sell', 'date'),
-                                        (2, 'CostBaseAdjustment', 'financial_year_end_date')):
+        for rank, name, date_column in ((0, 'ShareSplit', 'date'), (1, 'OptionExercise', 'date'),
+                                        (2, 'Sell', 'date'),
+                                        (3, 'CostBaseAdjustment', 'financial_year_end_date')):
             if name not in prepared:
                 continue
             _, df, _ = prepared[name]

@@ -4,6 +4,48 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
+## Unreleased
+
+### Added
+
+- **Exercise options or rights into shares** with an **Option exercise**: the options, the shares
+  received, the date, the number exercised and received, the exercise price and the fees. It writes
+  the sale of the options and the buy of the shares, and the shares' cost base carries what the
+  options cost (s134-1), shown on the CGT report as `option_cost_base`. Exercising makes no capital
+  gain. Options bought at different prices give shares with different cost bases.
+  - A deferred employee share scheme uses the **market value** basis instead: the shares' cost
+    base is their market value at the taxing point (s83A-125), and the exercise shows the discount
+    that implies, to compare with the ESS statement. Shares held in escrow after the exercise take
+    a **taxing point date**: they count as acquired then, so the discount's 12 months run from it.
+  - Shares sold within 30 days of a deferred scheme's taxing point make no capital gain or loss
+    (s83A-120(3), s130-80(1)): the CGT report lists them as disregarded, as ESS income, and keeps
+    them out of the schedule and out of its foreign resident label.
+  - The **start-up concession** basis: the cost base as for options bought, with the discount
+    counted from when the options were acquired (s115-30(1) item 9A).
+  - A buy of shares from a deferred employee share plan can be marked **Is deferred ess**, so a
+    sale within 30 days of it makes no capital gain either (s83A-115(3)).
+  - The trades it writes are read-only, and change with it. It is refused if fewer options were
+    held than it exercises; deleting it is refused once its shares are sold.
+  - It loads from the import template's new optional **OptionExercise** table, in date order with
+    the sales, and restores from an export.
+  - With the 2027 regime on, exercising options held on 30 June 2027 realises their deferred gain
+    (s112-160), and the shares carry the options' 1 July 2027 value, indexed from then (s114-15(5)).
+  - `repair_portfolio_data` writes again the trades of an exercise that no longer matches them.
+
+- **How to record options, rights issues and employee share schemes**
+  ([docs/options_and_employee_shares.md](docs/options_and_employee_shares.md)): which cost base
+  basis each case takes and what the options cost, shares granted under an employee share plan,
+  and the taxing point that leaving a job was until 30 June 2022.
+
+### Fixed
+
+- **A price refresh no longer fetches prices for an instrument on an unlisted market.** It asked
+  the provider for the instrument's name as a ticker, which with no market suffix is a US code, so
+  an employee option could be given another company's prices. `refetch_price_history` and
+  `suggest_instrument_classification --use-market-data` pass such instruments over too. The
+  dashboard warns of prices already fetched that way, and `repair_portfolio_data` deletes them with
+  the instrument's current price.
+
 ## 0.7.0 - 2026-10-23
 
 ### Added

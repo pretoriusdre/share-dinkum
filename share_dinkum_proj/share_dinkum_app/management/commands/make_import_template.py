@@ -26,6 +26,7 @@ TEMPLATE_MODELS = [
     app_models.Sell,
     app_models.SellAllocation,
     app_models.ShareSplit,
+    app_models.OptionExercise,
     app_models.CostBaseAdjustment,
     app_models.Dividend,
     app_models.Distribution,
@@ -40,6 +41,7 @@ TEMPLATE_MODELS = [
 # each can be entered in the app later, so they are marked as optional on the index sheet and given
 # a grey tab. An empty table loads nothing.
 OPTIONAL_MODELS: set[type[Model]] = {
+    app_models.OptionExercise,
     app_models.ResidencyPeriod,
     app_models.InstrumentValuation,
     app_models.CapitalLossCarryForward,
