@@ -17,21 +17,29 @@ T = TypeVar('T')
 # --- sales ---------------------------------------------------------------------------------
 
 def order_for_sale(strategy: str, candidates: Sequence[T], *, buy_date: Callable[[T], date],
-                   tie: Callable[[T], Any], net_gain_per_unit: Callable[[T], Any] | None = None) -> list[T]:
+                   tie: Callable[[T], Any], net_gain_per_unit: Callable[[T], Any] | None = None,
+                   unit_cost_base: Callable[[T], Any] | None = None) -> list[T]:
     """`candidates` in the order `strategy` takes them. Ties go by `tie`, the order they were made.
 
-    FIFO takes the earliest bought, LIFO the latest, and MIN_CGT the smallest gain per unit after
-    the discount, which `net_gain_per_unit` gives.
+    FIFO takes the earliest bought, LIFO the latest. MIN_CGT takes the smallest gain per unit after
+    the discount, which `net_gain_per_unit` gives, and MAX_CGT the largest. One sale's proceeds are
+    the same for every parcel, so the gain before the discount goes by `unit_cost_base` alone:
+    MIN_GROSS takes the highest cost base first and MAX_GROSS the lowest.
     """
     by_tie = sorted(candidates, key=tie)
+    # A stable sort keeps ties in order, reversed or not.
     if strategy == SellStrategy.FIFO:
         return sorted(by_tie, key=buy_date)
     if strategy == SellStrategy.LIFO:
-        return sorted(by_tie, key=buy_date, reverse=True)  # A stable sort keeps ties in order.
-    if strategy == SellStrategy.MIN_CGT:
+        return sorted(by_tie, key=buy_date, reverse=True)
+    if strategy in (SellStrategy.MIN_CGT, SellStrategy.MAX_CGT):
         if net_gain_per_unit is None:
-            raise ValueError('MIN_CGT needs the gain per unit of each parcel.')
-        return sorted(by_tie, key=net_gain_per_unit)
+            raise ValueError(f'{strategy} needs the gain per unit of each parcel.')
+        return sorted(by_tie, key=net_gain_per_unit, reverse=strategy == SellStrategy.MAX_CGT)
+    if strategy in (SellStrategy.MIN_GROSS, SellStrategy.MAX_GROSS):
+        if unit_cost_base is None:
+            raise ValueError(f'{strategy} needs the cost base per unit of each parcel.')
+        return sorted(by_tie, key=unit_cost_base, reverse=strategy == SellStrategy.MIN_GROSS)
     raise ValueError(f'No parcels are chosen automatically for a {strategy} sale.')
 
 

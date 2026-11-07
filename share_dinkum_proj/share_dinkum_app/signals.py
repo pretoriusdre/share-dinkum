@@ -125,7 +125,7 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
     ).select_related('buy'))
 
     net_gain_per_unit = None
-    if instance.strategy == SellStrategy.MIN_CGT:
+    if instance.strategy in (SellStrategy.MIN_CGT, SellStrategy.MAX_CGT):
         unit_proceeds = instance.unit_proceeds
 
         def net_gain_per_unit(parcel: Parcel) -> Any:
@@ -140,7 +140,8 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
 
     ordered = strategies.order_for_sale(
         instance.strategy, candidates, buy_date=lambda parcel: parcel.buy.date,
-        tie=lambda parcel: str(parcel.pk), net_gain_per_unit=net_gain_per_unit)
+        tie=lambda parcel: str(parcel.pk), net_gain_per_unit=net_gain_per_unit,
+        unit_cost_base=lambda parcel: parcel.unit_cost_base)
 
     taken, quantity_to_allocate = strategies.take(instance.quantity, (
         (parcel, parcel.parcel_quantity) for parcel in ordered

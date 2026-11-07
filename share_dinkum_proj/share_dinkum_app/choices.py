@@ -87,6 +87,9 @@ class SellStrategy(models.TextChoices):
     FIFO = 'FIFO', 'First-in, First-out'
     LIFO = 'LIFO', 'Last-in, First out'
     MIN_CGT = 'MIN_CGT', 'Minimise net capital gain'
+    MAX_CGT = 'MAX_CGT', 'Maximise net capital gain'
+    MIN_GROSS = 'MIN_GROSS', 'Minimise gain before discount (highest cost base first)'
+    MAX_GROSS = 'MAX_GROSS', 'Maximise gain before discount (lowest cost base first)'
     MANUAL = 'MANUAL', 'Manually create allocations'
 
 

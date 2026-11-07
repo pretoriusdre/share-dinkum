@@ -37,6 +37,12 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   basis each case takes and what the options cost, shares granted under an employee share plan,
   and the taxing point that leaving a job was until 30 June 2022.
 
+- **Three more sale strategies.** MAX_CGT (maximise net capital gain) takes the parcels with the
+  largest gain per unit after the discount first, the opposite of MIN_CGT. MIN_GROSS and MAX_GROSS
+  rank parcels by their gain before the discount: MIN_GROSS takes the highest cost base first,
+  MAX_GROSS the lowest. As with MIN_CGT, the net ranking after 1 July 2027 applies the discount
+  rule only, not indexation.
+
 ### Changed
 
 - **Unfranked CFI is its own line on a trust's annual statement**, apart from unfranked distributions, so a foreign resident's conduit foreign income stays visible. It still counts on label 13U for a resident.

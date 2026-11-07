@@ -2746,7 +2746,8 @@ class CostBaseAllocationReconciliationTests(TransactionTestCase):
 
 
 class MinCGTSelectionTests(TransactionTestCase):
-    """Which parcels the MIN_CGT strategy picks, ranked by discounted gain per unit."""
+    """Which parcels the gain strategies pick: MIN_CGT and MAX_CGT ranked by discounted gain per
+    unit, MIN_GROSS and MAX_GROSS by unit cost base."""
 
     def _account_with_parcels(self):
         """Three parcels: two long held at different cost bases, one bought recently."""
@@ -2801,6 +2802,32 @@ class MinCGTSelectionTests(TransactionTestCase):
         self.assertEqual(allocations[date(2020, 1, 15)], Decimal('100'))  # then discounted
         self.assertEqual(allocations[date(2024, 9, 1)], Decimal('50'))    # remainder
 
+    def _allocated(self, strategy, quantity='150'):
+        """{buy date: units} a sale on 1 October 2024 at $10 takes with `strategy`."""
+        account, instrument = self._account_with_parcels()
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 10, 1),
+            quantity=Decimal(quantity), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy=strategy,
+        )
+        return {a.parcel.buy.date: a.quantity for a in sell.sale_allocation.filter(is_active=True)}
+
+    # Per unit: old_cheap gains $5.00 ($2.50 after the discount), old_dear $1.00 ($0.50), recent
+    # $3.00 (no discount). Their cost bases are $5, $9 and $7.
+    CHEAP, DEAR, RECENT = date(2020, 1, 15), date(2020, 6, 15), date(2024, 9, 1)
+
+    def test_min_cgt_takes_the_smallest_gains_after_the_discount(self):
+        self.assertEqual(self._allocated('MIN_CGT'), {self.DEAR: Decimal('100'), self.CHEAP: Decimal('50')})
+
+    def test_max_cgt_takes_the_largest_gains_after_the_discount(self):
+        self.assertEqual(self._allocated('MAX_CGT'), {self.RECENT: Decimal('100'), self.CHEAP: Decimal('50')})
+
+    def test_min_gross_takes_the_highest_cost_base_first(self):
+        self.assertEqual(self._allocated('MIN_GROSS'), {self.DEAR: Decimal('100'), self.RECENT: Decimal('50')})
+
+    def test_max_gross_takes_the_lowest_cost_base_first(self):
+        self.assertEqual(self._allocated('MAX_GROSS'), {self.CHEAP: Decimal('100'), self.RECENT: Decimal('50')})
+
     def test_holding_period_no_longer_depends_on_a_leap_day(self):
         """A leap day inside the holding no longer changes eligibility."""
         # Spans 29 February 2024: 366 days, and formerly eligible on that basis alone.
@@ -2816,6 +2843,11 @@ class MinCGTSelectionTests(TransactionTestCase):
         # A day past the anniversary qualifies in both cases.
         self.assertTrue(cgt.is_discount_eligible(date(2023, 3, 1), date(2024, 3, 2)))
         self.assertTrue(cgt.is_discount_eligible(date(2022, 3, 1), date(2023, 3, 2)))
+
+
+@override_settings(HOLDINGS_WRITER='signals')
+class MinCGTSelectionSignalsTests(MinCGTSelectionTests):
+    """The same choices made by the creation signals rather than the replay."""
 
 
 # =============================================================================
@@ -4233,6 +4265,38 @@ class HoldingStrategyTests(TestCase):
         self.assertEqual(order('FIFO'), ['c', 'a', 'b'])
         self.assertEqual(order('LIFO'), ['a', 'b', 'c'])
 
+    def test_gain_strategies_order_by_net_gain_or_cost_base(self):
+        """Gross and net orders differ when the discount reaches one parcel and not another."""
+        from share_dinkum_app.holdings import strategies
+        # (name, net gain per unit, unit cost base): 'long' has the largest gain before the
+        # discount, but halved it falls below 'short', bought within the year.
+        candidates = [('long', Decimal('2.50'), Decimal('5')), ('short', Decimal('3.00'), Decimal('7')),
+                      ('dear', Decimal('0.50'), Decimal('9'))]
+        order = lambda strategy: [name for name, _, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: date(2020, 1, 1), tie=lambda c: c[0],
+            net_gain_per_unit=lambda c: c[1], unit_cost_base=lambda c: c[2])]
+        self.assertEqual(order('MIN_CGT'), ['dear', 'long', 'short'])
+        self.assertEqual(order('MAX_CGT'), ['short', 'long', 'dear'])
+        self.assertEqual(order('MIN_GROSS'), ['dear', 'short', 'long'])
+        self.assertEqual(order('MAX_GROSS'), ['long', 'short', 'dear'])
+
+    def test_gain_strategies_break_ties_in_the_order_made(self):
+        from share_dinkum_app.holdings import strategies
+        candidates = [('b', Decimal('1')), ('a', Decimal('1')), ('c', Decimal('2'))]
+        order = lambda strategy: [name for name, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: date(2020, 1, 1), tie=lambda c: c[0],
+            net_gain_per_unit=lambda c: c[1], unit_cost_base=lambda c: c[1])]
+        self.assertEqual(order('MIN_CGT'), ['a', 'b', 'c'])
+        self.assertEqual(order('MAX_CGT'), ['c', 'a', 'b'])
+        self.assertEqual(order('MIN_GROSS'), ['c', 'a', 'b'])
+        self.assertEqual(order('MAX_GROSS'), ['a', 'b', 'c'])
+
+    def test_gain_strategies_need_their_ranking(self):
+        from share_dinkum_app.holdings import strategies
+        for strategy in ('MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS'):
+            with self.subTest(strategy=strategy), self.assertRaises(ValueError):
+                strategies.order_for_sale(strategy, ['a'], buy_date=lambda c: date(2020, 1, 1), tie=str)
+
     def test_take_reports_what_is_left_over(self):
         from share_dinkum_app.holdings import strategies
         taken, left = strategies.take(Decimal('25'), [('a', Decimal('10')), ('b', Decimal('5'))])
@@ -5076,7 +5140,7 @@ class DropdownTests(TestCase):
         lists = {name: [cell.value for cell in column[1:] if cell.value]
                  for name, column in ((column[0].value, column) for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns)}
 
-        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS', 'MANUAL'])
         self.assertEqual(lists['Dividend.dividend_type'], ['LOCAL', 'FOREIGN'])
         self.assertEqual(lists['ResidencyPeriod.status'], ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
         self.assertIn('AUD', lists['currency'])
@@ -9814,7 +9878,7 @@ class VocabularyTests(TransactionTestCase):
             ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
         self.assertEqual(
             [c.value for c in choices.SellStrategy],
-            ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+            ['FIFO', 'LIFO', 'MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS', 'MANUAL'])
         self.assertEqual(
             [c.value for c in choices.LegalFormSource],
             ['DEFAULT', 'SUGGESTED', 'USER'])
