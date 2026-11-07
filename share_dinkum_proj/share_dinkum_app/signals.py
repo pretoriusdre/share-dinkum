@@ -17,13 +17,13 @@ from djmoney.money import Money
 
 from share_dinkum_app import portfolio_export
 from share_dinkum_app import cgt
-from share_dinkum_app.holdings import live, strategies
+from share_dinkum_app.holdings import exercise as exercise_module, live, strategies
 from share_dinkum_app.choices import (
     AllocationMethod, LegalForm, LegalFormSource, SellStrategy,
 )
 from share_dinkum_app.utils import convert_to_decimal_field
 
-from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, Account, ExchangeRate, Market, Instrument
+from .models import BaseModel, Sell, Buy, Parcel, SellAllocation, ShareSplit, CostBaseAdjustment, CostBaseAdjustmentAllocation, DataExport, Account, ExchangeRate, Market, Instrument, OptionExercise
 
 import logging
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
     ).select_related('buy'))
 
     net_gain_per_unit = None
-    if instance.strategy == SellStrategy.MIN_CGT:
+    if instance.strategy in (SellStrategy.MIN_CGT, SellStrategy.MAX_CGT):
         unit_proceeds = instance.unit_proceeds
 
         def net_gain_per_unit(parcel: Parcel) -> Any:
@@ -133,14 +133,15 @@ def create_sell_allocations(sender: type[Model], instance: Sell, created: bool, 
             capital_gain = unit_proceeds - parcel.unit_cost_base
             return cgt.apply_discount(
                 capital_gain,
-                purchase_date=parcel.buy.date,
+                purchase_date=parcel.buy.discount_counted_from,
                 sale_date=instance.date,
                 account=instance.account,
             )
 
     ordered = strategies.order_for_sale(
         instance.strategy, candidates, buy_date=lambda parcel: parcel.buy.date,
-        tie=lambda parcel: str(parcel.pk), net_gain_per_unit=net_gain_per_unit)
+        tie=lambda parcel: str(parcel.pk), net_gain_per_unit=net_gain_per_unit,
+        unit_cost_base=lambda parcel: parcel.unit_cost_base)
 
     taken, quantity_to_allocate = strategies.take(instance.quantity, (
         (parcel, parcel.parcel_quantity) for parcel in ordered
@@ -574,6 +575,77 @@ def calculated_sources(model: type[Model]) -> list[tuple[str, str]]:
                 pairs.append((field.name, source))
         sources = _calculated_sources[model] = sorted(pairs, key=lambda pair: pair[1])
     return sources
+
+
+#: What an option exercise sets on the records it writes (`holdings.exercise`), and the replay on
+#: the allocations of its sale. Changing one other than through the exercise is refused.
+EXERCISE_RECORD_FIELDS: dict[type[Model], tuple[str, ...]] = {
+    Buy: ('instrument', 'date', 'quantity', 'unit_price', 'unit_price_currency', 'total_brokerage',
+          'total_brokerage_currency', 'exchange_rate', 'exercise', 'option_buy', 'is_deferred_ess'),
+    Sell: ('instrument', 'date', 'quantity', 'unit_price', 'unit_price_currency', 'total_brokerage',
+           'total_brokerage_currency', 'strategy', 'exercise'),
+    SellAllocation: ('parcel', 'sell', 'quantity', 'is_active'),
+}
+
+
+def _owning_exercise(sender: type[Model], instance: Model) -> Any:
+    """The id of the option exercise that wrote this trade, or whose sale this allocation is of."""
+    if sender is SellAllocation:
+        sell_id = getattr(instance, 'sell_id', None)
+        cached: Any = SellAllocation._meta.get_field('sell')
+        sell = cached.get_cached_value(instance, default=None)  # Saving one loads its sale.
+        if sell is not None and sell.pk == sell_id:
+            return sell.exercise_id
+        return (Sell.objects.filter(pk=sell_id).values_list('exercise_id', flat=True).first()
+                if sell_id else None)
+    return getattr(instance, 'exercise_id', None)
+
+
+def _refuse_for_exercise(instance: Model, exercise_id: Any, doing: str) -> None:
+    exercise = OptionExercise.objects.filter(pk=exercise_id).first()
+    raise live.HoldingsRefused(
+        f'This {instance._meta.verbose_name} belongs to the option exercise "{exercise}", so it '
+        f'cannot be {doing} on its own. Change or delete the exercise instead.')
+
+
+def _exercise_is_writing() -> bool:
+    # The exercise's own writer, or the replay's, which takes the options for its sale afresh.
+    return exercise_module.writing_now() or live.rebuilding()
+
+
+@receiver(pre_save)
+def keep_exercise_records(sender: type[Model], instance: Model, raw: bool = False,
+                          update_fields: Iterable[str] | None = None, **kwargs: Any) -> None:
+    """An option exercise's trades, and its sale's allocations, change only with the exercise.
+
+    A save that changes none of what the exercise set (storing figures, a recalculation) passes.
+    """
+    if raw or sender not in EXERCISE_RECORD_FIELDS or _exercise_is_writing():
+        return
+    fields: list[Any] = [sender._meta.get_field(name) for name in EXERCISE_RECORD_FIELDS[sender]]
+    if update_fields is not None:
+        names = {name for field in fields for name in (field.name, field.attname)}
+        if not names & set(update_fields):
+            return
+    exercise_id = _owning_exercise(sender, instance)
+    if exercise_id is None:
+        return
+    stored = None if instance._state.adding else sender._default_manager.filter(
+        pk=instance.pk).values(*[field.attname for field in fields]).first()
+    if stored is None or any(
+            field.to_python(stored[field.attname]) != field.to_python(getattr(instance, field.attname))
+            for field in fields):
+        _refuse_for_exercise(instance, exercise_id, 'added or changed')
+
+
+@receiver(pre_delete)
+def keep_exercise_records_on_delete(sender: type[Model], instance: Model, **kwargs: Any) -> None:
+    """Before the holdings receivers, so a refused delete switches no sale to MANUAL."""
+    if sender not in EXERCISE_RECORD_FIELDS or _exercise_is_writing():
+        return
+    exercise_id = _owning_exercise(sender, instance)
+    if exercise_id is not None:
+        _refuse_for_exercise(instance, exercise_id, 'deleted')
 
 
 #: Per fact, the fields a holding is worked out from. Changing one rebuilds the instrument.

@@ -63,7 +63,9 @@ class Command(BaseCommand):
                     continue
 
                 market_data = None
-                if options['use_market_data']:
+                # An unlisted holding's name is not its ticker: the provider would describe
+                # whichever security happens to trade under it.
+                if options['use_market_data'] and instrument.market.is_exchange_listed:
                     market_data = self._market_data(instrument)
 
                 # What the holding has actually paid is better evidence than any list of

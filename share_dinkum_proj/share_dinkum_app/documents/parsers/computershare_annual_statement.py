@@ -42,7 +42,7 @@ GROSS = 'gross amount'
 NIL_ONLY = {'net exempt income'}
 LINES: dict[str, str | None] = {
     'unfranked distributions': 'UNFRANKED_DISTRIBUTION',
-    'unfranked cfi distributions': 'UNFRANKED_DISTRIBUTION',
+    'unfranked cfi distributions': 'UNFRANKED_CFI_DISTRIBUTION',
     'interest': 'INTEREST',
     'interest - subject to non resident wht': 'INTEREST',
     'interest - not subject to non resident wht': 'INTEREST',
@@ -95,7 +95,7 @@ LINES: dict[str, str | None] = {
 }
 # The CGT concession amount is cash only: its taxable income column is always nil.
 FIRST_COLUMN = {'CGT_CONCESSION'}
-INCOME = ('UNFRANKED_DISTRIBUTION', 'INTEREST', 'OTHER_INCOME')
+INCOME = ('UNFRANKED_DISTRIBUTION', 'UNFRANKED_CFI_DISTRIBUTION', 'INTEREST', 'OTHER_INCOME')
 
 
 def recognises(doc: Document) -> bool:

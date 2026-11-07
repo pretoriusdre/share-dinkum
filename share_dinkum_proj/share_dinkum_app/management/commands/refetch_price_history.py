@@ -42,7 +42,12 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(str(account)))
 
         kept = []
-        for instrument in Instrument.objects.filter(account=account, is_active=True).order_by('name'):
+        instruments = Instrument.objects.filter(
+            account=account, is_active=True).select_related('market').order_by('name')
+        for instrument in instruments:
+            if not instrument.market.is_exchange_listed:
+                # Never fetched, so nothing it holds was stored adjusted by a provider.
+                continue
             stored = InstrumentPriceHistory.objects.filter(account=account, instrument=instrument)
             held = stored.count()
             start = (stored.aggregate(first=Min('date'))['first']

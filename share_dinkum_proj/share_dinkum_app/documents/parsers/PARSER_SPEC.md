@@ -113,7 +113,9 @@ def parse(doc: Document) -> list[Extracted]:
     tax return summary (Part A, labels 13Q, 13A and 20O) where the statement has one, as the
     columns of Part B do not always say which figure is which.
   - Where the statement splits one component over several lines, such as NCMI and clean building
-    MIT income, or interest subject and not subject to withholding, give the lines' sum.
+    MIT income, or interest subject and not subject to withholding, give the lines' sum. The
+    exception is unfranked conduit foreign income (CFI): it is `UNFRANKED_CFI_DISTRIBUTION`, apart
+    from `UNFRANKED_DISTRIBUTION`, since a foreign resident pays no withholding on it.
   - Then a `CostBaseAdjustment`, even when nil: the AMIT cost base net amount, the increase less
     the decrease; before AMIT, minus the tax-deferred amount. Give none if the statement states
     neither.

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from djmoney.money import Money
 
 from share_dinkum_app.choices import CGTAssetCategory, TaxpayerType
-from share_dinkum_app.cgt import discount, events as events_module, residency
+from share_dinkum_app.cgt import discount, events as events_module, residency, tap as tap_module
 from share_dinkum_app.clock import reporting_date
 from share_dinkum_app.constants import (
     CGT_LOSS_ABSORPTION_ORDER,
@@ -57,6 +57,8 @@ class Schedule:
     lines: list[ScheduleLine]
     gross_gains: Money
     gross_losses: Money
+    #: Disregarded for the holder's residency: the schedule's foreign resident label. A gain
+    #: disregarded for another reason, such as an ESS 30-day sale, is in neither this nor the gains.
     disregarded_gains: Money
     current_year_losses_applied: Money
     prior_year_losses_applied: Money
@@ -190,7 +192,8 @@ def build(account: 'Account', fiscal_year: 'FiscalYearRef', prior_year_losses: M
 
     gross_gains = sum((e.gross_gain for e in live if e.gross_gain), zero)
     gross_losses = sum((e.gross_loss for e in live if e.gross_loss), zero)
-    disregarded_gains = sum((e.gross_gain for e in disregarded if e.gross_gain), zero)
+    disregarded_gains = sum((e.gross_gain for e in disregarded
+                             if e.gross_gain and e.disregard_reason in tap_module.RESIDENCY_REASONS), zero)
 
     # (amount, discount percentage) per gain, grouped by category.
     by_category: dict[str, list[tuple[Decimal, Decimal]]] = {}

@@ -222,13 +222,14 @@ class _Replay:
             return parcel.quantity - reserved * parcel.multiplier
 
         net_gain = None
-        if sale.strategy == SellStrategy.MIN_CGT and self.facts.net_gain_per_unit is not None:
+        if (sale.strategy in (SellStrategy.MIN_CGT, SellStrategy.MAX_CGT)
+                and self.facts.net_gain_per_unit is not None):
             rank = self.facts.net_gain_per_unit
             net_gain = lambda parcel: rank(sale, parcel.buy, self._unit_cost_base(parcel))  # noqa: E731
 
         ordered = strategies.order_for_sale(
             sale.strategy, candidates, buy_date=lambda p: p.buy.date, tie=lambda p: p.ref,
-            net_gain_per_unit=net_gain)
+            net_gain_per_unit=net_gain, unit_cost_base=self._unit_cost_base)
         taken, _ = strategies.take(sale.quantity, (
             (parcel, available(parcel)) for parcel in ordered if available(parcel) > 0))
         for parcel, quantity in taken:

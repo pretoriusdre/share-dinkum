@@ -56,6 +56,7 @@ from share_dinkum_app.models import (
     InstrumentValuation,
     CapitalLossCarryForward,
     LodgedSnapshotError,
+    OptionExercise,
 )
 from share_dinkum_app.utils.currency import add_currencies
 from share_dinkum_app.utils.filefield_operations import user_directory_path, process_filefield
@@ -71,8 +72,9 @@ from share_dinkum_app import choices
 from share_dinkum_app.choices import CGTAssetCategory
 from django.contrib import admin
 from share_dinkum_app import (
-    cgt, column_help, constants, dashboard, data_checks, excelinterface, figures_dump, income, loading, reports, version,
-    yfinanceinterface)
+    cgt, column_help, constants, dashboard, data_checks, excelinterface, figures_dump, income, loading, recalculate,
+    reports, version, yfinanceinterface)
+from share_dinkum_app.holdings import live
 from share_dinkum_app.management.commands import make_fake_data, make_import_template
 
 
@@ -2238,11 +2240,12 @@ class CGTEventTests(TransactionTestCase):
         self.account = self.data['account']
 
     def test_cost_base_components_sum_to_the_cost_base(self):
-        """Purchase, brokerage and adjustments sum to the cost base."""
+        """Purchase, brokerage, the options exercised into it and adjustments sum to the cost base."""
         for event in cgt.disposal_events(self.account):
             components = (
                 event.buy_consideration.amount
                 + event.buy_brokerage.amount
+                + event.option_cost_base.amount
                 + event.cost_base_adjustments.amount
             )
             self.assertEqual(
@@ -2743,7 +2746,8 @@ class CostBaseAllocationReconciliationTests(TransactionTestCase):
 
 
 class MinCGTSelectionTests(TransactionTestCase):
-    """Which parcels the MIN_CGT strategy picks, ranked by discounted gain per unit."""
+    """Which parcels the gain strategies pick: MIN_CGT and MAX_CGT ranked by discounted gain per
+    unit, MIN_GROSS and MAX_GROSS by unit cost base."""
 
     def _account_with_parcels(self):
         """Three parcels: two long held at different cost bases, one bought recently."""
@@ -2798,6 +2802,32 @@ class MinCGTSelectionTests(TransactionTestCase):
         self.assertEqual(allocations[date(2020, 1, 15)], Decimal('100'))  # then discounted
         self.assertEqual(allocations[date(2024, 9, 1)], Decimal('50'))    # remainder
 
+    def _allocated(self, strategy, quantity='150'):
+        """{buy date: units} a sale on 1 October 2024 at $10 takes with `strategy`."""
+        account, instrument = self._account_with_parcels()
+        sell = Sell.objects.create(
+            account=account, instrument=instrument, date=date(2024, 10, 1),
+            quantity=Decimal(quantity), unit_price=Money(Decimal('10.00'), 'AUD'),
+            total_brokerage=Money(0, 'AUD'), strategy=strategy,
+        )
+        return {a.parcel.buy.date: a.quantity for a in sell.sale_allocation.filter(is_active=True)}
+
+    # Per unit: old_cheap gains $5.00 ($2.50 after the discount), old_dear $1.00 ($0.50), recent
+    # $3.00 (no discount). Their cost bases are $5, $9 and $7.
+    CHEAP, DEAR, RECENT = date(2020, 1, 15), date(2020, 6, 15), date(2024, 9, 1)
+
+    def test_min_cgt_takes_the_smallest_gains_after_the_discount(self):
+        self.assertEqual(self._allocated('MIN_CGT'), {self.DEAR: Decimal('100'), self.CHEAP: Decimal('50')})
+
+    def test_max_cgt_takes_the_largest_gains_after_the_discount(self):
+        self.assertEqual(self._allocated('MAX_CGT'), {self.RECENT: Decimal('100'), self.CHEAP: Decimal('50')})
+
+    def test_min_gross_takes_the_highest_cost_base_first(self):
+        self.assertEqual(self._allocated('MIN_GROSS'), {self.DEAR: Decimal('100'), self.RECENT: Decimal('50')})
+
+    def test_max_gross_takes_the_lowest_cost_base_first(self):
+        self.assertEqual(self._allocated('MAX_GROSS'), {self.CHEAP: Decimal('100'), self.RECENT: Decimal('50')})
+
     def test_holding_period_no_longer_depends_on_a_leap_day(self):
         """A leap day inside the holding no longer changes eligibility."""
         # Spans 29 February 2024: 366 days, and formerly eligible on that basis alone.
@@ -2813,6 +2843,11 @@ class MinCGTSelectionTests(TransactionTestCase):
         # A day past the anniversary qualifies in both cases.
         self.assertTrue(cgt.is_discount_eligible(date(2023, 3, 1), date(2024, 3, 2)))
         self.assertTrue(cgt.is_discount_eligible(date(2022, 3, 1), date(2023, 3, 2)))
+
+
+@override_settings(HOLDINGS_WRITER='signals')
+class MinCGTSelectionSignalsTests(MinCGTSelectionTests):
+    """The same choices made by the creation signals rather than the replay."""
 
 
 # =============================================================================
@@ -3728,7 +3763,7 @@ class ImportTemplateCommandTests(TestCase):
 class OptionalTemplateTablesTests(TransactionTestCase):
     """The optional template tables: marked as optional, and loadable from a filled-in template."""
 
-    OPTIONAL = ('ResidencyPeriod', 'InstrumentValuation', 'CapitalLossCarryForward',
+    OPTIONAL = ('OptionExercise', 'ResidencyPeriod', 'InstrumentValuation', 'CapitalLossCarryForward',
                 'AttributionStatement', 'AttributionComponent')
 
     def setUp(self):
@@ -4229,6 +4264,38 @@ class HoldingStrategyTests(TestCase):
             strategy, candidates, buy_date=lambda c: c[1], tie=lambda c: c[0])]
         self.assertEqual(order('FIFO'), ['c', 'a', 'b'])
         self.assertEqual(order('LIFO'), ['a', 'b', 'c'])
+
+    def test_gain_strategies_order_by_net_gain_or_cost_base(self):
+        """Gross and net orders differ when the discount reaches one parcel and not another."""
+        from share_dinkum_app.holdings import strategies
+        # (name, net gain per unit, unit cost base): 'long' has the largest gain before the
+        # discount, but halved it falls below 'short', bought within the year.
+        candidates = [('long', Decimal('2.50'), Decimal('5')), ('short', Decimal('3.00'), Decimal('7')),
+                      ('dear', Decimal('0.50'), Decimal('9'))]
+        order = lambda strategy: [name for name, _, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: date(2020, 1, 1), tie=lambda c: c[0],
+            net_gain_per_unit=lambda c: c[1], unit_cost_base=lambda c: c[2])]
+        self.assertEqual(order('MIN_CGT'), ['dear', 'long', 'short'])
+        self.assertEqual(order('MAX_CGT'), ['short', 'long', 'dear'])
+        self.assertEqual(order('MIN_GROSS'), ['dear', 'short', 'long'])
+        self.assertEqual(order('MAX_GROSS'), ['long', 'short', 'dear'])
+
+    def test_gain_strategies_break_ties_in_the_order_made(self):
+        from share_dinkum_app.holdings import strategies
+        candidates = [('b', Decimal('1')), ('a', Decimal('1')), ('c', Decimal('2'))]
+        order = lambda strategy: [name for name, _ in strategies.order_for_sale(  # noqa: E731
+            strategy, candidates, buy_date=lambda c: date(2020, 1, 1), tie=lambda c: c[0],
+            net_gain_per_unit=lambda c: c[1], unit_cost_base=lambda c: c[1])]
+        self.assertEqual(order('MIN_CGT'), ['a', 'b', 'c'])
+        self.assertEqual(order('MAX_CGT'), ['c', 'a', 'b'])
+        self.assertEqual(order('MIN_GROSS'), ['c', 'a', 'b'])
+        self.assertEqual(order('MAX_GROSS'), ['a', 'b', 'c'])
+
+    def test_gain_strategies_need_their_ranking(self):
+        from share_dinkum_app.holdings import strategies
+        for strategy in ('MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS'):
+            with self.subTest(strategy=strategy), self.assertRaises(ValueError):
+                strategies.order_for_sale(strategy, ['a'], buy_date=lambda c: date(2020, 1, 1), tie=str)
 
     def test_take_reports_what_is_left_over(self):
         from share_dinkum_app.holdings import strategies
@@ -5073,7 +5140,7 @@ class DropdownTests(TestCase):
         lists = {name: [cell.value for cell in column[1:] if cell.value]
                  for name, column in ((column[0].value, column) for column in workbook[excelinterface.VALUE_ASSISTANCE_SHEET].columns)}
 
-        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+        self.assertEqual(lists['Sell.strategy'], ['FIFO', 'LIFO', 'MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS', 'MANUAL'])
         self.assertEqual(lists['Dividend.dividend_type'], ['LOCAL', 'FOREIGN'])
         self.assertEqual(lists['ResidencyPeriod.status'], ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
         self.assertIn('AUD', lists['currency'])
@@ -9145,6 +9212,23 @@ class IncomeReportTests(TransactionTestCase):
             self.assertAlmostEqual(figures[key], value, places=4, msg=key)
         self.assertFalse(summary.is_draft(self.YEAR), summary.year_warnings(self.YEAR))
 
+    def test_unfranked_cfi_goes_to_13u_for_a_resident_and_nothing_for_a_foreign_resident(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2024, 6, 30))
+        self._payments()
+        statement = AttributionStatement.objects.get(account=self.account, financial_year_end_date=date(2024, 6, 30))
+        AttributionComponent.objects.create(
+            account=self.account, statement=statement, component='UNFRANKED_CFI_DISTRIBUTION',
+            amount=Money(Decimal('20'), 'AUD'))
+
+        figures, _ = self._figures()
+
+        self.assertAlmostEqual(figures['13U'], 27)  # 5 unfranked + 2 interest + 20 CFI
+
+        ResidencyPeriod.objects.filter(account=self.account).delete()
+        declare(self.account, 'FOREIGN', date(2016, 1, 1))
+        figures, _ = self._figures()
+        self.assertEqual(figures['13U'], 0)
+
     def test_a_foreign_resident_counts_nothing_and_lists_it(self, mock_rate):
         declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2023, 12, 31))
         declare(self.account, 'FOREIGN', date(2024, 1, 1))
@@ -9794,7 +9878,7 @@ class VocabularyTests(TransactionTestCase):
             ['RESIDENT', 'FOREIGN', 'TEMPORARY'])
         self.assertEqual(
             [c.value for c in choices.SellStrategy],
-            ['FIFO', 'LIFO', 'MIN_CGT', 'MANUAL'])
+            ['FIFO', 'LIFO', 'MIN_CGT', 'MAX_CGT', 'MIN_GROSS', 'MAX_GROSS', 'MANUAL'])
         self.assertEqual(
             [c.value for c in choices.LegalFormSource],
             ['DEFAULT', 'SUGGESTED', 'USER'])
@@ -10526,6 +10610,719 @@ class StoredPricesAreAsTradedTests(TransactionTestCase):
             call_command('refetch_price_history', '--dry-run', stdout=output)
         update.assert_not_called()
         self.assertIn('would fetch from 2021-03-01', output.getvalue())
+
+
+class UnlistedMarketPricesTests(TransactionTestCase):
+    """Nothing is fetched for an instrument on an unlisted market, as its name is not a ticker."""
+
+    def setUp(self):
+        self.account = create_account()
+        employer = Market.objects.create(
+            account=self.account, code='EMPLOYER', is_exchange_listed=False)
+        self.options = create_instrument(account=self.account, market=employer, name='ACME')
+        Buy.objects.create(
+            account=self.account, instrument=self.options, date=date(2024, 3, 1),
+            quantity=Decimal('1000'), unit_price=Money(0, 'AUD'), total_brokerage=Money(0, 'AUD'))
+
+    def test_a_price_refresh_asks_the_provider_nothing(self):
+        """With no suffix, ACME was asked for as a US ticker, and got another company's prices."""
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history') as history, \
+                patch('share_dinkum_app.models.yfinanceinterface.get_current_price') as current:
+            self.account.update_all_price_history()
+
+        history.assert_not_called()
+        current.assert_not_called()
+        self.options.refresh_from_db()
+        self.assertIsNone(self.options.current_unit_price)
+
+    def test_a_listed_market_with_no_suffix_is_still_fetched(self):
+        """A blank suffix is how a US listing such as IBIT is asked for."""
+        nasdaq = create_market(account=self.account, code='NASDAQ', suffix=None)
+        ibit = create_instrument(account=self.account, market=nasdaq, name='IBIT')
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history',
+                   return_value=pd.DataFrame()) as history:
+            ibit.update_price_history(start_date=date(2024, 3, 1), end_date=date(2024, 3, 8))
+
+        history.assert_called_once()
+        self.assertEqual(ibit.yfinance_ticker_code, 'IBIT')
+
+    def test_the_refetch_command_passes_it_over(self):
+        output = io.StringIO()
+        with patch.object(Instrument, 'update_price_history') as update:
+            call_command(
+                'refetch_price_history', '--account', self.account.description, stdout=output)
+
+        update.assert_not_called()
+        self.assertNotIn('ACME', output.getvalue())
+
+    def test_prices_fetched_before_are_found_and_cleared(self):
+        """Fetched before the refresh skipped them, so perhaps another company's."""
+        listed = create_instrument(account=self.account, name='VAS')
+        for instrument in (self.options, listed):
+            InstrumentPriceHistory.objects.create(
+                account=self.account, instrument=instrument, date=date(2025, 3, 3), open=Decimal('5'),
+                high=Decimal('5'), low=Decimal('5'), close=Decimal('5'), volume=0, stock_splits=Decimal('0'))
+            instrument.current_unit_price = Decimal('5')
+            instrument.save()
+
+        self.assertEqual(list(data_checks.unlisted_prices(self.account)), [self.options])
+        call_command('repair_portfolio_data', '--account', self.account.description, stdout=io.StringIO())
+
+        self.assertEqual(list(data_checks.unlisted_prices(self.account)), [])
+        self.options.refresh_from_db()
+        self.assertIsNone(self.options.current_unit_price)
+        self.assertEqual(self.options.calculated_value_held, Money(Decimal('0'), 'AUD'))
+        listed.refresh_from_db()
+        self.assertEqual(listed.current_unit_price, Decimal('5'))
+        self.assertTrue(InstrumentPriceHistory.objects.filter(instrument=listed).exists())
+
+    def test_the_classification_command_does_not_look_it_up(self):
+        from share_dinkum_app.management.commands.suggest_instrument_classification import Command
+
+        with patch.object(Command, '_market_data') as lookup:
+            call_command(
+                'suggest_instrument_classification', '--account', self.account.description,
+                '--use-market-data', '--dry-run', stdout=io.StringIO())
+
+        lookup.assert_not_called()
+
+
+class OptionExerciseMixin:
+    """Options on ACMEO, exercised into shares of ACME."""
+
+    def setUp(self):
+        self.account = create_account()
+        self.make_instruments()
+
+    def make_instruments(self):
+        market = create_market(account=self.account)
+        self.options = Instrument.objects.create(
+            account=self.account, market=market, name='ACMEO', description='ACME options',
+            legal_form='RIGHT_OPTION')
+        self.shares = create_instrument(account=self.account, market=market, name='ACME')
+
+    def buy_options(self, day=date(2024, 1, 10), quantity='1000', price='0.50', brokerage='10'):
+        return Buy.objects.create(
+            account=self.account, instrument=self.options, date=day, quantity=Decimal(quantity),
+            unit_price=Money(Decimal(price), 'AUD'), total_brokerage=Money(Decimal(brokerage), 'AUD'))
+
+    def exercise(self, day=date(2025, 3, 1), quantity='1000', exercise_price='2.00', brokerage='20',
+                 **fields):
+        return OptionExercise.objects.create(
+            account=self.account, instrument=self.options, underlying_instrument=self.shares,
+            date=day, quantity=Decimal(quantity), exercise_price=Money(Decimal(exercise_price), 'AUD'),
+            total_brokerage=Money(Decimal(brokerage), 'AUD'), **fields)
+
+    def sell_shares(self, day=date(2026, 5, 1), quantity='1000', price='3.00', brokerage='10'):
+        return Sell.objects.create(
+            account=self.account, instrument=self.shares, date=day, quantity=Decimal(quantity),
+            unit_price=Money(Decimal(price), 'AUD'), total_brokerage=Money(Decimal(brokerage), 'AUD'),
+            strategy='FIFO')
+
+    def share_parcels(self):
+        return list(Parcel.objects.filter(buy__instrument=self.shares, deactivation_date__isnull=True)
+                    .order_by('buy__option_buy__date'))
+
+
+class OptionExerciseTests(OptionExerciseMixin, TransactionTestCase):
+    """Exercising options writes a sale of them and a buy of the shares, which carries their cost."""
+
+    def test_it_sells_the_options_and_buys_the_shares(self):
+        self.buy_options()
+        exercise = self.exercise()
+
+        sale = Sell.objects.get(exercise=exercise)
+        self.assertEqual((sale.instrument, sale.date, sale.quantity), (self.options, date(2025, 3, 1), Decimal('1000')))
+        self.assertEqual(sale.unit_price, Money(Decimal('0'), 'AUD'))
+        buy = Buy.objects.get(exercise=exercise)
+        self.assertEqual((buy.instrument, buy.date, buy.quantity), (self.shares, date(2025, 3, 1), Decimal('1000')))
+        self.assertEqual(buy.unit_price, Money(Decimal('2'), 'AUD'))
+        self.assertEqual(buy.total_brokerage, Money(Decimal('20'), 'AUD'))
+        self.options.refresh_from_db()
+        self.shares.refresh_from_db()
+        self.assertEqual(self.options.quantity_held, Decimal('0'))
+        self.assertEqual(self.shares.quantity_held, Decimal('1000'))
+
+    def test_the_shares_cost_base_is_the_options_cost_plus_the_exercise_price(self):
+        """s134-1(1) item 1: what the options cost (500 + 10 brokerage), plus 2,000 to exercise and 20 in fees."""
+        self.buy_options()
+        self.exercise()
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('2530'), 'AUD'))
+        self.assertEqual(parcel.calculated_total_cost_base, Money(Decimal('2530'), 'AUD'))
+
+    def test_exercising_is_no_capital_gain_and_the_shares_sale_carries_the_cost(self):
+        """s134-1(4): no gain or loss on exercising; the options' cost is in the shares' gain instead."""
+        self.buy_options()
+        self.exercise()
+        self.sell_shares()
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.instrument, 'ACME')
+        self.assertEqual(event.option_cost_base, Money(Decimal('510'), 'AUD'))
+        self.assertEqual(event.buy_consideration, Money(Decimal('2000'), 'AUD'))
+        self.assertEqual(event.buy_brokerage, Money(Decimal('20'), 'AUD'))
+        self.assertEqual(event.cost_base, Money(Decimal('2530'), 'AUD'))
+        self.assertEqual(event.capital_gain, Money(Decimal('460'), 'AUD'))
+        sale = Sell.objects.get(exercise__isnull=False)
+        self.assertEqual(SellAllocation.objects.get(sell=sale).total_capital_gain, Money(Decimal('0'), 'AUD'))
+        self.assertEqual([year.name for year in cgt.years_with_events(self.account)], ['FY2025/26'])
+
+    def test_the_unrealised_summary_counts_the_options_cost(self):
+        self.buy_options()
+        self.exercise()
+        self.shares.current_unit_price = Decimal('3')
+        self.shares.save()
+
+        summary = UnrealisedGainReport(self.account, as_at=date(2026, 5, 1)).summary()
+        total = summary[summary['asset_category'] == 'Total'].iloc[0]
+        self.assertEqual(total['cost_base'], 2530.0)
+
+    def test_options_bought_at_different_prices_give_shares_with_different_cost_bases(self):
+        self.buy_options(day=date(2024, 1, 10), quantity='600', price='0.50', brokerage='0')
+        self.buy_options(day=date(2024, 6, 10), quantity='400', price='1.00', brokerage='0')
+        self.exercise(brokerage='0')
+
+        first, second = self.share_parcels()
+        self.assertEqual((first.parcel_quantity, first.total_cost_base), (Decimal('600'), Money(Decimal('1500'), 'AUD')))
+        self.assertEqual((second.parcel_quantity, second.total_cost_base), (Decimal('400'), Money(Decimal('1200'), 'AUD')))
+
+    def test_several_options_to_a_share_spread_the_exercise_price_over_the_shares(self):
+        self.buy_options(brokerage='0')
+        exercise = self.exercise(quantity_received=Decimal('500'), brokerage='0')
+
+        buy = Buy.objects.get(exercise=exercise)
+        self.assertEqual((buy.quantity, buy.unit_price), (Decimal('500'), Money(Decimal('4'), 'AUD')))
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('2500'), 'AUD'))
+
+    def test_the_market_value_basis(self):
+        """s83A-125: a deferred scheme's shares are acquired for their market value, whatever the options cost."""
+        self.buy_options(price='0', brokerage='0')
+        exercise = self.exercise(cost_base_basis='MARKET_VALUE', market_value=Money(Decimal('3.40'), 'AUD'))
+
+        buy = Buy.objects.get(exercise=exercise)
+        self.assertEqual(buy.unit_price, Money(Decimal('3.40'), 'AUD'))
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('3420'), 'AUD'))
+        exercise.refresh_from_db()
+        self.assertEqual(exercise.calculated_ess_discount, Money(Decimal('1400'), 'AUD'))
+
+    def test_exercising_more_options_than_held_is_refused(self):
+        self.buy_options(quantity='500')
+        with self.assertRaises(live.HoldingsRefused) as refused:
+            self.exercise()
+
+        self.assertIn('Only 500 of ACMEO were held on 2025-03-01', str(refused.exception))
+        self.assertFalse(OptionExercise.objects.exists())
+        self.assertFalse(Sell.objects.exists())
+        self.assertFalse(Buy.objects.filter(instrument=self.shares).exists())
+
+    def test_the_options_must_be_recorded_as_options(self):
+        self.options.legal_form = 'COMPANY'
+        self.options.save()
+        self.buy_options()
+        with self.assertRaises(ValueError):
+            self.exercise()
+
+    def test_changing_the_exercise_writes_its_trades_again(self):
+        self.buy_options()
+        exercise = self.exercise()
+
+        exercise.quantity = Decimal('800')
+        exercise.date = date(2025, 4, 1)
+        exercise.save()
+
+        sale = Sell.objects.get(exercise=exercise)
+        self.assertEqual((sale.date, sale.quantity), (date(2025, 4, 1), Decimal('800')))
+        buy = Buy.objects.get(exercise=exercise)
+        self.assertEqual((buy.date, buy.quantity), (date(2025, 4, 1), Decimal('800')))
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.quantity_held, Decimal('200'))
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('2028'), 'AUD'))  # 0.508 x 800 + 1,600 + 20
+
+    def test_deleting_the_exercise_deletes_its_trades(self):
+        self.buy_options()
+        exercise = self.exercise()
+
+        exercise.delete()
+
+        self.assertFalse(Sell.objects.exists())
+        self.assertFalse(Buy.objects.filter(instrument=self.shares).exists())
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.quantity_held, Decimal('1000'))
+
+    def test_deleting_it_is_refused_once_its_shares_are_sold(self):
+        self.buy_options()
+        exercise = self.exercise()
+        self.sell_shares()
+
+        with self.assertRaises(live.HoldingsRefused):
+            exercise.delete()
+        self.assertTrue(OptionExercise.objects.exists())
+
+    def test_its_trades_cannot_be_changed_or_deleted_on_their_own(self):
+        self.buy_options()
+        exercise = self.exercise()
+        buy = Buy.objects.get(exercise=exercise)
+        sale = Sell.objects.get(exercise=exercise)
+
+        from django.db.models import ProtectedError
+
+        buy.quantity = Decimal('5')
+        with self.assertRaises(live.HoldingsRefused):
+            buy.save()
+        with self.assertRaises(live.HoldingsRefused):
+            buy.save(update_fields=['quantity'])
+        with self.assertRaises(live.HoldingsRefused):
+            Buy.objects.get(exercise=exercise).delete()
+        with self.assertRaises(ProtectedError):  # By its allocations, before any signal.
+            sale.delete()
+
+    def test_its_sales_allocations_cannot_be_deleted_on_their_own(self):
+        """Deleting one used to switch the sale to MANUAL, and the shares lost the options' cost."""
+        self.buy_options()
+        exercise = self.exercise()
+
+        with self.assertRaises(live.HoldingsRefused):
+            SellAllocation.objects.get(sell__exercise=exercise).delete()
+
+        sale = Sell.objects.get(exercise=exercise)
+        self.assertEqual(sale.strategy, 'FIFO')
+        self.assertEqual(sale.sale_allocation.count(), 1)
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('2530'), 'AUD'))
+
+    def test_a_recalculation_saves_its_trades_unchanged(self):
+        self.buy_options()
+        self.exercise()
+
+        recalculate.account(self.account)  # Saves every trade and allocation; nothing changes.
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.calculated_total_cost_base, Money(Decimal('2530'), 'AUD'))
+
+    def test_the_instrument_pages_still_open(self):
+        """An exercise links to two instruments, so the inlines must name which link they show."""
+        self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        for url in (reverse('admin:share_dinkum_app_instrument_change', args=[self.options.pk]),
+                    reverse('admin:share_dinkum_app_instrument_change', args=[self.shares.pk]),
+                    reverse('admin:share_dinkum_app_buy_change', args=[Buy.objects.get(exercise=exercise).pk])):
+            self.assertEqual(self.client.get(url).status_code, 200, url)
+
+    def test_the_exercise_page_shows_its_trades_read_only(self):
+        self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        page = self.client.get(reverse('admin:share_dinkum_app_optionexercise_change', args=[exercise.pk]))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'ACME')
+        self.assertNotContains(page, 'name="buys-0-quantity"')
+        self.assertNotContains(page, 'name="buys-1-quantity"')
+
+    def test_the_rounded_share_price_loses_none_of_the_exercise_price(self):
+        """1,000 options at $1 into 3,000 shares are priced at $0.333333 each, which pays $999.999."""
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(exercise_price='1.00', brokerage='0', quantity_received=Decimal('3000'))
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(Buy.objects.get(exercise__isnull=False).unit_price, Money(Decimal('0.333333'), 'AUD'))
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('1000'), 'AUD'))
+
+    def test_fees_divided_between_option_buys_never_go_negative(self):
+        for day in (date(2024, 1, 10), date(2024, 2, 10), date(2024, 3, 10), date(2024, 4, 10)):
+            self.buy_options(day=day, quantity='250', brokerage='0')
+        exercise = self.exercise(brokerage='0.0002')
+
+        fees = [buy.total_brokerage.amount for buy in Buy.objects.filter(exercise=exercise)]
+        self.assertTrue(all(fee >= 0 for fee in fees), fees)
+        self.assertEqual(sum(fees), Decimal('0.0002'))
+
+    def test_two_share_buys_of_one_size_have_their_own_figures_keys(self):
+        self.buy_options(day=date(2024, 1, 10), quantity='100', brokerage='0')
+        self.buy_options(day=date(2024, 2, 10), quantity='100', brokerage='0')
+        exercise = self.exercise(quantity='200', brokerage='0')
+
+        keys = figures_dump.Keys(self.account)
+        self.assertEqual(len({keys.key(buy) for buy in Buy.objects.filter(exercise=exercise)}), 2)
+
+    def test_two_exercises_of_one_size_on_one_day_have_their_own_figures_keys(self):
+        self.buy_options(quantity='200', brokerage='0')
+        exercises = [self.exercise(quantity='100', brokerage='0', legacy_id=legacy_id)
+                     for legacy_id in ('EX1', 'EX2')]
+
+        keys = figures_dump.Keys(self.account)
+        for model in (Sell, Buy):
+            trades = model.objects.filter(exercise__in=exercises)
+            self.assertEqual(len({keys.key(trade) for trade in trades}), 2, model.__name__)
+
+    def test_an_exercise_guards_every_field_its_trades_holdings_are_worked_out_from(self):
+        from share_dinkum_app import signals
+
+        for model, fields in signals.HOLDINGS_FACT_FIELDS.items():
+            if model in signals.EXERCISE_RECORD_FIELDS:
+                self.assertLessEqual(set(fields), set(signals.EXERCISE_RECORD_FIELDS[model]), model.__name__)
+
+    def test_repricing_the_options_carries_into_the_shares(self):
+        option_buy = self.buy_options()
+        self.exercise()
+
+        option_buy.unit_price = Money(Decimal('0.60'), 'AUD')
+        option_buy.save()
+
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.calculated_total_cost_base, Money(Decimal('2630'), 'AUD'))
+
+    def _log_in(self):
+        user = self.account.owner
+        user.is_staff = user.is_superuser = True
+        user.save()
+        self.client.force_login(user)
+
+    def test_the_admin_adds_one_and_says_why_one_is_refused(self):
+        self.buy_options(quantity='500')
+        self._log_in()
+        form = {
+            'instrument': self.options.pk, 'underlying_instrument': self.shares.pk,
+            'date': '2025-03-01', 'quantity': '400', 'quantity_received': '',
+            'exercise_price_0': '2.00', 'exercise_price_1': 'AUD',
+            'total_brokerage_0': '20', 'total_brokerage_1': 'AUD', 'cost_base_basis': 'ROLLOVER',
+            'market_value_0': '', 'market_value_1': 'AUD', 'strategy': 'FIFO', 'notes': ''}
+        url = reverse('admin:share_dinkum_app_optionexercise_add')
+
+        self.assertEqual(self.client.post(url, form).status_code, 302)
+        self.assertEqual(Buy.objects.get(exercise__isnull=False).quantity, Decimal('400'))
+
+        refused = self.client.post(url, {**form, 'quantity': '200'}, follow=True)
+        self.assertContains(refused, 'Only 100 of ACMEO were held on 2025-03-01')
+        self.assertEqual(OptionExercise.objects.count(), 1)
+
+    def test_the_admin_shows_its_trades_read_only_and_deletes_them_with_it(self):
+        self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+        buy = Buy.objects.get(exercise=exercise)
+
+        page = self.client.get(reverse('admin:share_dinkum_app_buy_change', args=[buy.pk]))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, 'name="quantity"')
+        self.assertEqual(
+            self.client.get(reverse('admin:share_dinkum_app_buy_delete', args=[buy.pk])).status_code, 403)
+
+        url = reverse('admin:share_dinkum_app_optionexercise_delete', args=[exercise.pk])
+        self.assertContains(self.client.get(url), 'ACME')
+        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 302)
+        self.assertFalse(OptionExercise.objects.exists())
+        self.assertFalse(Buy.objects.filter(instrument=self.shares).exists())
+
+    def test_the_trades_pages_show_what_the_exercise_wrote_read_only(self):
+        option_buy = self.buy_options()
+        exercise = self.exercise()
+        self._log_in()
+
+        page = self.client.get(reverse('admin:share_dinkum_app_buy_change', args=[option_buy.pk]))
+        self.assertContains(page, str(Buy.objects.get(exercise=exercise)))
+        self.assertNotContains(page, 'name="exercised_into-0-quantity"')
+        self.assertNotContains(page, 'name="exercised_into-1-quantity"')  # No blank row to add one.
+        sale = Sell.objects.get(exercise=exercise)
+        page = self.client.get(reverse('admin:share_dinkum_app_sell_change', args=[sale.pk]))
+        self.assertContains(page, str(sale.sale_allocation.get()))
+        self.assertNotContains(page, 'name="sale_allocation-0-quantity"')
+
+    def test_deleting_one_needs_permission_to_delete_its_trades(self):
+        from django.contrib.auth.models import Permission
+
+        self.buy_options()
+        exercise = self.exercise()
+        user = self.account.owner
+        user.is_staff, user.is_superuser = True, False
+        user.save()
+        user.user_permissions.add(*Permission.objects.filter(
+            codename__in=['view_optionexercise', 'delete_optionexercise']))
+        self.client.force_login(user)
+        url = reverse('admin:share_dinkum_app_optionexercise_delete', args=[exercise.pk])
+
+        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 403)
+        self.assertTrue(OptionExercise.objects.filter(pk=exercise.pk).exists())
+        self.assertTrue(Buy.objects.filter(exercise=exercise).exists())
+
+    def test_an_exercise_out_of_step_with_its_trades_is_found_and_written_again(self):
+        self.buy_options()
+        exercise = self.exercise()
+        Buy.objects.filter(exercise=exercise).update(unit_price=Decimal('9'))
+
+        self.assertEqual(data_checks.exercises_out_of_step(self.account), [exercise])
+        self.assertEqual(recalculate.rewrite_exercises(self.account), 1)
+        self.assertEqual(data_checks.exercises_out_of_step(self.account), [])
+        self.assertEqual(Buy.objects.get(exercise=exercise).unit_price, Money(Decimal('2'), 'AUD'))
+
+
+class OptionExerciseDatesTests(OptionExerciseMixin, TransactionTestCase):
+    """Shares whose CGT dates are not the exercise: the 30-day rule, escrow, and start-ups."""
+
+    def deferred(self, day=date(2025, 3, 1), taxing_point=None, market_value='3.40'):
+        self.buy_options(price='0', brokerage='0')
+        return self.exercise(day=day, brokerage='0', cost_base_basis='MARKET_VALUE',
+                             market_value=Money(Decimal(market_value), 'AUD'), taxing_point_date=taxing_point)
+
+    def only_event(self):
+        [event] = cgt.disposal_events(self.account)
+        return event
+
+    def test_shares_sold_within_30_days_of_the_taxing_point_make_no_capital_gain(self):
+        """s83A-120(3), s130-80(1): the gain is ESS income instead."""
+        self.deferred()
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertTrue(event.is_disregarded)
+        self.assertEqual(event.disregard_reason, cgt.events.REASON_ESS_30_DAYS)
+        schedule = cgt.build_schedule(self.account, 'FY2024/25')
+        self.assertEqual(schedule.gross_gains, Money(Decimal('0'), 'AUD'))
+        # Not a foreign resident's disregarded gain, which is a label of its own on the schedule.
+        self.assertEqual(schedule.disregarded_gains, Money(Decimal('0'), 'AUD'))
+
+    def test_a_sale_on_the_31st_day_is_a_capital_gain(self):
+        self.deferred()
+        self.sell_shares(day=date(2025, 4, 1), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertFalse(event.is_disregarded)
+        self.assertEqual(event.capital_gain, Money(Decimal('200'), 'AUD'))
+
+    def test_the_30_day_rule_is_only_for_a_deferred_scheme(self):
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(brokerage='0')
+        self.sell_shares(day=date(2025, 3, 10), price='3.60', brokerage='0')
+
+        self.assertFalse(self.only_event().is_disregarded)
+
+    def test_shares_in_escrow_count_as_acquired_when_it_ends(self):
+        """s83A-125: acquired at the taxing point, so the discount waits 12 months from it."""
+        self.deferred(day=date(2024, 3, 1), taxing_point=date(2024, 9, 1))
+        self.sell_shares(day=date(2025, 8, 1), price='5.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.purchase_date, date(2024, 9, 1))
+        self.assertEqual(event.method, 'other')
+        self.shares.refresh_from_db()
+        self.assertEqual(Buy.objects.get(exercise__isnull=False).date, date(2024, 3, 1))
+
+    def test_without_escrow_the_same_sale_gets_the_discount(self):
+        self.deferred(day=date(2024, 3, 1))
+        self.sell_shares(day=date(2025, 8, 1), price='5.00', brokerage='0')
+
+        self.assertEqual(self.only_event().method, 'discount')
+
+    def test_a_sale_within_30_days_of_escrow_ending_makes_no_capital_gain(self):
+        self.deferred(day=date(2024, 3, 1), taxing_point=date(2024, 9, 1))
+        self.sell_shares(day=date(2024, 9, 20), price='5.00', brokerage='0')
+
+        self.assertTrue(self.only_event().is_disregarded)
+
+    def test_a_taxing_point_is_refused_before_the_exercise_or_on_another_basis(self):
+        self.buy_options(price='0', brokerage='0')
+        with self.assertRaises(ValueError):
+            self.exercise(cost_base_basis='MARKET_VALUE', market_value=Money(Decimal('3.40'), 'AUD'),
+                          taxing_point_date=date(2025, 2, 1))
+        with self.assertRaises(ValueError):
+            self.exercise(taxing_point_date=date(2025, 6, 1))
+
+    def test_a_foreign_market_value_is_converted_at_the_taxing_points_rate(self):
+        create_exchange_rate(self.account, 'USD', 'AUD', rate=Decimal('1.5'), exchange_date=date(2024, 3, 1))
+        create_exchange_rate(self.account, 'USD', 'AUD', rate=Decimal('1.6'), exchange_date=date(2024, 9, 2))
+        self.buy_options(price='0', brokerage='0')
+        self.exercise(day=date(2024, 3, 1), exercise_price='0', brokerage='0', cost_base_basis='MARKET_VALUE',
+                      market_value=Money(Decimal('10'), 'USD'), taxing_point_date=date(2024, 9, 2))
+
+        buy = Buy.objects.get(exercise__isnull=False)
+        self.assertEqual(buy.exchange_rate.date, date(2024, 9, 2))
+        [parcel] = self.share_parcels()
+        self.assertEqual(parcel.total_cost_base, Money(Decimal('16000'), 'AUD'))
+
+    def buy_plan_shares(self, is_deferred_ess=True):
+        """Shares granted outright by a deferred plan, entered at their taxing point."""
+        return Buy.objects.create(
+            account=self.account, instrument=self.shares, date=date(2025, 3, 1), quantity=Decimal('1000'),
+            unit_price=Money(Decimal('3.40'), 'AUD'), total_brokerage=Money(Decimal('0'), 'AUD'),
+            is_deferred_ess=is_deferred_ess)
+
+    def test_deferred_plan_shares_sold_within_30_days_make_no_capital_gain(self):
+        """s83A-115(3): the same rule for shares granted as shares."""
+        self.buy_plan_shares()
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        self.assertEqual(self.only_event().disregard_reason, cgt.events.REASON_ESS_30_DAYS)
+
+    def test_shares_not_marked_deferred_make_a_capital_gain_within_30_days(self):
+        self.buy_plan_shares(is_deferred_ess=False)
+        self.sell_shares(day=date(2025, 3, 31), price='3.60', brokerage='0')
+
+        event = self.only_event()
+        self.assertFalse(event.is_disregarded)
+        self.assertEqual(event.capital_gain, Money(Decimal('200'), 'AUD'))
+
+    def test_start_up_shares_count_the_discount_from_the_grant(self):
+        """s115-30(1) item 9A: held 12 months counting from when the options were acquired."""
+        self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
+        self.exercise(day=date(2024, 6, 1), exercise_price='1.00', brokerage='0', cost_base_basis='START_UP')
+        self.sell_shares(day=date(2024, 12, 2), price='3.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.method, 'discount')
+        self.assertEqual(event.purchase_date, date(2023, 1, 10))
+        self.assertEqual(event.cost_base, Money(Decimal('1000'), 'AUD'))
+        allocation = SellAllocation.objects.get(sell__exercise__isnull=True)
+        self.assertEqual(allocation.calculated_days_held, event.days_held)  # The admin and the report agree.
+
+    def test_bought_options_count_the_discount_from_the_exercise(self):
+        self.buy_options(day=date(2023, 1, 10), price='0', brokerage='0')
+        self.exercise(day=date(2024, 6, 1), exercise_price='1.00', brokerage='0')
+        self.sell_shares(day=date(2024, 12, 2), price='3.00', brokerage='0')
+
+        event = self.only_event()
+        self.assertEqual(event.method, 'other')
+        self.assertEqual(event.purchase_date, date(2024, 6, 1))
+
+
+class OptionExerciseImportTests(OptionExerciseMixin, ImportWorkbookMixin, TransactionTestCase):
+    """An exercise loads from an import template in date order, and restores from an export."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        self.account = create_account()
+
+    def test_a_template_exercise_writes_its_trades_before_a_later_sale_of_the_shares(self):
+        instruments = [
+            {'name': 'ACMEO', 'description': 'ACME options', 'currency': 'AUD', 'market__code': 'ASX',
+             'legal_form': 'RIGHT_OPTION'},
+            {'name': 'ACME', 'description': 'ACME', 'currency': 'AUD', 'market__code': 'ASX'},
+        ]
+        buys = [{'legacy_id': 'B1', 'instrument__name': 'ACMEO', 'date': date(2024, 1, 10),
+                 'quantity': Decimal('1000'), 'unit_price': Decimal('0.5'), 'total_brokerage': Decimal('10')}]
+        exercises = pd.DataFrame([{
+            'legacy_id': 'E1', 'instrument__name': 'ACMEO', 'underlying_instrument__name': 'ACME',
+            'date': date(2025, 3, 1), 'quantity': Decimal('1000'), 'exercise_price': Decimal('2'),
+            'total_brokerage': Decimal('20')}])
+        sells = pd.DataFrame([{
+            'legacy_id': 'S1', 'instrument__name': 'ACME', 'date': date(2026, 5, 1),
+            'quantity': Decimal('1000'), 'unit_price': Decimal('3'), 'total_brokerage': Decimal('10'),
+            'strategy': 'FIFO'}])
+        self.build_workbook(self.workbook, instruments=instruments, buys=buys,
+                            extra_tables=[('Sell', sells), ('OptionExercise', exercises)])
+
+        loading.DataLoader(account=self.account, input_file=self.workbook)
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.cost_base, Money(Decimal('2530'), 'AUD'))
+        self.assertEqual(event.capital_gain, Money(Decimal('460'), 'AUD'))
+
+    def test_a_template_buy_marked_as_deferred_plan_shares(self):
+        buys = [{'legacy_id': 'B1', 'instrument__name': 'BHP', 'date': date(2025, 3, 1),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('40'), 'total_brokerage': Decimal('0'),
+                 'is_deferred_ess': True}]
+        sells = pd.DataFrame([{
+            'legacy_id': 'S1', 'instrument__name': 'BHP', 'date': date(2025, 3, 20),
+            'quantity': Decimal('100'), 'unit_price': Decimal('42'), 'total_brokerage': Decimal('0'),
+            'strategy': 'FIFO'}])
+        self.build_workbook(self.workbook, buys=buys, extra_tables=[('Sell', sells)])
+
+        loading.DataLoader(account=self.account, input_file=self.workbook)
+
+        self.assertTrue(Buy.objects.get(legacy_id='B1').is_deferred_ess)
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.disregard_reason, cgt.events.REASON_ESS_30_DAYS)
+
+    def test_an_export_restores_the_exercise_and_its_trades_once(self):
+        self.make_instruments()
+        self.buy_options()
+        self.exercise()
+        self.sell_shares()
+        before = figures_dump.dump(self.account)
+        export = DataExport.objects.create(account=self.account)
+        export.refresh_from_db()
+        path = Path(self.temp_dir.name) / 'export.xlsx'
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        restored = loading.DataLoader(input_file=path).account
+
+        self.assertEqual(OptionExercise.objects.count(), 1)
+        self.assertEqual(Sell.objects.filter(exercise__isnull=False).count(), 1)
+        self.assertEqual(Buy.objects.filter(exercise__isnull=False).count(), 1)
+        after = figures_dump.dump(restored)
+        self.assertEqual(before['cgt_events'], after['cgt_events'])
+        self.assertEqual(before['parcels'], after['parcels'])
+
+
+class OptionExercise2027Tests(OptionExerciseMixin, TransactionTestCase):
+    """Options held on 30 June 2027 and exercised after it: the deemed sale's gain, and indexation."""
+
+    def setUp(self):
+        super().setUp()
+        load_test_cpi()
+        self.account.taxpayer_type = 'INDIVIDUAL'
+        self.account.save()
+        enable_2027_regime(self)
+        declare(self.account, 'RESIDENT', date(2010, 1, 1))
+        self.buy_options(day=date(2026, 3, 1), brokerage='0')
+        InstrumentValuation.objects.create(
+            account=self.account, instrument=self.options, valuation_date=date(2027, 6, 30),
+            unit_value=Money(Decimal('1.20'), 'AUD'), purpose='CUTOVER_2027', source='USER')
+
+    def test_exercising_them_realises_the_deemed_sales_gain(self):
+        """s112-160: exercise is a realisation event, so the gain to 30 June 2027 is made then."""
+        self.exercise(day=date(2028, 1, 15), brokerage='0')
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.instrument, 'ACMEO')
+        self.assertEqual(event.slice, 'pre_cutover')
+        self.assertEqual(event.event_date, date(2028, 1, 15))
+        self.assertEqual(event.capital_gain, Money(Decimal('700'), 'AUD'))  # 1,200 less 500
+        self.assertEqual(event.method, 'discount')
+
+    def test_the_shares_carry_the_options_value_indexed_from_1_july_2027(self):
+        """s114-15(5): the options' value from the September 2027 quarter, the exercise price from its own."""
+        self.exercise(day=date(2028, 1, 15), brokerage='0')
+        self.sell_shares(day=date(2029, 2, 1), price='4.00', brokerage='0')
+
+        event = next(e for e in cgt.disposal_events(self.account) if e.instrument == 'ACME')
+        self.assertEqual(event.option_cost_base, Money(Decimal('1200'), 'AUD'))
+        # 1,200 x 115/100 + 2,000 x 1.095 (115/105).
+        self.assertEqual(event.cost_base, Money(Decimal('3570'), 'AUD'))
+        self.assertEqual(event.capital_gain, Money(Decimal('430'), 'AUD'))
+
+    def test_without_a_value_on_30_june_2027_the_figures_are_pending(self):
+        InstrumentValuation.objects.all().delete()
+        self.exercise(day=date(2028, 1, 15), brokerage='0')
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertIn('30', event.pending_reason)
+
+    def test_a_deferred_schemes_options_make_no_gain_at_exercise(self):
+        """s130-80(1)(d)(ii): every CGT event before the taxing point is disregarded."""
+        self.exercise(day=date(2028, 1, 15), brokerage='0', cost_base_basis='MARKET_VALUE',
+                      market_value=Money(Decimal('3.40'), 'AUD'))
+
+        self.assertEqual(cgt.disposal_events(self.account), [])
+        self.assertEqual(cgt.years_with_events(self.account), [])  # No event, so no year to list.
+
+    def test_with_residency_undeclared_the_deferred_gain_is_pending(self):
+        """Whether the options were deemed sold turns on residency, so the year is a draft."""
+        ResidencyPeriod.objects.all().delete()
+        self.exercise(day=date(2028, 1, 15), brokerage='0')
+
+        [event] = cgt.disposal_events(self.account)
+        self.assertEqual(event.pending_reason, cgt.cutover.PENDING_UNDECLARED_RESIDENCY)
+        self.assertEqual(event.capital_gain, Money(Decimal('0'), 'AUD'))
 
 
 class UnrecordedLossWarningTests(TransactionTestCase):

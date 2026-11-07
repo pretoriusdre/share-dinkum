@@ -58,8 +58,11 @@ Income is entered as **[Dividend]** and **[Distribution]** objects, and classifi
 **[FiscalYear]** according to the account's **[FiscalYearType]**.
 
 A **[Sell]** is allocated against parcels by a strategy: FIFO (first in, first out), LIFO (last in,
-first out), MIN_CGT (minimise net capital gain) or MANUAL (you create the allocations, usually only
-when importing legacy data). The sell creates **[SellAllocation]** objects linking it to parcels.
+first out), MIN_CGT or MAX_CGT (minimise or maximise net capital gain, ranking parcels by their gain
+per unit after the discount), MIN_GROSS or MAX_GROSS (minimise or maximise the gain before the
+discount: highest or lowest cost base first), or MANUAL (you create the allocations, usually only
+when importing legacy data). From 1 July 2027 the net ranking still applies the discount rule only,
+not indexation. The sell creates **[SellAllocation]** objects linking it to parcels.
 Each allocation is a capital gain or loss, classified into a **[FiscalYear]**.
 
 When a **[SellAllocation]** does not consume a whole parcel, the parcel is bifurcated: it is marked
@@ -74,14 +77,20 @@ A **[ShareSplit]**, dated on its ex-date, takes the units held before and after.
 affected parcels with new ones at the adjusted quantity and cost base, and moves their cost base
 adjustment allocations across.
 
+An **[OptionExercise]** turns options or rights into shares. It writes a sale of the options at
+nothing and a buy of the shares, one per buy of the options it took, and the shares' cost base
+carries what the options cost. Those trades change with the exercise, and not on their own. See
+[docs/options_and_employee_shares.md](docs/options_and_employee_shares.md).
+
 Decisions already made are kept when parcels are worked out again: which parcels each sale used,
 and how each adjustment was divided (see [Cost base adjustments](#cost-base-adjustments)). A change
 those decisions cannot follow, such as reducing a buy below what was sold from it, or a share split
 dated before a sale already allocated, is refused.
 
 Prices are stored as traded on the day in **[InstrumentPriceHistory]**. Use **Refresh prices** on
-the dashboard to fetch new prices and exchange rates. If the dashboard reports a data problem, run
-`uv run dev repair_portfolio_data` (`--dry-run` only reports).
+the dashboard to fetch new prices and exchange rates. Instruments on a market with **Is exchange
+listed** unticked, such as employee options, are not fetched. If the dashboard reports a data
+problem, run `uv run dev repair_portfolio_data` (`--dry-run` only reports).
 
 Further tables hold tax facts the reports read, such as residency periods and loss carry-forwards:
 see [Capital gains tax](#capital-gains-tax). Every table is in the
@@ -100,8 +109,11 @@ flowchart LR
     Distribution --> Instrument
     CostBaseAdjustment --> Instrument
     ShareSplit --> Instrument
+    OptionExercise --> Instrument
 
     Parcel --> Buy
+    Buy --> OptionExercise
+    Sell --> OptionExercise
     Parcel --> Parcel
     SellAllocation --> Parcel
     SellAllocation --> Sell
@@ -139,6 +151,8 @@ Related commands (run with `uv run dev`): `load_cpi`, `capture_cutover_valuation
 
 - [docs/capital_gains_models.md](docs/capital_gains_models.md): what each table is for and the order
   to fill them in.
+- [docs/options_and_employee_shares.md](docs/options_and_employee_shares.md): how to record
+  options, their exercise, rights issues and employee share schemes.
 - [CHANGELOG.md](CHANGELOG.md), version 0.4.0: the full list of behaviour.
 
 ---

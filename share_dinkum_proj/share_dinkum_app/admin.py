@@ -5,6 +5,7 @@ from django.contrib.admin import helpers
 from django import forms
 
 from django.apps import apps
+from django.contrib.auth import get_permission_codename
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.admin import UserAdmin
@@ -13,7 +14,7 @@ from django.contrib.admin.options import InlineModelAdmin
 from django.contrib.auth.forms import UserChangeForm
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Model, ForeignKey, ManyToManyRel, QuerySet
+from django.db.models import Model, ForeignKey, ForeignObjectRel, ManyToManyRel, QuerySet
 from django.http import HttpRequest, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
@@ -97,6 +98,21 @@ class BaseInline(PortfolioScopedMixin, admin.TabularInline):
         ]
     
     extra = 1
+
+
+class ReadOnlyInline(BaseInline):
+    """Records shown on another's page but changed only through it, such as an exercise's trades."""
+
+    extra = 0
+
+    def has_add_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
 
 
 
@@ -349,12 +365,19 @@ class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
                         continue
                     remaining_fields -= cost
 
-                    inline = type('DynamicInline', (BaseInline,), {'model': related_model})
+                    # Named, since a model can link here twice: an option exercise has its options
+                    # and its shares, and without it the formset refuses to guess and the page fails.
+                    inline = type('DynamicInline', (self.inline_class(rel, obj),),
+                                  {'model': related_model, 'fk_name': rel.field.name})
                     #if related_model not in added_inlines:
                     inline_instances.append(inline(self.model, self.admin_site))
                         #added_inlines.add(related_model)
 
         return inline_instances
+
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
+        """The inline to show the records `rel` links to `obj` on its page."""
+        return BaseInline
 
 
 
@@ -371,6 +394,63 @@ class GenericModelAdminWithoutAdd(GenericModelAdmin):
 
 #: Derived records a delete may take with the record they came from, though not on their own.
 DELETED_WITH_THEIR_SOURCE = {str(Parcel._meta.verbose_name)}
+
+
+class TradeAdmin(GenericModelAdmin):
+    """Buys and sales. One an option exercise wrote is read-only: it changes with the exercise."""
+
+    def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> list[str]:
+        if obj is not None and obj.exercise_id is not None:
+            # Not `get_fields`, which builds the form, which asks this again.
+            return [field.name for field in self.model._meta.fields if not field.name.endswith('_currency')]
+        return super().get_readonly_fields(request, obj)
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        if obj is not None and obj.exercise_id is not None:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
+        # An exercise's trade's own records, and the share buys an option buy was exercised into.
+        if obj.exercise_id is not None or rel.field.name == 'option_buy':
+            return ReadOnlyInline
+        return super().inline_class(rel, obj)
+
+
+class OptionExerciseAdmin(GenericModelAdmin):
+    """Option exercises. Deleting one deletes the trades it wrote, unless its shares were sold."""
+
+    def inline_class(self, rel: ForeignObjectRel, obj: Any) -> type[BaseInline]:
+        return ReadOnlyInline  # Its trades, which change with it.
+
+    def get_deleted_objects(self, objs: Any, request: HttpRequest) -> Any:
+        from share_dinkum_app.models import Buy, Sell, SellAllocation
+
+        user: Any = request.user
+        deleted: list[Any] = []
+        protected: list[str] = []
+        counts: dict[str, int] = {}
+        perms_needed: set[str] = set()
+        for exercise in objs:
+            trades = [*Sell.objects.filter(exercise=exercise), *Buy.objects.filter(exercise=exercise)]
+            deleted.append(str(exercise))
+            deleted.append([f'{capfirst(trade._meta.verbose_name)}: {trade}' for trade in trades])
+            for trade in trades:
+                opts = trade._meta
+                counts[str(opts.verbose_name_plural)] = counts.get(str(opts.verbose_name_plural), 0) + 1
+                # The user's own permission: the trades' admin refuses every delete of them alone.
+                if not user.has_perm(f'{opts.app_label}.{get_permission_codename("delete", opts)}'):
+                    perms_needed.add(str(opts.verbose_name))
+            protected += [f'{capfirst(allocation._meta.verbose_name)}: {allocation} (shares from this exercise sold)'
+                          for allocation in SellAllocation.objects.filter(
+                              parcel__buy__exercise=exercise, is_active=True)]
+        counts[str(self.model._meta.verbose_name_plural)] = len(objs)
+        return deleted, counts, perms_needed, protected
+
+    def delete_queryset(self, request: HttpRequest, queryset: QuerySet[Any]) -> None:
+        """One at a time, so each deletes its own trades."""
+        for obj in queryset:
+            obj.delete()
 
 
 class HiddenModelAdmin(admin.ModelAdmin):
@@ -605,6 +685,9 @@ class CostBaseAdjustmentAdmin(GenericModelAdmin):
 model_admin_map: "dict[type[Model], type[admin.ModelAdmin[Any]]]" = {
 
     Account : AccountAdmin,
+    share_dinkum_app.models.Buy : TradeAdmin,
+    share_dinkum_app.models.Sell : TradeAdmin,
+    share_dinkum_app.models.OptionExercise : OptionExerciseAdmin,
     CostBaseAdjustment : CostBaseAdjustmentAdmin,
     ExchangeRate : ExchangeRateAdmin,
     Instrument : InstrumentAdmin,

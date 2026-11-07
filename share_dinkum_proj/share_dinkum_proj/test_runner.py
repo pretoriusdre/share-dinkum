@@ -8,14 +8,24 @@ After each test that uses the database, every portfolio's holding is replayed, a
 would change it fails the test (`holdings.shadow`). So every scenario the tests build checks that
 the signals and the replay agree. A test that damages a holding on purpose sets
 `HOLDINGS_MAY_DIFFER = True`, on its class or its method.
+
+`--parallel` works too. A worker started fresh (spawn, as on Windows, or forkserver) loads the
+settings again and never sees the overrides made here, so `_init_worker` makes them again in each
+one, from the folder the runner names in `MEDIA_ENV`.
 """
 
+import multiprocessing
+import os
 import shutil
 import tempfile
 from typing import Any
 
 from django.test import TransactionTestCase, override_settings
+from django.test import runner as django_runner
 from django.test.runner import DiscoverRunner
+
+#: The temporary media folder, for the workers of a parallel run to find.
+MEDIA_ENV = 'SHARE_DINKUM_TEST_MEDIA_ROOT'
 
 
 def _check_holdings(test: TransactionTestCase) -> None:
@@ -32,31 +42,58 @@ def _check_holdings(test: TransactionTestCase) -> None:
         shadow.check(account, test.id())
 
 
+def _isolate(media_dir: str) -> tuple[override_settings, Any]:
+    """Point `MEDIA_ROOT` at `media_dir`, assert holdings, and check them after each test.
+
+    Returns the settings override and the `doCleanups` it replaced, to undo both.
+    """
+    overrides = override_settings(MEDIA_ROOT=media_dir, HOLDINGS_SHADOW='assert')
+    overrides.enable()
+
+    # A cleanup runs after tearDown and before the test's data is rolled back, and what it
+    # raises is reported as the test's error.
+    original = TransactionTestCase.doCleanups
+
+    def do_cleanups(test: TransactionTestCase) -> Any:
+        from share_dinkum_app import yfinanceinterface
+        yfinanceinterface.forget_failures()  # A fetch one test failed is not held back from the next.
+        if not getattr(test, '_holdings_checked', False):
+            test._holdings_checked = True  # type: ignore[attr-defined]
+            test.addCleanup(_check_holdings, test)
+        return original(test)
+
+    TransactionTestCase.doCleanups = do_cleanups  # type: ignore[method-assign,assignment]
+    return overrides, original
+
+
+def _init_worker(counter: Any, *args: Any, **kwargs: Any) -> None:
+    """Django's worker setup, then the same isolation as the main process.
+
+    A forked worker inherits it already, so only a worker started fresh needs it.
+    """
+    django_runner._init_worker(counter, *args, **kwargs)  # type: ignore[attr-defined]  # Not in the stubs.
+    if multiprocessing.get_start_method() in {'spawn', 'forkserver'}:
+        _isolate(os.environ[MEDIA_ENV])
+
+
+class IsolatedParallelTestSuite(django_runner.ParallelTestSuite):
+    init_worker = _init_worker
+
+
 class TempMediaRunner(DiscoverRunner):
     """Runs the tests with `MEDIA_ROOT` set to a folder that is deleted afterwards."""
+
+    parallel_test_suite = IsolatedParallelTestSuite
 
     def setup_test_environment(self, **kwargs: Any) -> None:
         super().setup_test_environment(**kwargs)
         self._media_dir = tempfile.mkdtemp(prefix='share-dinkum-test-media-')
-        self._overrides = override_settings(MEDIA_ROOT=self._media_dir, HOLDINGS_SHADOW='assert')
-        self._overrides.enable()
-
-        # A cleanup runs after tearDown and before the test's data is rolled back, and what it
-        # raises is reported as the test's error.
-        self._do_cleanups = TransactionTestCase.doCleanups
-
-        def do_cleanups(test: TransactionTestCase) -> Any:
-            from share_dinkum_app import yfinanceinterface
-            yfinanceinterface.forget_failures()  # A fetch one test failed is not held back from the next.
-            if not getattr(test, '_holdings_checked', False):
-                test._holdings_checked = True  # type: ignore[attr-defined]
-                test.addCleanup(_check_holdings, test)
-            return self._do_cleanups(test)
-
-        TransactionTestCase.doCleanups = do_cleanups  # type: ignore[method-assign,assignment]
+        os.environ[MEDIA_ENV] = self._media_dir  # Inherited by the workers of a parallel run.
+        self._overrides, self._do_cleanups = _isolate(self._media_dir)
 
     def teardown_test_environment(self, **kwargs: Any) -> None:
         TransactionTestCase.doCleanups = self._do_cleanups  # type: ignore[method-assign]
         self._overrides.disable()
+        os.environ.pop(MEDIA_ENV, None)
         shutil.rmtree(self._media_dir, ignore_errors=True)
         super().teardown_test_environment(**kwargs)

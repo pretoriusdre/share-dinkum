@@ -87,7 +87,21 @@ class SellStrategy(models.TextChoices):
     FIFO = 'FIFO', 'First-in, First-out'
     LIFO = 'LIFO', 'Last-in, First out'
     MIN_CGT = 'MIN_CGT', 'Minimise net capital gain'
+    MAX_CGT = 'MAX_CGT', 'Maximise net capital gain'
+    MIN_GROSS = 'MIN_GROSS', 'Minimise gain before discount (highest cost base first)'
+    MAX_GROSS = 'MAX_GROSS', 'Maximise gain before discount (lowest cost base first)'
     MANUAL = 'MANUAL', 'Manually create allocations'
+
+
+class CostBaseBasis(models.TextChoices):
+    """How the shares from exercising options get their cost base."""
+
+    #: s134-1(1) item 1 and s130-40: what the options cost, plus the exercise price.
+    ROLLOVER = 'ROLLOVER', "The options' cost base plus the exercise price"
+    #: s83A-125: a deferred employee scheme whose taxing point is the exercise, or after it.
+    MARKET_VALUE = 'MARKET_VALUE', 'Market value at the taxing point (deferred employee share scheme)'
+    #: ROLLOVER, with the discount counted from when the options were acquired (s115-30(1) item 9A).
+    START_UP = 'START_UP', 'Start-up concession: as ROLLOVER, the discount counted from the grant'
 
 
 class AllocationMethod(models.TextChoices):
@@ -147,6 +161,9 @@ class AttributionComponent(models.TextChoices):
     FRANKED_DISTRIBUTION = 'FRANKED_DISTRIBUTION', 'Franked distributions from trusts'
     FRANKING_CREDIT = 'FRANKING_CREDIT', 'Franking credits'
     UNFRANKED_DISTRIBUTION = 'UNFRANKED_DISTRIBUTION', 'Unfranked distributions'
+    #: Unfranked and declared conduit foreign income. Kept apart from the line above because a
+    #: foreign resident pays no withholding tax on it, so its treatment can differ.
+    UNFRANKED_CFI_DISTRIBUTION = 'UNFRANKED_CFI_DISTRIBUTION', 'Unfranked CFI distributions (conduit foreign income)'
     INTEREST = 'INTEREST', 'Interest'
     OTHER_INCOME = 'OTHER_INCOME', 'Other income'
     FOREIGN_SOURCE_INCOME = 'FOREIGN_SOURCE_INCOME', 'Assessable foreign source income'

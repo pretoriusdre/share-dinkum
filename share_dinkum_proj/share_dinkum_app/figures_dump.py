@@ -108,6 +108,14 @@ class Keys:
             parts = [obj.name]
         elif isinstance(obj, m.Trade):
             parts = [type(obj).__name__, obj.instrument.name, obj.date, obj.quantity, obj.legacy_id]
+            exercise = obj.exercise if isinstance(obj, (m.Buy, m.Sell)) else None
+            if exercise is not None:
+                # An exercise's trades have no legacy id of their own, but the exercise may.
+                parts.append(self.key(exercise))
+            option_buy = obj.option_buy if isinstance(obj, m.Buy) else None
+            if option_buy is not None:
+                # An exercise writes one buy per option buy, with no legacy id to tell them apart.
+                parts.append(self.key(option_buy))
         elif isinstance(obj, m.Parcel):
             parts = [self.key(obj.buy), obj.activation_date, obj.deactivation_date, obj.parcel_quantity,
                      obj.sale_date]
@@ -115,6 +123,8 @@ class Keys:
             parts = [self.key(obj.sell), self.key(obj.parcel), obj.quantity]
         elif isinstance(obj, m.ShareSplit):
             parts = ['ShareSplit', obj.instrument.name, obj.date]
+        elif isinstance(obj, m.OptionExercise):
+            parts = ['OptionExercise', obj.instrument.name, obj.date, obj.quantity, obj.legacy_id]
         elif isinstance(obj, m.CostBaseAdjustment):
             parts = ['CostBaseAdjustment', obj.instrument.name, obj.financial_year_end_date, obj.legacy_id]
         elif isinstance(obj, m.CostBaseAdjustmentAllocation):
@@ -138,8 +148,9 @@ class Keys:
 
 #: The records an id in the figures can name, keyed before anything is translated.
 KEYED_MODELS = (
-    'Instrument', 'Buy', 'Sell', 'Parcel', 'SellAllocation', 'ShareSplit', 'CostBaseAdjustment',
-    'CostBaseAdjustmentAllocation', 'Dividend', 'Distribution', 'AttributionStatement',
+    'Instrument', 'OptionExercise', 'Buy', 'Sell', 'Parcel', 'SellAllocation', 'ShareSplit',
+    'CostBaseAdjustment', 'CostBaseAdjustmentAllocation', 'Dividend', 'Distribution',
+    'AttributionStatement',
 )
 
 

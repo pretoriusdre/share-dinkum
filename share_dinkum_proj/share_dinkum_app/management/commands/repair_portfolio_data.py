@@ -8,6 +8,10 @@ Repaired:
 * Cost base adjustments left on a parcel a share split replaced are carried to the parcels
   that replaced it. Until then they are missing from the cost base, so this does change gains.
 * Exchange rates standing in for one that could not be fetched are fetched again.
+* An option exercise whose sale of options or buys of shares no longer match it (loaded so from
+  an edited export) writes them again.
+* Prices stored for an instrument on an unlisted market, fetched under its name as a ticker before
+  the price refresh skipped them, are deleted with its current price.
 
 Listed, because only the person who entered them knows the answer: sales with units
 allocated to no parcel, parcels allocated for more than they hold, parcels whose cost base
@@ -55,6 +59,8 @@ class Command(BaseCommand):
             reattached = recalculate.reattach_adjustments(account)
             refetched = recalculate.refetch_placeholder_rates(account)
             relinked = recalculate.relink_split_parcels(account)
+            rewritten = recalculate.rewrite_exercises(account)
+            cleared = recalculate.clear_unlisted_prices(account)
             recalculated = recalculate.account(account)
 
         if reattached:
@@ -66,6 +72,14 @@ class Command(BaseCommand):
         if relinked:
             self.stdout.write(self.style.SUCCESS(
                 f'  linked {relinked} share split(s) back to the parcels they created.'))
+        if rewritten:
+            self.stdout.write(self.style.SUCCESS(
+                f'  wrote again the trades of {rewritten} option exercise(s).'))
+        if cleared:
+            self.stdout.write(self.style.SUCCESS(
+                f'  deleted the prices of {cleared} instrument(s) on an unlisted market. If a market '
+                f'is in fact listed, tick "Is exchange listed" and run `uv run dev '
+                f'refetch_price_history`.'))
         self.stdout.write(self.style.SUCCESS(
             f'  recalculated the stored figures of {recalculated} record(s).'))
 

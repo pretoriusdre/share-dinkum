@@ -1,6 +1,6 @@
 [project]
 name = "share-dinkum"
-version = "0.7.0"
+version = "0.8.0"
 description = "Open source share tracker for Australian and other shares"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -48,6 +48,7 @@ dev = [
     "pandas-stubs>=2.2.0",
     "types-openpyxl>=3.1.0",
     "types-requests>=2.32.0",
+    "tblib>=3.2.2",
 ]
 
 [tool.mypy]

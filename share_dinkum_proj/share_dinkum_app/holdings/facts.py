@@ -22,6 +22,9 @@ from share_dinkum_app.holdings.state import Lineage
 if TYPE_CHECKING:
     from share_dinkum_app.models import Account, Instrument
 
+# For annotations inside a fact, whose `date` field shadows the class.
+Date = date
+
 
 @dataclass(frozen=True)
 class BuyFact:
@@ -30,9 +33,11 @@ class BuyFact:
     date: date
     quantity: Decimal
     legacy_id: str | None
-    #: Price and brokerage per unit in the portfolio currency, for a MIN_CGT sale to rank by.
+    #: Price and brokerage per unit in the portfolio currency, for a gain-ranked sale to rank by.
     unit_price: Decimal | None = None
     unit_brokerage: Decimal | None = None
+    #: When the CGT discount counts from, where not `date` (`Buy.discount_counted_from`).
+    discount_from: Date | None = None
 
     def label(self) -> str:
         reference = f' ({self.legacy_id})' if self.legacy_id else ''
@@ -47,7 +52,7 @@ class SaleFact:
     quantity: Decimal
     strategy: str
     legacy_id: str | None
-    #: Net proceeds per unit in the portfolio currency, for MIN_CGT.
+    #: Net proceeds per unit in the portfolio currency, for MIN_CGT and MAX_CGT.
     unit_proceeds: Decimal | None = None
 
     def label(self) -> str:
@@ -105,7 +110,7 @@ class Facts:
     #: adjustment id -> {parcel lineage: amount}: the same, on each stored parcel. The replay
     #: follows these where its parcels match the stored ones, so a rebuild changes no amount.
     pinned_parts: dict[Any, dict[Lineage, Decimal]] = field(default_factory=dict)
-    #: Ranks a MIN_CGT parcel: (sale, buy, unit cost base) -> net gain per unit after discount.
+    #: Ranks a MIN_CGT or MAX_CGT parcel: (sale, buy, unit cost base) -> net gain per unit after discount.
     net_gain_per_unit: Callable[[SaleFact, BuyFact, Decimal], Any] | None = None
 
 
@@ -134,10 +139,17 @@ def load(account: 'Account', instrument: 'Instrument | None' = None,
 
     facts = Facts(currency=currency)
     for buy in of(Buy.objects).select_related('instrument', 'exchange_rate'):
+        unit_price = _amount(buy.unit_price_converted)
+        discount_from = None
+        if buy.exercise_id is not None:
+            # Shares from exercising options: their cost is part of the price paid for them.
+            if unit_price is not None:
+                unit_price += buy.option_cost_base.amount / buy.quantity
+            discount_from = buy.discount_counted_from
         facts.buys.append(BuyFact(
             id=buy.pk, instrument=buy.instrument.name, date=buy.date, quantity=buy.quantity,
-            legacy_id=buy.legacy_id, unit_price=_amount(buy.unit_price_converted),
-            unit_brokerage=_amount(buy.unit_brokerage_converted)))
+            legacy_id=buy.legacy_id, unit_price=unit_price,
+            unit_brokerage=_amount(buy.unit_brokerage_converted), discount_from=discount_from))
     for sell in of(Sell.objects).select_related('instrument', 'exchange_rate'):
         facts.sales.append(SaleFact(
             id=sell.pk, instrument=sell.instrument.name, date=sell.date, quantity=sell.quantity,
@@ -173,10 +185,10 @@ def load(account: 'Account', instrument: 'Instrument | None' = None,
             facts.pinned_spreads[key] = facts.pinned_spreads.get(key, Decimal('0')) + part.amount
 
     def net_gain_per_unit(sale: SaleFact, buy: BuyFact, unit_cost_base: Decimal) -> Any:
-        """As the MIN_CGT signal ranks a parcel: the reports' discount on the gain per unit."""
+        """As the MIN_CGT and MAX_CGT signal ranks a parcel: the reports' discount on the gain per unit."""
         return cgt.apply_discount(
             Money((sale.unit_proceeds or Decimal('0')) - unit_cost_base, currency),
-            purchase_date=buy.date, sale_date=sale.date, account=account)
+            purchase_date=buy.discount_from or buy.date, sale_date=sale.date, account=account)
 
     facts.net_gain_per_unit = net_gain_per_unit
     return facts
