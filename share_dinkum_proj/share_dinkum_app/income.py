@@ -57,6 +57,7 @@ LABELS: dict[str, str] = {
 #: REFERENCE_COMPONENTS are capital gains or cost base movements, which are not income.
 TRUST_LABELS: dict[str, str] = {
     AttributionComponent.UNFRANKED_DISTRIBUTION: '13U',
+    AttributionComponent.UNFRANKED_CFI_DISTRIBUTION: '13U',
     AttributionComponent.INTEREST: '13U',
     AttributionComponent.OTHER_INCOME: '13U',
     AttributionComponent.FRANKED_DISTRIBUTION: '13C',

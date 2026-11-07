@@ -9148,6 +9148,23 @@ class IncomeReportTests(TransactionTestCase):
             self.assertAlmostEqual(figures[key], value, places=4, msg=key)
         self.assertFalse(summary.is_draft(self.YEAR), summary.year_warnings(self.YEAR))
 
+    def test_unfranked_cfi_goes_to_13u_for_a_resident_and_nothing_for_a_foreign_resident(self, mock_rate):
+        declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2024, 6, 30))
+        self._payments()
+        statement = AttributionStatement.objects.get(account=self.account, financial_year_end_date=date(2024, 6, 30))
+        AttributionComponent.objects.create(
+            account=self.account, statement=statement, component='UNFRANKED_CFI_DISTRIBUTION',
+            amount=Money(Decimal('20'), 'AUD'))
+
+        figures, _ = self._figures()
+
+        self.assertAlmostEqual(figures['13U'], 27)  # 5 unfranked + 2 interest + 20 CFI
+
+        ResidencyPeriod.objects.filter(account=self.account).delete()
+        declare(self.account, 'FOREIGN', date(2016, 1, 1))
+        figures, _ = self._figures()
+        self.assertEqual(figures['13U'], 0)
+
     def test_a_foreign_resident_counts_nothing_and_lists_it(self, mock_rate):
         declare(self.account, 'RESIDENT', date(2016, 1, 1), date(2023, 12, 31))
         declare(self.account, 'FOREIGN', date(2024, 1, 1))

@@ -35,7 +35,17 @@
       "stated_total": null,
       "row": {
         "component": "UNFRANKED_DISTRIBUTION",
-        "amount": "10.00",
+        "amount": "8.00",
+        "amount_currency": "AUD"
+      }
+    },
+    {
+      "model": "AttributionComponent",
+      "reference": null,
+      "stated_total": null,
+      "row": {
+        "component": "UNFRANKED_CFI_DISTRIBUTION",
+        "amount": "2.00",
         "amount_currency": "AUD"
       }
     },
