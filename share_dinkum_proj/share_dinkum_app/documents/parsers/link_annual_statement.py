@@ -46,7 +46,8 @@ OTHER_FOREIGN = 'other foreign'
 # `None` is a total, a cash line or a breakdown of lines already counted.
 LINES: list[tuple[str, str | None]] = [
     (r'interest \((?:not )?subject to non-resident withholding tax\)', 'INTEREST'),
-    (r'dividends - unfranked (?:cfi )?amount(?: (?:not )?declared to be cfi)?', 'UNFRANKED_DISTRIBUTION'),
+    (r'dividends - unfranked (?:cfi amount|amount declared to be cfi)', 'UNFRANKED_CFI_DISTRIBUTION'),
+    (r'dividends - unfranked amount(?: not declared to be cfi)?', 'UNFRANKED_DISTRIBUTION'),
     (r'other assessable australian income(?: \((?:other|ncmi|excluded from ncmi|cbmi)\))?', 'OTHER_INCOME'),
     (r'other income', 'OTHER_INCOME'),
     (r'(?:excluded from )?ncmi - non-primary production', 'OTHER_INCOME'),
@@ -90,7 +91,7 @@ LINES: list[tuple[str, str | None]] = [
 ]
 # The CGT concession amount is cash only: its taxable column is nil.
 FIRST_COLUMN = {'CGT_CONCESSION'}
-INCOME = ('INTEREST', 'UNFRANKED_DISTRIBUTION', 'OTHER_INCOME')
+INCOME = ('INTEREST', 'UNFRANKED_DISTRIBUTION', 'UNFRANKED_CFI_DISTRIBUTION', 'OTHER_INCOME')
 
 Rows = list[tuple[str, list[str]]]
 

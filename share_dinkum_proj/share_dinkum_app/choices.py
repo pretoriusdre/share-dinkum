@@ -158,6 +158,9 @@ class AttributionComponent(models.TextChoices):
     FRANKED_DISTRIBUTION = 'FRANKED_DISTRIBUTION', 'Franked distributions from trusts'
     FRANKING_CREDIT = 'FRANKING_CREDIT', 'Franking credits'
     UNFRANKED_DISTRIBUTION = 'UNFRANKED_DISTRIBUTION', 'Unfranked distributions'
+    #: Unfranked and declared conduit foreign income. Kept apart from the line above because a
+    #: foreign resident pays no withholding tax on it, so its treatment can differ.
+    UNFRANKED_CFI_DISTRIBUTION = 'UNFRANKED_CFI_DISTRIBUTION', 'Unfranked CFI distributions (conduit foreign income)'
     INTEREST = 'INTEREST', 'Interest'
     OTHER_INCOME = 'OTHER_INCOME', 'Other income'
     FOREIGN_SOURCE_INCOME = 'FOREIGN_SOURCE_INCOME', 'Assessable foreign source income'

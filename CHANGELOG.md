@@ -37,6 +37,10 @@ To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0
   basis each case takes and what the options cost, shares granted under an employee share plan,
   and the taxing point that leaving a job was until 30 June 2022.
 
+### Changed
+
+- **Unfranked CFI is its own line on a trust's annual statement**, apart from unfranked distributions, so a foreign resident's conduit foreign income stays visible. It still counts on label 13U for a resident.
+
 ### Fixed
 
 - **A price refresh no longer fetches prices for an instrument on an unlisted market.** It asked
