@@ -333,6 +333,10 @@ class GenericModelAdmin(PortfolioScopedMixin, admin.ModelAdmin):
                 related_model = rel.related_model
                 if related_model == share_dinkum_app.models.AppUser:
                     continue
+                # An option's terms are entered on the option's own page; as an inline on the
+                # shares' page it would add a blank instrument form to every instrument.
+                if rel.field.name == 'option_underlying_instrument':
+                    continue
                 related_manager_name = rel.get_accessor_name()
 
                 # A reverse one-to-one is an object, not a manager, and accessing it raises

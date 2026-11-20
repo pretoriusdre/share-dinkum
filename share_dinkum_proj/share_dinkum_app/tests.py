@@ -11325,6 +11325,218 @@ class OptionExercise2027Tests(OptionExerciseMixin, TransactionTestCase):
         self.assertEqual(event.capital_gain, Money(Decimal('0'), 'AUD'))
 
 
+class OptionIntrinsicValueTests(OptionExerciseMixin, ImportWorkbookMixin, TransactionTestCase):
+    """Options on an unlisted market valued at max(0, ratio x share price - exercise price)."""
+
+    def setUp(self):
+        super().setUp()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def make_instruments(self):
+        employer = Market.objects.create(account=self.account, code='EMPLOYER', is_exchange_listed=False)
+        self.shares = create_instrument(account=self.account, name='ACME')
+        self.set_share_price('3')
+        self.options = Instrument.objects.create(
+            account=self.account, market=employer, name='ACMEO', description='ACME options',
+            legal_form='RIGHT_OPTION', option_underlying_instrument=self.shares,
+            option_exercise_price=Decimal('2'))
+
+    def set_share_price(self, price):
+        self.shares.current_unit_price = None if price is None else Decimal(price)
+        self.shares.save()
+
+    def set_terms(self, **terms):
+        for name, value in terms.items():
+            setattr(self.options, name, value)
+        self.options.save()
+        self.options.refresh_from_db()
+
+    def test_the_value_is_the_share_price_less_the_exercise_price(self):
+        self.buy_options(price='0', brokerage='0')
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('1.0000'))
+        self.assertEqual(self.options.calculated_value_held, Money(Decimal('1000'), 'AUD'))
+
+    def test_out_of_the_money_is_worth_nothing_not_less(self):
+        self.set_share_price('1.50')
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('0'))
+
+    def test_the_conversion_ratio_multiplies_the_share_price(self):
+        self.set_terms(option_conversion_ratio=Decimal('2'))
+        self.assertEqual(self.options.current_unit_price, Decimal('4.0000'))
+
+    def test_an_underlying_with_no_price_leaves_the_options_unpriced(self):
+        self.set_share_price(None)
+        self.options.refresh_from_db()
+        self.assertIsNone(self.options.current_unit_price)
+
+    def test_a_new_share_price_revalues_the_options(self):
+        self.buy_options(price='0', brokerage='0')
+        self.set_share_price('5')
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('3.0000'))
+        self.assertEqual(self.options.calculated_value_held, Money(Decimal('3000'), 'AUD'))
+
+    def test_a_price_refresh_of_the_shares_revalues_the_options(self):
+        day = date(2026, 11, 20)
+        fetched = pd.DataFrame([{
+            'instrument': self.shares, 'date': day, 'open': 6.0, 'high': 6.0, 'low': 6.0,
+            'close': 6.0, 'volume': 10, 'stock_splits': 0.0}])
+        with patch('share_dinkum_app.models.yfinanceinterface.get_instrument_price_history',
+                   return_value=fetched), \
+                patch('share_dinkum_app.models.yfinanceinterface.get_current_price', return_value=None):
+            self.shares.update_price_history(start_date=day, end_date=day)
+
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('4.0000'))
+
+    def test_a_listed_option_keeps_its_market_price(self):
+        listed = create_market(account=self.account, code='ASXO')
+        self.options.market = listed
+        self.options.current_unit_price = Decimal('0.75')
+        self.options.save()
+        self.set_share_price('9')
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('0.7500'))
+
+    def test_clearing_unlisted_prices_keeps_the_intrinsic_value(self):
+        InstrumentPriceHistory.objects.create(
+            account=self.account, instrument=self.options, date=date(2025, 3, 3), open=Decimal('5'),
+            high=Decimal('5'), low=Decimal('5'), close=Decimal('5'), volume=0, stock_splits=Decimal('0'))
+        recalculate.clear_unlisted_prices(self.account)
+        self.options.refresh_from_db()
+        self.assertEqual(self.options.current_unit_price, Decimal('1.0000'))
+
+    def test_terms_are_only_for_an_option(self):
+        self.options.legal_form = 'COMPANY'
+        self.assertTrue(any('Only an option or right' in p for p in self.options.option_problems()))
+        with self.assertRaises(ValidationError):
+            self.options.clean()
+        with self.assertRaises(ValueError):
+            self.options.save()
+
+    def test_the_underlying_cannot_be_itself_or_another_option(self):
+        self.options.option_underlying_instrument = self.options
+        self.assertIn('An option cannot convert into itself.', self.options.option_problems())
+        other = Instrument.objects.create(
+            account=self.account, market=self.options.market, name='OTHERO', legal_form='RIGHT_OPTION')
+        self.options.option_underlying_instrument = other
+        self.assertTrue(any('is itself an option' in p for p in self.options.option_problems()))
+
+    def test_the_underlying_must_be_in_the_options_currency(self):
+        self.options.currency = 'USD'
+        self.assertTrue(any('is in USD' in p for p in self.options.option_problems()))
+
+    def test_an_exercise_price_without_an_underlying_is_kept_but_not_valued(self):
+        self.set_terms(option_underlying_instrument=None)
+        self.assertFalse(self.options.is_valued_at_intrinsic)
+        self.assertEqual(self.options.option_exercise_price, Decimal('2'))
+
+    def test_the_unrealised_gain_uses_it_and_warns(self):
+        self.buy_options(price='0', brokerage='0')
+        report = UnrealisedGainReport(account=self.account, as_at=date(2026, 11, 20))
+        [event] = [e for e in report.events if e.instrument == 'ACMEO']
+        self.assertEqual(event.net_proceeds, Money(Decimal('1000'), 'AUD'))
+        [note] = report.intrinsic_value_notes()
+        self.assertIn('ACMEO is valued at its intrinsic value (1 x the price of ACME', note)
+        self.assertIn('exercise price of AUD 2)', note)
+        self.assertIn(note, report.warnings())
+
+    def test_an_exercise_fills_its_blanks_from_the_options(self):
+        self.set_terms(option_conversion_ratio=Decimal('2'))
+        self.buy_options(price='0', brokerage='0')
+        exercise = OptionExercise.objects.create(
+            account=self.account, instrument=self.options, date=date(2025, 3, 1),
+            quantity=Decimal('1000'), total_brokerage=Money(0, 'AUD'))
+        exercise.refresh_from_db()
+        self.assertEqual(exercise.underlying_instrument, self.shares)
+        self.assertEqual(exercise.exercise_price, Money(Decimal('2'), 'AUD'))
+        self.assertEqual(exercise.quantity_received, Decimal('2000'))
+        self.assertEqual(Buy.objects.get(exercise=exercise).quantity, Decimal('2000'))
+
+    def test_what_an_exercise_gives_wins(self):
+        self.set_terms(option_conversion_ratio=Decimal('2'))
+        self.buy_options(price='0', brokerage='0')
+        exercise = self.exercise(exercise_price='1.50', quantity_received=Decimal('1500'))
+        exercise.refresh_from_db()
+        self.assertEqual(exercise.exercise_price, Money(Decimal('1.50'), 'AUD'))
+        self.assertEqual(exercise.quantity_received, Decimal('1500'))
+        exercise.delete()
+
+        other = create_instrument(account=self.account, market=self.shares.market, name='NEWCO')
+        exercise = OptionExercise.objects.create(
+            account=self.account, instrument=self.options, underlying_instrument=other,
+            date=date(2025, 3, 1), quantity=Decimal('1000'), total_brokerage=Money(0, 'AUD'))
+        exercise.refresh_from_db()
+        self.assertEqual(exercise.underlying_instrument, other)
+        self.assertEqual(exercise.quantity_received, Decimal('2000'))
+
+    def test_an_exercise_with_no_underlying_anywhere_is_refused(self):
+        self.set_terms(option_underlying_instrument=None, option_exercise_price=None)
+        self.buy_options(price='0', brokerage='0')
+        with self.assertRaisesRegex(ValueError, 'Give the shares received'):
+            OptionExercise.objects.create(
+                account=self.account, instrument=self.options, date=date(2025, 3, 1),
+                quantity=Decimal('1000'), total_brokerage=Money(0, 'AUD'))
+
+    def test_an_exercise_with_no_price_anywhere_is_at_nothing(self):
+        self.set_terms(option_exercise_price=None)
+        self.buy_options(price='0', brokerage='0')
+        exercise = OptionExercise.objects.create(
+            account=self.account, instrument=self.options, date=date(2025, 3, 1),
+            quantity=Decimal('1000'), total_brokerage=Money(0, 'AUD'))
+        exercise.refresh_from_db()
+        self.assertEqual(exercise.exercise_price, Money(Decimal('0'), 'AUD'))
+
+    def test_an_exercise_saved_before_the_terms_keeps_its_blank_meaning(self):
+        self.buy_options(price='0', brokerage='0')
+        exercise = self.exercise()
+        self.set_terms(option_conversion_ratio=Decimal('2'))
+        exercise.refresh_from_db()
+        exercise.save()
+        exercise.refresh_from_db()
+        self.assertIsNone(exercise.quantity_received)
+
+    def test_an_option_listed_before_its_shares_loads_and_links(self):
+        workbook = Path(self.temp_dir.name) / 'import.xlsx'
+        markets = [{'code': 'ASX', 'description': 'ASX', 'suffix': 'AX', 'is_exchange_listed': True},
+                   {'code': 'EMP', 'description': 'Employer', 'suffix': None, 'is_exchange_listed': False}]
+        instruments = [
+            {'name': 'NEWO', 'description': 'New options', 'currency': 'AUD', 'market__code': 'EMP',
+             'legal_form': 'RIGHT_OPTION', 'option_underlying_instrument__name': 'NEW',
+             'option_exercise_price': Decimal('1.25'), 'option_conversion_ratio': None},
+            {'name': 'NEW', 'description': 'New shares', 'currency': 'AUD', 'market__code': 'ASX',
+             'legal_form': 'COMPANY', 'option_underlying_instrument__name': None,
+             'option_exercise_price': None, 'option_conversion_ratio': None},
+        ]
+        buys = [{'legacy_id': 'B1', 'instrument__name': 'NEWO', 'date': date(2024, 1, 10),
+                 'quantity': Decimal('100'), 'unit_price': Decimal('0'), 'total_brokerage': Decimal('0')}]
+        self.build_workbook(workbook, markets=markets, instruments=instruments, buys=buys)
+
+        loading.DataLoader(account=self.account, input_file=workbook)
+
+        options = Instrument.objects.get(account=self.account, name='NEWO')
+        self.assertEqual(options.option_underlying_instrument.name, 'NEW')
+        self.assertEqual(options.option_exercise_price, Decimal('1.25'))
+
+    def test_an_export_restores_the_terms_and_the_value(self):
+        self.buy_options(price='0', brokerage='0')
+        export = DataExport.objects.create(account=self.account)
+        export.refresh_from_db()
+        path = Path(self.temp_dir.name) / 'export.xlsx'
+        shutil.copy2(export.file.path, path)
+
+        call_command('flush', interactive=False, verbosity=0)
+        restored = loading.DataLoader(input_file=path).account
+
+        options = Instrument.objects.get(account=restored, name='ACMEO')
+        self.assertEqual(options.option_underlying_instrument.name, 'ACME')
+        self.assertEqual(options.current_unit_price, Decimal('1.0000'))
+        self.assertEqual(options.calculated_value_held, Money(Decimal('1000'), 'AUD'))
+
+
 class UnrecordedLossWarningTests(TransactionTestCase):
     """A loss the application worked out reaches no later year until it is recorded."""
 

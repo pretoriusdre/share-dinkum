@@ -16,16 +16,35 @@ your employer's ESS statement and the ATO's guidance are the authority.
 2. Add an **Instrument** for them with legal form **Right, option or entitlement**. An exercise of
    anything else is refused. A gain on the options themselves, if you sell them or they lapse, goes
    in *Other CGT assets and any other CGT events* on the CGT schedule.
-3. Enter a **Buy** of the options at what they cost, dated when you received them. The sections
-   below say what that cost is; for most employee options it is 0. Unlisted options are shown as
-   worth nothing, since no provider quotes them.
+3. Give the option's terms on its Instrument row, if you know them: the **option underlying
+   instrument** (the shares one option converts into, in the same currency), the **option exercise
+   price** (per option, in the instrument's currency) and the **option conversion ratio** (shares
+   per option; blank is 1).
+4. Enter a **Buy** of the options at what they cost, dated when you received them. The sections
+   below say what that cost is; for most employee options it is 0.
+
+### What they are worth
+
+No provider quotes unlisted options, so with the underlying and exercise price given, an unlisted
+option is valued at its **intrinsic value**:
+
+    value per option = max(0, conversion ratio x the share's latest price - exercise price)
+
+It follows the share: a price refresh of the share revalues the options. Without the terms, or while
+the share has no price, the options have no price and are shown as worth nothing. A listed option
+keeps the price its exchange quotes.
+
+Intrinsic value leaves out time value, so it understates what an option with time to run is worth,
+and it is not a market value for tax. On the CGT report's UnrealisedGains sheet the options are
+shown at it, and the Warnings sheet says so. For options in a deferred employee share scheme, that
+gain would be ESS income at the taxing point, not a capital gain.
 
 ## Exercising them
 
 An **Option exercise** takes:
 
 - the options, the shares received, and the date;
-- the number of options exercised, and of shares received (blank is one for each option);
+- the number of options exercised, and of shares received;
 - the **exercise price** per option, and the **fees** paid to exercise. Don't put the exercise price
   in brokerage anywhere: it is part of the cost base already;
 - the **cost base basis**: ROLLOVER (what the options cost plus the exercise price), MARKET_VALUE
@@ -33,6 +52,12 @@ An **Option exercise** takes:
   start-up concession). MARKET_VALUE also takes the market value per share at the taxing point, and
   the **taxing point date** if that was after the exercise;
 - which options it takes if they were bought at different times: first bought (FIFO) or last (LIFO).
+
+Left blank on a new exercise, the shares received, the exercise price and the number of shares
+received are taken from the options' terms on their Instrument row; with no terms, the exercise
+price is 0 and there is one share for each option. What you enter on the exercise wins, as a
+reorganisation can change the terms. An exercise saved before the terms were given keeps its own
+figures.
 
 Saving it writes a sale of the options at nothing and a buy of the shares, one for each buy of the
 options it took from, so options bought at different prices give shares with different cost bases.

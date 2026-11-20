@@ -618,7 +618,10 @@ class DataLoader():
             # Foreign key lookup by name
             col_parts = col.split('__')   # eg 'instrument__name' > ['instrument', 'name']
             if len(col_parts) == 2:
-                df = self.resolve_lookup_column(model, df, col)
+                # A link to a row of this same table may name one further down, so it is set
+                # once every row is loaded (`link_own_table`).
+                if not self.links_to_own_table(model, col):
+                    df = self.resolve_lookup_column(model, df, col)
                 continue
 
             # A column the model no longer has. Renaming or removing a field retires every
@@ -704,10 +707,14 @@ class DataLoader():
         """Create or update one record per row of a table from `prepare_table`."""
 
         model_has_account = 'account' in [f.name for f in model._meta.fields]
+        own_links = [column for column in df.columns if self.links_to_own_table(model, column)]
+        loaded: list[tuple[models.Model, Any]] = []
 
         for index, row in tqdm(df.iterrows(), total=len(df)):
 
             record = dict(row)
+            for column in own_links:
+                record.pop(column)
             blank_columns = {column for column in df.columns if blank.at[index, column]}
             if model_has_account:
                 assert self.account is not None
@@ -784,6 +791,41 @@ class DataLoader():
                 fill_blank_defaults(model, record, blank_columns)
                 obj = model(**record)
                 save_with_logging(obj=obj, context="Creating new object without provided ID")
+            if own_links:
+                loaded.append((obj, index))
+
+        for column in own_links:
+            self.link_own_table(model, df, column, loaded)
+
+    @staticmethod
+    def links_to_own_table(model: type[models.Model], column: str) -> bool:
+        """Whether `column` (such as `option_underlying_instrument__name`) names a row of `model`."""
+        parts = column.split('__')
+        if len(parts) != 2:
+            return False
+        try:
+            field: Any = model._meta.get_field(parts[0])
+        except FieldDoesNotExist:
+            return False
+        return bool(field.is_relation and field.related_model is model)
+
+    def link_own_table(self, model: type[models.Model], df: pd.DataFrame, column: str,
+                       loaded: list[tuple[models.Model, Any]]) -> None:
+        """Set each loaded record's link from `column`, now every row it can name exists.
+
+        An option and the shares it converts into are both instruments, and the shares may be on
+        a later row. A blank cell leaves the stored link as it was.
+        """
+        indexes = [index for _, index in loaded]
+        resolved = self.resolve_lookup_column(model, df.loc[indexes, [column]].copy(), column)
+        field_name = column.split('__')[0]
+        attname = cast(Any, model._meta.get_field(field_name)).attname
+        for obj, index in loaded:
+            target = cast('models.Model | None', resolved.at[index, field_name])
+            if target is None or getattr(obj, attname) == target.pk:
+                continue
+            setattr(obj, field_name, target)
+            save_with_logging(obj=obj, context=f'Linking {field_name} to a row of the same table')
 
 
     def check_belongs_to_account(self, obj: models.Model, model: type[models.Model]) -> None:

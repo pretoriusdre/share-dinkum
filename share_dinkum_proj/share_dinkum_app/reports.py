@@ -7,7 +7,7 @@ from typing import Any
 from djmoney.money import Money
 
 from share_dinkum_app.models import (
-    Account, FiscalYear, CGTReturnSnapshot, CGTReturnSnapshotRow)
+    Account, FiscalYear, CGTReturnSnapshot, CGTReturnSnapshotRow, Instrument)
 import pandas as pd
 
 from share_dinkum_app import cgt, excelinterface, income
@@ -100,9 +100,31 @@ class UnrealisedGainReport(BaseReport):
         return pd.DataFrame(rows, columns=['asset_category', *self.SUMMARY_FIGURES])
 
     def warnings(self) -> list[str]:
-        """Each row's pending reason, naming its parcel."""
-        return [f'{event.instrument} bought {event.purchase_date}: {event.pending_reason}'
-                for event in self.events if event.pending_reason]
+        """Each row's pending reason, naming its parcel, then a note per option valued at its
+        intrinsic value."""
+        warnings = [f'{event.instrument} bought {event.purchase_date}: {event.pending_reason}'
+                    for event in self.events if event.pending_reason]
+        return warnings + self.intrinsic_value_notes()
+
+    def intrinsic_value_notes(self) -> list[str]:
+        """A note for each option held whose value is worked out from its underlying's price."""
+        names = {event.instrument for event in self.events}
+        options = (Instrument.objects.filter(account=self.account, name__in=names)
+                   .select_related('market', 'option_underlying_instrument').order_by('name'))
+        notes: list[str] = []
+        for option in options:
+            if not option.is_valued_at_intrinsic:
+                continue
+            underlying, price = option.option_underlying_instrument, option.option_exercise_price
+            assert underlying is not None and price is not None
+            ratio = option.option_conversion_ratio or Decimal('1')
+            notes.append(
+                f'{option.name} is valued at its intrinsic value ({ratio.normalize():f} x the price '
+                f'of {underlying.name}, less the exercise price of {option.currency} '
+                f'{price.normalize():f}'
+                f'), not a market price. For options in a deferred employee share scheme, the '
+                f'gain is ESS income at the taxing point, not a capital gain.')
+        return notes
 
 
 def _amount(money: Any) -> Decimal:
