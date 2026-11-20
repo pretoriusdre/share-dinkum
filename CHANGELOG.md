@@ -4,6 +4,19 @@ All notable changes to Share Dinkum are recorded here.
 
 To upgrade, stop the server and run `uv run update.py` (`uv run update` before 0.6.1).
 
+## 0.9.0 - 2026-11-20
+
+### Added
+
+- **Unlisted options are valued at their intrinsic value.** An Instrument has three new optional
+  columns, **option underlying instrument**, **option exercise price** and **option conversion
+  ratio**. With the first two given, an option on an unlisted market is priced at max(0, ratio x the
+  share's latest price - exercise price), and a price refresh of the share revalues it. It was
+  shown as worth nothing. The CGT report's Warnings sheet notes each option valued this way; tax
+  figures are unchanged.
+- A new **Option exercise** takes its shares received, exercise price and number of shares
+  received from the options' terms when they are left blank.
+
 ## 0.8.0 - 2026-11-08
 
 ### Added

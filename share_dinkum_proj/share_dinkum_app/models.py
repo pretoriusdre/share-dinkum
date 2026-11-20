@@ -964,8 +964,23 @@ class Instrument(BaseModel):
         help_text='The market the instrument is listed on. Enter its code as listed in the '
                   'Market table.')
     current_unit_price = models.DecimalField(max_digits=16, decimal_places=4, blank=True, null=True,
-        help_text='Latest price per unit, refreshed from market data. Set by the app; do '
-                  'not edit.')
+        help_text='Latest price per unit, refreshed from market data, or for options on an '
+                  'unlisted market their intrinsic value. Set by the app; do not edit.')
+
+    #: The terms of an option or right, so one on an unlisted market can be valued at its
+    #: intrinsic value (`intrinsic_unit_price`), and an exercise of it can fill its blanks.
+    option_underlying_instrument = models.ForeignKey(
+        'self', related_name='options_on', on_delete=models.PROTECT, null=True, blank=True,
+        help_text='For an option or right: the shares one option converts into. Enter its name as '
+                  'listed in the Instrument table. Blank for anything else.')
+    option_exercise_price = models.DecimalField(
+        max_digits=21, decimal_places=6, null=True, blank=True,
+        help_text="For an option or right: the price to exercise one option, in this instrument's "
+                  'currency. Zero for rights that vest into shares. Blank for anything else.')
+    option_conversion_ratio = models.DecimalField(
+        max_digits=16, decimal_places=6, null=True, blank=True, validators=[validate_positive],
+        help_text='For an option or right: the number of shares one option converts into. '
+                  'Blank = 1.')
 
     legal_form = models.CharField(
         max_length=13, choices=LegalForm.choices, default=LegalForm.UNKNOWN,
@@ -1037,7 +1052,98 @@ class Instrument(BaseModel):
             if update_fields is not None and 'legal_form' in set(update_fields):
                 kwargs['update_fields'] = set(update_fields) | {'legal_form_source'}
 
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None:
+            problems = self.option_problems()
+            if problems:
+                raise ValueError(' '.join(problems))
+            if self.is_valued_at_intrinsic:
+                self.current_unit_price = self.intrinsic_unit_price()
+
         super().save(*args, **kwargs)
+
+        if update_fields is None or 'current_unit_price' in set(update_fields):
+            self.revalue_options_on()
+
+    def option_problems(self) -> list[str]:
+        """Why this instrument's option terms cannot be saved, as messages; empty if they can."""
+        problems: list[str] = []
+        has_terms = (self.option_underlying_instrument_id is not None
+                     or self.option_exercise_price is not None
+                     or self.option_conversion_ratio is not None)
+        if has_terms and self.legal_form != LegalForm.RIGHT_OPTION:
+            problems.append(
+                f'Only an option or right has an underlying instrument, exercise price or '
+                f'conversion ratio. Set the legal form of {self.name} to '
+                f'"{LegalForm.RIGHT_OPTION.label}", or clear them.')
+        if self.option_exercise_price is not None and self.option_exercise_price < 0:
+            problems.append('The exercise price cannot be negative.')
+        underlying = self.option_underlying_instrument
+        if underlying is not None:
+            if underlying.pk == self.pk:
+                problems.append('An option cannot convert into itself.')
+            elif underlying.legal_form == LegalForm.RIGHT_OPTION:
+                # Valuing it would need the other option's value, and two could name each other.
+                problems.append(
+                    f'{underlying.name} is itself an option or right, so it cannot be the '
+                    f'underlying instrument.')
+            if str(underlying.currency) != str(self.currency):
+                problems.append(
+                    f'{self.name} is in {self.currency} but its underlying {underlying.name} is in '
+                    f'{underlying.currency}. Give the option the currency of the shares, and its '
+                    f'exercise price in that currency.')
+        return problems
+
+    def clean(self) -> None:
+        super().clean()
+        problems = self.option_problems()
+        if problems:
+            raise ValidationError(problems)
+
+    @property
+    def is_valued_at_intrinsic(self) -> bool:
+        """Whether the current price is the intrinsic value rather than a market price.
+
+        So for an option on an unlisted market with its underlying and exercise price given. A
+        listed option keeps the price its exchange quotes.
+        """
+        return (self.option_underlying_instrument_id is not None
+                and self.option_exercise_price is not None
+                and self.market_id is not None
+                and not self.market.is_exchange_listed)
+
+    def intrinsic_unit_price(self) -> Decimal | None:
+        """max(0, conversion ratio x the underlying's price - exercise price), per option.
+
+        None without an underlying, an exercise price, or a price for the underlying: unknown,
+        rather than worthless.
+        """
+        underlying = self.option_underlying_instrument
+        if underlying is None or self.option_exercise_price is None:
+            return None
+        if underlying.current_unit_price is None:
+            return None
+        ratio = self.option_conversion_ratio or Decimal('1')
+        value = max(Decimal('0'), ratio * underlying.current_unit_price - self.option_exercise_price)
+        return convert_to_decimal_field(value, self._meta.get_field('current_unit_price'))
+
+    def revalue_options_on(self) -> None:
+        """Save each unlisted option on this instrument whose intrinsic value has moved.
+
+        Not inside another record's re-save of its stored figures (`signals._save_lock`): the
+        option's own figures would not be worked out there.
+        """
+        from share_dinkum_app import signals
+
+        if self.legal_form == LegalForm.RIGHT_OPTION or getattr(signals._save_lock, 'active', False):
+            return
+        options = Instrument.objects.filter(
+            account_id=self.account_id, option_underlying_instrument=self,
+            option_exercise_price__isnull=False, market__is_exchange_listed=False)
+        for option in options:
+            option.option_underlying_instrument = self
+            if option.intrinsic_unit_price() != option.current_unit_price:
+                option.save()
 
     holdings_differ = models.BooleanField(null=True, blank=True, default=None, editable=False,
         help_text='Whether the parcels stored for this instrument give different figures from '
@@ -1712,8 +1818,9 @@ class OptionExercise(BaseModel):
         help_text='The options or rights exercised. Enter its name as listed in the Instrument '
                   'table. Its legal form must be "Right, option or entitlement".')
     underlying_instrument = models.ForeignKey(Instrument, related_name='exercised_into',
-        on_delete=models.PROTECT,
-        help_text='The shares received. Enter its name as listed in the Instrument table.')
+        on_delete=models.PROTECT, blank=True,
+        help_text="The shares received. Enter its name as listed in the Instrument table. Blank = "
+                  "the options' underlying instrument, as given on the options' Instrument row.")
     date = models.DateField(
         help_text='Date the options were exercised, or the rights vested. The shares count as '
                   'acquired on it.')
@@ -1721,11 +1828,13 @@ class OptionExercise(BaseModel):
         help_text='Number of options or rights exercised. Must be positive.')
     quantity_received = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True,
         validators=[validate_positive],
-        help_text='Number of shares received. Blank = one for each option.')
-    exercise_price = MoneyField(max_digits=21, decimal_places=6, default=Decimal('0'),
+        help_text="Number of shares received. Blank = the options' conversion ratio for each "
+                  'option, or one for each if the options have none.')
+    exercise_price = MoneyField(max_digits=21, decimal_places=6, null=True, blank=True, default=None,
         default_currency=DEFAULT_CURRENCY,
         help_text='Price paid to exercise one option, in the currency named beside it. Zero for '
-                  'rights that vest into shares, such as performance rights.')
+                  "rights that vest into shares, such as performance rights. Blank = the options' "
+                  'exercise price, or zero if they have none.')
     total_brokerage = MoneyField(max_digits=19, decimal_places=4, default=Decimal('0'),
         default_currency=DEFAULT_CURRENCY,
         help_text='Fees paid to exercise or to receive the shares, for the whole exercise. Not the '
@@ -1792,9 +1901,35 @@ class OptionExercise(BaseModel):
             return None
         return self.market_value * self.shares_received - self.exercise_price * self.quantity
 
+    def fill_from_instrument(self) -> None:
+        """Fill a new exercise's blanks from the terms on the options' Instrument row.
+
+        Only when it is created: an exercise saved before the options had terms meant one share
+        for each option by a blank, and must not change when they are given later.
+        """
+        options = self.instrument if self.instrument_id else None
+        if self._state.adding and options is not None:
+            if self.underlying_instrument_id is None and options.option_underlying_instrument_id:
+                self.underlying_instrument_id = options.option_underlying_instrument_id
+            if self.exercise_price is None and options.option_exercise_price is not None:
+                self.exercise_price = Money(options.option_exercise_price, options.currency)
+            if (self.quantity_received is None and options.option_conversion_ratio is not None
+                    and self.quantity is not None):
+                self.quantity_received = convert_to_decimal_field(
+                    self.quantity * options.option_conversion_ratio,
+                    self._meta.get_field('quantity_received'))
+        if self.exercise_price is None:
+            currency = options.currency if options is not None else DEFAULT_CURRENCY
+            self.exercise_price = Money(Decimal('0'), currency)
+
     def problems(self) -> list[str]:
         """Why this exercise cannot be saved, as messages; empty if it can."""
+        self.fill_from_instrument()
         problems: list[str] = []
+        if self.underlying_instrument_id is None:
+            problems.append(
+                "Give the shares received, or set the underlying instrument on the options' "
+                'Instrument row.')
         if self.instrument_id and self.instrument_id == self.underlying_instrument_id:
             problems.append('The options and the shares received must be different instruments.')
         if self.instrument_id and self.instrument.legal_form != LegalForm.RIGHT_OPTION:
@@ -1811,6 +1946,7 @@ class OptionExercise(BaseModel):
         return problems
 
     def clean(self) -> None:
+        self.fill_from_instrument()
         super().clean()
         problems = self.problems()
         if problems:
